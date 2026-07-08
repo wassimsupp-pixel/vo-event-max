@@ -2,6 +2,7 @@
   "name": "vo-event-max",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "npm@10.8.2",
   "description": "VO Event Max — Conference Management Platform (Phase 1 MVP)",
   "workspaces": [
     "apps/*",
