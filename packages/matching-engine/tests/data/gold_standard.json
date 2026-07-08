@@ -1,0 +1,502 @@
+[
+  {
+    "registration_id": "REG0001",
+    "fcm_record_id": "FCM0001",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0002",
+    "fcm_record_id": "FCM0002",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0003",
+    "fcm_record_id": "FCM0003",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0004",
+    "fcm_record_id": "FCM0004",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0005",
+    "fcm_record_id": null,
+    "expected_decision": "not_found"
+  },
+  {
+    "registration_id": "REG0006",
+    "fcm_record_id": "FCM0005",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0007",
+    "fcm_record_id": "FCM0006",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0008",
+    "fcm_record_id": "FCM0007",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0009",
+    "fcm_record_id": "FCM0008",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0010",
+    "fcm_record_id": "FCM0009",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0011",
+    "fcm_record_id": "FCM0010",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0012",
+    "fcm_record_id": "FCM0011",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0013",
+    "fcm_record_id": "FCM0012",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0014",
+    "fcm_record_id": "FCM0013",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0015",
+    "fcm_record_id": "FCM0014",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0016",
+    "fcm_record_id": "FCM0015",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0017",
+    "fcm_record_id": "FCM0016",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0018",
+    "fcm_record_id": "FCM0017",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0019",
+    "fcm_record_id": null,
+    "expected_decision": "not_found"
+  },
+  {
+    "registration_id": "REG0020",
+    "fcm_record_id": "FCM0018",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0021",
+    "fcm_record_id": "FCM0019",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0022",
+    "fcm_record_id": "FCM0020",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0023",
+    "fcm_record_id": "FCM0021",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0024",
+    "fcm_record_id": "FCM0022",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0025",
+    "fcm_record_id": "FCM0023",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0026",
+    "fcm_record_id": "FCM0024",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0027",
+    "fcm_record_id": "FCM0025",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0028",
+    "fcm_record_id": "FCM0026",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0029",
+    "fcm_record_id": "FCM0027",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0030",
+    "fcm_record_id": "FCM0028",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0031",
+    "fcm_record_id": "FCM0029",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0032",
+    "fcm_record_id": "FCM0030",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0033",
+    "fcm_record_id": "FCM0031",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0034",
+    "fcm_record_id": "FCM0032",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0035",
+    "fcm_record_id": "FCM0033",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0036",
+    "fcm_record_id": "FCM0034",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0037",
+    "fcm_record_id": null,
+    "expected_decision": "not_found"
+  },
+  {
+    "registration_id": "REG0038",
+    "fcm_record_id": "FCM0035",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0039",
+    "fcm_record_id": "FCM0036",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0040",
+    "fcm_record_id": "FCM0037",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0041",
+    "fcm_record_id": "FCM0038",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0042",
+    "fcm_record_id": "FCM0039",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0043",
+    "fcm_record_id": "FCM0040",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0044",
+    "fcm_record_id": "FCM0041",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0045",
+    "fcm_record_id": "FCM0042",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0046",
+    "fcm_record_id": "FCM0043",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0047",
+    "fcm_record_id": "FCM0044",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0048",
+    "fcm_record_id": "FCM0045",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0049",
+    "fcm_record_id": "FCM0046",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0050",
+    "fcm_record_id": "FCM0047",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0051",
+    "fcm_record_id": "FCM0048",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0052",
+    "fcm_record_id": "FCM0049",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0053",
+    "fcm_record_id": "FCM0050",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0054",
+    "fcm_record_id": "FCM0051",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0055",
+    "fcm_record_id": "FCM0052",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0056",
+    "fcm_record_id": "FCM0053",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0057",
+    "fcm_record_id": "FCM0054",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0058",
+    "fcm_record_id": "FCM0055",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0059",
+    "fcm_record_id": "FCM0056",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0060",
+    "fcm_record_id": "FCM0057",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0061",
+    "fcm_record_id": "FCM0058",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0062",
+    "fcm_record_id": "FCM0059",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0063",
+    "fcm_record_id": "FCM0060",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0064",
+    "fcm_record_id": "FCM0061",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0065",
+    "fcm_record_id": "FCM0062",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0066",
+    "fcm_record_id": "FCM0063",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0067",
+    "fcm_record_id": "FCM0064",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0068",
+    "fcm_record_id": "FCM0065",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0069",
+    "fcm_record_id": "FCM0066",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0070",
+    "fcm_record_id": "FCM0067",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0071",
+    "fcm_record_id": "FCM0068",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0072",
+    "fcm_record_id": "FCM0069",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0073",
+    "fcm_record_id": "FCM0070",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0074",
+    "fcm_record_id": "FCM0071",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0075",
+    "fcm_record_id": "FCM0072",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0076",
+    "fcm_record_id": "FCM0073",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0077",
+    "fcm_record_id": "FCM0074",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0078",
+    "fcm_record_id": "FCM0075",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0079",
+    "fcm_record_id": "FCM0076",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0080",
+    "fcm_record_id": "FCM0077",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0081",
+    "fcm_record_id": "FCM0078",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0082",
+    "fcm_record_id": "FCM0079",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0083",
+    "fcm_record_id": "FCM0080",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0084",
+    "fcm_record_id": "FCM0081",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0085",
+    "fcm_record_id": "FCM0082",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0086",
+    "fcm_record_id": "FCM0083",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0087",
+    "fcm_record_id": "FCM0084",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0088",
+    "fcm_record_id": "FCM0085",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0089",
+    "fcm_record_id": "FCM0086",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0090",
+    "fcm_record_id": null,
+    "expected_decision": "not_found"
+  },
+  {
+    "registration_id": "REG0091",
+    "fcm_record_id": "FCM0087",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0092",
+    "fcm_record_id": "FCM0088",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0093",
+    "fcm_record_id": "FCM0089",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0094",
+    "fcm_record_id": "FCM0090",
+    "expected_decision": "probable"
+  },
+  {
+    "registration_id": "REG0095",
+    "fcm_record_id": "FCM0091",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0096",
+    "fcm_record_id": "FCM0092",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0097",
+    "fcm_record_id": "FCM0093",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0098",
+    "fcm_record_id": null,
+    "expected_decision": "not_found"
+  },
+  {
+    "registration_id": "REG0099",
+    "fcm_record_id": "FCM0094",
+    "expected_decision": "certain"
+  },
+  {
+    "registration_id": "REG0100",
+    "fcm_record_id": "FCM0095",
+    "expected_decision": "certain"
+  }
+]

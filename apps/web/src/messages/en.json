@@ -1,0 +1,121 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "masterList": "Master List",
+    "sources": "Data Sources",
+    "participants": "Participants",
+    "flights": "Flights",
+    "hotels": "Hotels",
+    "activities": "Activities",
+    "transfers": "Transfers",
+    "communications": "Communications",
+    "exceptions": "Exceptions & Alerts",
+    "reports": "Reports",
+    "settings": "Settings"
+  },
+  "status": {
+    "complete": "Complete",
+    "incomplete": "Incomplete",
+    "conflict": "Conflict",
+    "certain": "Certain",
+    "probable": "Probable",
+    "toVerify": "To verify",
+    "notFound": "Not found"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Intelligent consolidation of your events",
+    "kpi": {
+      "participants": "Consolidated participants",
+      "sources": "Imported sources",
+      "complete": "Complete data",
+      "exceptions": "Exceptions to review"
+    },
+    "consolidationProgress": "Consolidation progress",
+    "dataQuality": "Data quality",
+    "breakdown": "Breakdown by service",
+    "recentParticipants": "Recent participants",
+    "dataSources": "Data sources",
+    "nextSteps": "Next steps",
+    "exceptionsSummary": "Exceptions summary"
+  },
+  "exceptions": {
+    "conflict": "Data conflicts",
+    "duplicate": "Possible duplicates",
+    "notFound": "Participants not found",
+    "toCheck": "Fields to verify",
+    "resolve": "Resolve",
+    "resolveTitle": "Resolve conflict",
+    "keepValue": "Keep this value",
+    "sourceA": "Source A",
+    "sourceB": "Source B",
+    "resolved": "Resolved"
+  },
+  "actions": {
+    "import": "Import",
+    "export": "Export",
+    "validate": "Validate",
+    "consolidate": "Consolidate",
+    "viewAll": "View all",
+    "viewMasterList": "View full master list",
+    "search": "Search",
+    "filter": "Filter",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "edit": "Edit",
+    "delete": "Delete",
+    "close": "Close",
+    "back": "Back",
+    "next": "Next",
+    "previous": "Previous",
+    "loading": "Loading..."
+  },
+  "sources": {
+    "title": "Data Sources",
+    "subtitle": "Import and map your source files",
+    "uploadTitle": "Import a file",
+    "uploadDescription": "Drag and drop your file here, or click to select",
+    "dropzone": "Drop a file here",
+    "selectFile": "Select file",
+    "mappingTitle": "Column mapping",
+    "mappingDescription": "Associate source columns with master list fields",
+    "sourceColumn": "Source column",
+    "targetField": "Target field",
+    "confirmMapping": "Confirm mapping",
+    "preview": "Data preview",
+    "lastUpdated": "Last updated",
+    "status": {
+      "imported": "Imported",
+      "pending": "Pending",
+      "error": "Error"
+    }
+  },
+  "participants": {
+    "title": "Participants",
+    "name": "Name",
+    "firstName": "First name",
+    "lastName": "Last name",
+    "email": "Email",
+    "company": "Company",
+    "phone": "Phone",
+    "flight": "Flight",
+    "hotel": "Hotel",
+    "transfer": "Transfer",
+    "activity": "Activity",
+    "status": "Status",
+    "confidence": "Confidence",
+    "sources": "Sources",
+    "matchScore": "Match score",
+    "lockedFields": "Locked fields",
+    "auditTrail": "Audit trail",
+    "matchInfo": "Match information"
+  },
+  "steps": {
+    "import": "Import",
+    "analysis": "Analysis",
+    "matching": "Matching",
+    "consolidation": "Consolidation",
+    "validation": "Validation"
+  }
+}

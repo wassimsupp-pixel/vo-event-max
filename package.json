@@ -1,0 +1,24 @@
+{
+  "name": "vo-event-max",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VO Event Max — Conference Management Platform (Phase 1 MVP)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "matching-engine:test": "cd packages/matching-engine && python -m pytest tests/ -v --cov=.",
+    "matching-engine:generate-data": "cd packages/matching-engine && python synthetic_data.py"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

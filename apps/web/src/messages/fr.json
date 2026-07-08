@@ -1,0 +1,121 @@
+{
+  "nav": {
+    "dashboard": "Tableau de bord",
+    "masterList": "Master List",
+    "sources": "Sources de données",
+    "participants": "Participants",
+    "flights": "Vols",
+    "hotels": "Hôtels",
+    "activities": "Activités",
+    "transfers": "Transferts",
+    "communications": "Communications",
+    "exceptions": "Exceptions & Alertes",
+    "reports": "Rapports",
+    "settings": "Paramètres"
+  },
+  "status": {
+    "complete": "Complet",
+    "incomplete": "Incomplet",
+    "conflict": "Conflit",
+    "certain": "Certain",
+    "probable": "Probable",
+    "toVerify": "À vérifier",
+    "notFound": "Non retrouvé"
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "subtitle": "Consolidation intelligente de vos événements",
+    "kpi": {
+      "participants": "Participants consolidés",
+      "sources": "Sources importées",
+      "complete": "Données complètes",
+      "exceptions": "Exceptions à vérifier"
+    },
+    "consolidationProgress": "Progression de la consolidation",
+    "dataQuality": "Qualité des données",
+    "breakdown": "Répartition par service",
+    "recentParticipants": "Participants récents",
+    "dataSources": "Sources de données",
+    "nextSteps": "Prochaines étapes",
+    "exceptionsSummary": "Résumé des exceptions"
+  },
+  "exceptions": {
+    "conflict": "Conflits de données",
+    "duplicate": "Doublons possibles",
+    "notFound": "Participants non retrouvés",
+    "toCheck": "Champs à vérifier",
+    "resolve": "Résoudre",
+    "resolveTitle": "Résoudre le conflit",
+    "keepValue": "Conserver cette valeur",
+    "sourceA": "Source A",
+    "sourceB": "Source B",
+    "resolved": "Résolu"
+  },
+  "actions": {
+    "import": "Importer",
+    "export": "Exporter",
+    "validate": "Valider",
+    "consolidate": "Consolider",
+    "viewAll": "Voir tout",
+    "viewMasterList": "Voir la master list complète",
+    "search": "Rechercher",
+    "filter": "Filtrer",
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "save": "Enregistrer",
+    "edit": "Modifier",
+    "delete": "Supprimer",
+    "close": "Fermer",
+    "back": "Retour",
+    "next": "Suivant",
+    "previous": "Précédent",
+    "loading": "Chargement..."
+  },
+  "sources": {
+    "title": "Sources de données",
+    "subtitle": "Importez et mappez vos fichiers sources",
+    "uploadTitle": "Importer un fichier",
+    "uploadDescription": "Glissez-déposez votre fichier ici, ou cliquez pour sélectionner",
+    "dropzone": "Glissez un fichier ici",
+    "selectFile": "Sélectionner un fichier",
+    "mappingTitle": "Mapping des colonnes",
+    "mappingDescription": "Associez les colonnes source aux champs de la master list",
+    "sourceColumn": "Colonne source",
+    "targetField": "Champ cible",
+    "confirmMapping": "Confirmer le mapping",
+    "preview": "Aperçu des données",
+    "lastUpdated": "Dernière mise à jour",
+    "status": {
+      "imported": "Importé",
+      "pending": "En attente",
+      "error": "Erreur"
+    }
+  },
+  "participants": {
+    "title": "Participants",
+    "name": "Nom",
+    "firstName": "Prénom",
+    "lastName": "Nom de famille",
+    "email": "Email",
+    "company": "Entreprise",
+    "phone": "Téléphone",
+    "flight": "Vol",
+    "hotel": "Hôtel",
+    "transfer": "Transfert",
+    "activity": "Activité",
+    "status": "Statut",
+    "confidence": "Fiabilité",
+    "sources": "Sources",
+    "matchScore": "Score de matching",
+    "lockedFields": "Champs verrouillés",
+    "auditTrail": "Historique des modifications",
+    "matchInfo": "Informations de matching"
+  },
+  "steps": {
+    "import": "Importation",
+    "analysis": "Analyse",
+    "matching": "Matching",
+    "consolidation": "Consolidation",
+    "validation": "Validation"
+  }
+}

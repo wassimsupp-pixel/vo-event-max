@@ -1,0 +1,74 @@
+'use client'
+
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+
+const data = [
+  { name: 'Vols', value: 72, color: '#806CAF' },
+  { name: 'Hôtels', value: 68, color: '#47AB75' },
+  { name: 'Transferts', value: 81, color: '#F99A4C' },
+  { name: 'Activités', value: 45, color: '#3B82F6' },
+  { name: 'Comms', value: 90, color: '#8B5CF6' },
+]
+
+interface CustomLabelProps {
+  cx: number
+  cy: number
+  midAngle: number
+  innerRadius: number
+  outerRadius: number
+  percent: number
+}
+
+export function DistributionChart() {
+  return (
+    <div className="flex flex-col">
+      <div className="h-[140px]">
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius={35}
+              outerRadius={60}
+              dataKey="value"
+              strokeWidth={2}
+              stroke="#fff"
+            >
+              {data.map((entry, index) => (
+                <Cell key={index} fill={entry.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              formatter={(value: any) => [`${value}%`, '']}
+              contentStyle={{
+                borderRadius: '8px',
+                border: '1px solid #ECECEC',
+                fontSize: '12px',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+              }}
+            />
+          </PieChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Legend */}
+      <ul className="mt-2 grid grid-cols-1 gap-1">
+        {data.map((item) => (
+          <li key={item.name} className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-1.5">
+              <span
+                className="h-2 w-2 flex-shrink-0 rounded-full"
+                style={{ background: item.color }}
+              />
+              <span className="text-[var(--color-text-secondary)]">{item.name}</span>
+            </div>
+            <span className="font-semibold tabular-nums text-[var(--color-text-primary)]">
+              {item.value}%
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}

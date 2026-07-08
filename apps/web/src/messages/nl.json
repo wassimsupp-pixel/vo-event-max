@@ -1,0 +1,121 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "masterList": "Masterlijst",
+    "sources": "Databronnen",
+    "participants": "Deelnemers",
+    "flights": "Vluchten",
+    "hotels": "Hotels",
+    "activities": "Activiteiten",
+    "transfers": "Transfers",
+    "communications": "Communicatie",
+    "exceptions": "Uitzonderingen & Waarschuwingen",
+    "reports": "Rapporten",
+    "settings": "Instellingen"
+  },
+  "status": {
+    "complete": "Volledig",
+    "incomplete": "Onvolledig",
+    "conflict": "Conflict",
+    "certain": "Zeker",
+    "probable": "Waarschijnlijk",
+    "toVerify": "Te verifiëren",
+    "notFound": "Niet gevonden"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Intelligente consolidatie van uw evenementen",
+    "kpi": {
+      "participants": "Geconsolideerde deelnemers",
+      "sources": "Geïmporteerde bronnen",
+      "complete": "Volledige gegevens",
+      "exceptions": "Te controleren uitzonderingen"
+    },
+    "consolidationProgress": "Consolidatievoortgang",
+    "dataQuality": "Gegevenskwaliteit",
+    "breakdown": "Verdeling per dienst",
+    "recentParticipants": "Recente deelnemers",
+    "dataSources": "Databronnen",
+    "nextSteps": "Volgende stappen",
+    "exceptionsSummary": "Overzicht uitzonderingen"
+  },
+  "exceptions": {
+    "conflict": "Gegevensconflicten",
+    "duplicate": "Mogelijke duplicaten",
+    "notFound": "Niet gevonden deelnemers",
+    "toCheck": "Te controleren velden",
+    "resolve": "Oplossen",
+    "resolveTitle": "Conflict oplossen",
+    "keepValue": "Deze waarde behouden",
+    "sourceA": "Bron A",
+    "sourceB": "Bron B",
+    "resolved": "Opgelost"
+  },
+  "actions": {
+    "import": "Importeren",
+    "export": "Exporteren",
+    "validate": "Valideren",
+    "consolidate": "Consolideren",
+    "viewAll": "Alles bekijken",
+    "viewMasterList": "Volledige masterlijst bekijken",
+    "search": "Zoeken",
+    "filter": "Filteren",
+    "cancel": "Annuleren",
+    "confirm": "Bevestigen",
+    "save": "Opslaan",
+    "edit": "Bewerken",
+    "delete": "Verwijderen",
+    "close": "Sluiten",
+    "back": "Terug",
+    "next": "Volgende",
+    "previous": "Vorige",
+    "loading": "Laden..."
+  },
+  "sources": {
+    "title": "Databronnen",
+    "subtitle": "Importeer en map uw bronbestanden",
+    "uploadTitle": "Bestand importeren",
+    "uploadDescription": "Sleep uw bestand hier naartoe of klik om te selecteren",
+    "dropzone": "Sleep een bestand hierheen",
+    "selectFile": "Bestand selecteren",
+    "mappingTitle": "Kolomtoewijzing",
+    "mappingDescription": "Koppel bronkolommen aan masterllijstvelden",
+    "sourceColumn": "Bronkolom",
+    "targetField": "Doelveld",
+    "confirmMapping": "Toewijzing bevestigen",
+    "preview": "Gegevensvoorbeeld",
+    "lastUpdated": "Laatste update",
+    "status": {
+      "imported": "Geïmporteerd",
+      "pending": "In behandeling",
+      "error": "Fout"
+    }
+  },
+  "participants": {
+    "title": "Deelnemers",
+    "name": "Naam",
+    "firstName": "Voornaam",
+    "lastName": "Achternaam",
+    "email": "E-mail",
+    "company": "Bedrijf",
+    "phone": "Telefoon",
+    "flight": "Vlucht",
+    "hotel": "Hotel",
+    "transfer": "Transfer",
+    "activity": "Activiteit",
+    "status": "Status",
+    "confidence": "Betrouwbaarheid",
+    "sources": "Bronnen",
+    "matchScore": "Matchscore",
+    "lockedFields": "Vergrendelde velden",
+    "auditTrail": "Wijzigingshistorie",
+    "matchInfo": "Matchinformatie"
+  },
+  "steps": {
+    "import": "Importeren",
+    "analysis": "Analyse",
+    "matching": "Matching",
+    "consolidation": "Consolidatie",
+    "validation": "Validatie"
+  }
+}

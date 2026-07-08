@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+.turbo/
+dist/
+.next/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Environment secrets — NEVER COMMIT
+.env
+.env.local
+.env.production
+.env.*.local
+
+# Uploads / temp files
+uploads/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/
+
+# Supabase local
+supabase/.branches/
+supabase/.temp/

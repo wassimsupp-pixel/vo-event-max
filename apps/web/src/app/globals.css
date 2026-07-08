@@ -1,0 +1,115 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* Background & Surface */
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: #FCFCFC;
+  --color-surface: #FFFFFF;
+
+  /* Borders */
+  --color-border: #ECECEC;
+  --color-border-strong: #E5E5E5;
+
+  /* Text */
+  --color-text-primary: #1F2937;
+  --color-text-secondary: #6B7280;
+
+  /* Brand */
+  --color-accent: #806CAF;
+  --color-accent-light: #EFEAF7;
+  --color-cta: #F99A4C;
+  --color-cta-light: #FEECDF;
+
+  /* Semantic */
+  --color-success: #47AB75;
+  --color-success-light: #E3F5EA;
+  --color-warning: #F99A4C;
+  --color-warning-light: #FEECDF;
+  --color-danger: #D9534F;
+  --color-danger-light: #FBE2E1;
+  --color-info: #3B82F6;
+  --color-info-light: #EFF6FF;
+
+  /* Shapes */
+  --radius-card: 12px;
+  --shadow-card: 0 1px 4px rgba(0, 0, 0, 0.06), 0 4px 16px rgba(0, 0, 0, 0.04);
+  --shadow-sidebar: 1px 0 0 var(--color-border);
+  --shadow-dropdown: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -1px rgba(0, 0, 0, 0.05);
+  --shadow-modal: 0 20px 60px rgba(0, 0, 0, 0.12);
+
+  /* Layout */
+  --sidebar-width: 240px;
+  --header-height: 60px;
+}
+
+@theme inline {
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-text-primary);
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* Base resets */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* Focus styles */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+/* Utility classes */
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.text-primary {
+  color: var(--color-text-primary);
+}
+.text-secondary {
+  color: var(--color-text-secondary);
+}
