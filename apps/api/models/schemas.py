@@ -43,6 +43,25 @@ class OrganizationResponse(ORMBase):
 
 
 # ---------------------------------------------------------------------------
+# Projects
+# ---------------------------------------------------------------------------
+
+class ProjectCreate(BaseModel):
+    """Request body for creating a new project."""
+    name: str = Field(..., min_length=1, max_length=255)
+    client_name: str = Field(..., min_length=1, max_length=255)
+
+
+class ProjectResponse(ORMBase):
+    id: UUID
+    org_id: UUID
+    name: str
+    client_name: str
+    created_by: UUID
+    created_at: datetime
+
+
+# ---------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------
 

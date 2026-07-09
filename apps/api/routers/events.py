@@ -16,11 +16,76 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, require_role, verify_event_access
-from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse
+from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse, ProjectCreate, ProjectResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.post(
+    "/projects",
+    response_model=ProjectResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new project",
+)
+async def create_project(
+    body: ProjectCreate,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> ProjectResponse:
+    """
+    Create a new project inside the organization.
+    """
+    org_id = current_user["org_id"]
+    user_id = current_user["id"]
+    payload = {
+        "org_id": org_id,
+        "name": body.name,
+        "client_name": body.client_name,
+        "created_by": user_id,
+    }
+    try:
+        result = supabase.table("projects").insert(payload).execute()
+    except Exception as exc:
+        logger.error("Failed to create project: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create project.",
+        ) from exc
+
+    return ProjectResponse(**result.data[0])
+
+
+@router.get(
+    "/projects",
+    response_model=list[ProjectResponse],
+    summary="List all projects in the organization",
+)
+async def list_projects(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> list[ProjectResponse]:
+    """
+    List all projects for the caller's organization.
+    """
+    org_id = current_user["org_id"]
+    try:
+        res = (
+            supabase.table("projects")
+            .select("*")
+            .eq("org_id", org_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Failed to list projects: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve projects.",
+        ) from exc
+
+    return [ProjectResponse(**row) for row in res.data]
+
 
 
 @router.post(

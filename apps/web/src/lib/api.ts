@@ -434,4 +434,16 @@ export const api = {
       return request<any[]>(`/api/global-participants/history?email=${encodeURIComponent(email)}`)
     },
   },
+
+  projects: {
+    async list(): Promise<any[]> {
+      return request<any[]>('/api/projects')
+    },
+    async create(payload: { name: string; client_name: string }): Promise<any> {
+      return request<any>('/api/projects', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
+  },
 }
