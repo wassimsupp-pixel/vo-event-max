@@ -133,3 +133,34 @@ async def update_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
     return EventResponse(**result.data[0])
+
+
+@router.get(
+    "/events",
+    response_model=list[EventResponse],
+    summary="List all events in the organization",
+)
+async def list_events(
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> list[EventResponse]:
+    """
+    List all events for the caller's organization.
+    """
+    org_id = current_user["org_id"]
+    try:
+        res = (
+            supabase.table("events")
+            .select("*, projects!inner(org_id)")
+            .eq("projects.org_id", org_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Failed to list events: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve events.",
+        ) from exc
+
+    return [EventResponse(**row) for row in res.data]
+

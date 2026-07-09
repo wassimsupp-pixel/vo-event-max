@@ -598,3 +598,54 @@ class TestGlobalParticipants:
         assert data[0]["history"][0]["dietary_requirements"] == "Vegetarian"
 
 
+class TestEvents:
+    @patch("routers.events.require_role")
+    def test_create_event(self, mock_role):
+        """POST /api/events should insert and return new event."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.single.return_value.execute.return_value.data = {"id": "p1"}
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {
+                "id": "00000000-0000-0000-0000-000000000003",
+                "project_id": "00000000-0000-0000-0000-000000000002",
+                "name": "New Blank Event",
+                "created_at": "2026-07-09T10:00:00Z",
+                "updated_at": "2026-07-09T10:00:00Z",
+            }
+        ]
+
+        payload = {
+            "project_id": "00000000-0000-0000-0000-000000000002",
+            "name": "New Blank Event"
+        }
+        response = client.post("/api/events", json=payload)
+        assert response.status_code == 201
+        assert response.json()["name"] == "New Blank Event"
+
+    def test_list_events(self):
+        """GET /api/events should return list of organization events."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {
+                "id": "00000000-0000-0000-0000-000000000003",
+                "project_id": "00000000-0000-0000-0000-000000000002",
+                "name": "Event One",
+                "created_at": "2026-07-09T10:00:00Z",
+                "updated_at": "2026-07-09T10:00:00Z",
+            }
+        ]
+
+        response = client.get("/api/events")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "Event One"
+
+
+
