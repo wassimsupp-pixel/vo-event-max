@@ -3,7 +3,7 @@
  * All endpoints target NEXT_PUBLIC_API_URL (Railway deployment).
  */
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? ''
+const BASE_URL = 'https://web-production-f0ba2.up.railway.app'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
