@@ -129,7 +129,8 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
       setOpen(false)
     } catch (err) {
       console.error('Failed to create project/event:', err)
-      alert('Erreur lors de la création. Veuillez réessayer.')
+      const msg = err instanceof Error ? err.message : String(err)
+      alert(`Erreur lors de la création : ${msg}`)
     } finally {
       setCreatingLoading(false)
     }
