@@ -45,9 +45,12 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 # CORS Middleware
 # ---------------------------------------------------------------------------
+# Filter out '*' wildcard from allowed_origins to prevent Starlette crash when allow_credentials=True
+safe_origins = [origin.strip() for origin in config.ALLOWED_ORIGINS if origin.strip() and origin.strip() != "*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=config.ALLOWED_ORIGINS,
+    allow_origins=safe_origins,
     allow_origin_regex="https://.*\\.vercel\\.app|https://.*\\.railway\\.app|http://localhost:3000",
     allow_credentials=True,
     allow_methods=["*"],
