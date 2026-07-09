@@ -1,4 +1,4 @@
-import { useTranslations } from 'next-intl'
+import { getTranslations } from 'next-intl/server'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { ConsolidationStepper } from '@/components/ui/ConsolidationStepper'
@@ -71,10 +71,10 @@ interface DashboardPageProps {
 
 export default async function DashboardPage({ params }: DashboardPageProps) {
   const { locale, eventId } = await params
-  const t = useTranslations('dashboard')
-  const tKpi = useTranslations('dashboard.kpi')
-  const tActions = useTranslations('actions')
-  const tExceptions = useTranslations('exceptions')
+  const t = await getTranslations('dashboard')
+  const tKpi = await getTranslations('dashboard.kpi')
+  const tActions = await getTranslations('actions')
+  const tExceptions = await getTranslations('exceptions')
 
   return (
     <AppLayout
