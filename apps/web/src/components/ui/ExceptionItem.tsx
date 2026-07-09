@@ -9,7 +9,7 @@ interface ExceptionItemProps {
   type: string
   count: number
   severity: Severity
-  onClick: () => void
+  onClick?: () => void
   className?: string
 }
 

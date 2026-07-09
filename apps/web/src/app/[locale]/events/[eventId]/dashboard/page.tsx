@@ -201,7 +201,6 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                     icon={source.icon}
                     status={source.status}
                     lastUpdated={source.lastUpdated}
-                    onImport={() => {}}
                   />
                 ))}
               </div>
@@ -228,25 +227,21 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                   type={tExceptions('conflict')}
                   count={5}
                   severity="critical"
-                  onClick={() => {}}
                 />
                 <ExceptionItem
                   type={tExceptions('duplicate')}
                   count={3}
                   severity="warning"
-                  onClick={() => {}}
                 />
                 <ExceptionItem
                   type={tExceptions('notFound')}
                   count={7}
                   severity="warning"
-                  onClick={() => {}}
                 />
                 <ExceptionItem
                   type={tExceptions('toCheck')}
                   count={3}
                   severity="info"
-                  onClick={() => {}}
                 />
               </div>
             </div>

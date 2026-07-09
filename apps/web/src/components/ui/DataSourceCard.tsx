@@ -12,7 +12,7 @@ interface DataSourceCardProps {
   icon: string
   lastUpdated?: string
   status: SourceStatus
-  onImport: () => void
+  onImport?: () => void
   loading?: boolean
   className?: string
 }
