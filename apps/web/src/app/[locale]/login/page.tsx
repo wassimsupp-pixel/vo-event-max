@@ -31,7 +31,7 @@ export default function LoginPage() {
           return
         }
 
-        router.push('/fr/events')
+        router.push('/fr/events/00000000-0000-0000-0000-000000000003/dashboard')
         router.refresh()
       } catch {
         setError('Une erreur inattendue est survenue. Veuillez réessayer.')
