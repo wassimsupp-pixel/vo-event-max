@@ -34,14 +34,14 @@ function getNavItems(eventId: string, locale: string, userRole: string): NavItem
     { key: 'dashboard', href: `${base}/dashboard`, icon: LayoutDashboard },
     { key: 'masterList', href: `${base}/master-list`, icon: ListChecks },
     { key: 'sources', href: `${base}/sources`, icon: Database },
-    { key: 'participants', href: `${base}/participants`, icon: Users },
+    { key: 'participants', href: `/${locale}/participants`, icon: Users },
     { key: 'flights', href: `${base}/flights`, icon: Plane },
     { key: 'hotels', href: `${base}/hotels`, icon: Hotel },
     { key: 'activities', href: `${base}/activities`, icon: Sparkles },
     { key: 'transfers', href: `${base}/transfers`, icon: Bus },
-    { key: 'communications', href: null, icon: Mail, disabled: true },
+    { key: 'communications', href: `${base}/communications`, icon: Mail },
     { key: 'exceptions', href: `${base}/exceptions`, icon: AlertTriangle, badge: '18' },
-    { key: 'reports', href: null, icon: BarChart3, disabled: true },
+    { key: 'reports', href: `${base}/reports`, icon: BarChart3 },
     { key: 'settings', href: `/${locale}/settings`, icon: Settings },
   ]
 
