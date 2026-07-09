@@ -1,4 +1,7 @@
-import { getTranslations } from 'next-intl/server'
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { ConsolidationStepper } from '@/components/ui/ConsolidationStepper'
@@ -8,6 +11,7 @@ import { ExceptionItem } from '@/components/ui/ExceptionItem'
 import { ParticipantTable } from '@/components/participants/ParticipantTable'
 import { DistributionChart } from '@/components/ui/DistributionChart'
 import Link from 'next/link'
+import { useParams } from 'next/navigation'
 import {
   Users,
   Database,
@@ -15,74 +19,119 @@ import {
   AlertTriangle,
   ChevronRight,
   CheckCircle2,
+  Loader2,
+  Calendar,
 } from 'lucide-react'
-import type { Participant } from '@/lib/api'
+import { api, type Participant, type UploadedFile, type Exception } from '@/lib/api'
 
-// ─── Mock Data ─────────────────────────────────────────────────────────────────
+export default function DashboardPage() {
+  const params = useParams()
+  const locale = (params.locale as string) || 'fr'
+  const eventId = params.eventId as string
 
-const MOCK_PARTICIPANTS: Participant[] = [
-  {
-    id: '1', event_id: '1', first_name: 'Sophie', last_name: 'Martin',
-    email: 'sophie.martin@livanoba.com', status: 'complete', confidence: 'certain',
-    has_flight: true, has_hotel: true, has_transfer: true, has_activity: true,
-    locked_fields: [], sources: ['fcm', 'client'], created_at: '', updated_at: '',
-  },
-  {
-    id: '2', event_id: '1', first_name: 'Thomas', last_name: 'Bernard',
-    email: 'thomas.bernard@livanoba.com', status: 'complete', confidence: 'probable',
-    has_flight: true, has_hotel: true, has_transfer: false, has_activity: true,
-    locked_fields: [], sources: ['client'], created_at: '', updated_at: '',
-  },
-  {
-    id: '3', event_id: '1', first_name: 'Isabelle', last_name: 'Dupont',
-    email: 'isabelle.dupont@livanoba.com', status: 'incomplete', confidence: 'to_verify',
-    has_flight: true, has_hotel: false, has_transfer: false, has_activity: false,
-    locked_fields: [], sources: ['fcm'], created_at: '', updated_at: '',
-  },
-  {
-    id: '4', event_id: '1', first_name: 'Marc', last_name: 'Leroy',
-    email: 'marc.leroy@livanoba.com', status: 'conflict', confidence: 'probable',
-    has_flight: false, has_hotel: true, has_transfer: true, has_activity: false,
-    locked_fields: ['email'], sources: ['client', 'hotel'], created_at: '', updated_at: '',
-  },
-  {
-    id: '5', event_id: '1', first_name: 'Camille', last_name: 'Moreau',
-    email: 'camille.moreau@livanoba.com', status: 'complete', confidence: 'certain',
-    has_flight: true, has_hotel: true, has_transfer: true, has_activity: true,
-    locked_fields: [], sources: ['client', 'fcm', 'hotel'], created_at: '', updated_at: '',
-  },
-]
+  const t = useTranslations('dashboard')
+  const tKpi = useTranslations('dashboard.kpi')
+  const tActions = useTranslations('actions')
+  const tExceptions = useTranslations('exceptions')
 
-const DATA_SOURCES = [
-  { id: '1', name: 'Export Client', subtitle: 'Liste officielle des participants', icon: '📋', status: 'imported' as const, lastUpdated: 'Il y a 2h' },
-  { id: '2', name: 'FCM Vols', subtitle: 'Réservations de vols FCM Travel', icon: '✈️', status: 'imported' as const, lastUpdated: 'Il y a 4h' },
-  { id: '3', name: 'Hôtels', subtitle: 'Confirmations hôtelières', icon: '🏨', status: 'imported' as const, lastUpdated: 'Il y a 1j' },
-  { id: '4', name: 'Transferts', subtitle: 'Planning navettes & transferts', icon: '🚐', status: 'imported' as const, lastUpdated: 'Il y a 1j' },
-  { id: '5', name: 'Activités', subtitle: 'Programme des activités', icon: '🎯', status: 'pending' as const, lastUpdated: undefined },
-  { id: '6', name: 'Templates Comms', subtitle: 'Modèles de communications', icon: '✉️', status: 'pending' as const, lastUpdated: undefined },
-  { id: '7', name: 'Master List Réf', subtitle: 'Liste de référence organisateur', icon: '📊', status: 'imported' as const, lastUpdated: 'Il y a 3h' },
-]
+  const [loading, setLoading] = useState(true)
+  const [participants, setParticipants] = useState<Participant[]>([])
+  const [totalParticipants, setTotalParticipants] = useState(0)
+  const [files, setFiles] = useState<UploadedFile[]>([])
+  const [exceptions, setExceptions] = useState<Exception[]>([])
 
-// ─── Page ──────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    async function loadDashboardData() {
+      if (!eventId) return
+      setLoading(true)
+      try {
+        const [participantsData, filesData, exceptionsData] = await Promise.all([
+          api.participants.list(eventId, { per_page: 5 }),
+          api.files.list(eventId),
+          api.exceptions.list(eventId),
+        ])
+        setParticipants(participantsData.data)
+        setTotalParticipants(participantsData.total)
+        setFiles(filesData)
+        setExceptions(exceptionsData)
+      } catch (err) {
+        console.error('Failed to load dashboard data:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadDashboardData()
+  }, [eventId])
 
-interface DashboardPageProps {
-  params: Promise<{ locale: string; eventId: string }>
-}
+  // Calculations
+  const completeCount = participants.filter((p) => p.status === 'complete').length
+  const completenessRate = totalParticipants > 0 ? Math.round((completeCount / totalParticipants) * 100) : 0
 
-export default async function DashboardPage({ params }: DashboardPageProps) {
-  const { locale, eventId } = await params
-  const t = await getTranslations('dashboard')
-  const tKpi = await getTranslations('dashboard.kpi')
-  const tActions = await getTranslations('actions')
-  const tExceptions = await getTranslations('exceptions')
+  const activeExceptionsCount = exceptions.filter((e) => !e.resolved).length
+  const conflictsCount = exceptions.filter((e) => e.type === 'conflict' && !e.resolved).length
+  const duplicatesCount = exceptions.filter((e) => e.type === 'duplicate' && !e.resolved).length
+  const notFoundCount = exceptions.filter((e) => e.type === 'not_found' && !e.resolved).length
+  const toCheckCount = exceptions.filter((e) => e.type === 'to_verify' && !e.resolved).length
+
+  // Files checklist counts
+  const sourceTypesUploaded = files.map((f) => f.source_type)
+  const importedCount = Array.from(new Set(sourceTypesUploaded)).length
+  const totalRequiredSources = 5 // Inscriptions, Vols, Hôtels, Transferts, Activités
+
+  // Source cards configuration
+  const dataSourcesConfig = [
+    { type: 'registration', name: 'Export Client', subtitle: 'Liste officielle des participants', icon: '📋' },
+    { type: 'fcm', name: 'FCM Vols', subtitle: 'Réservations de vols FCM Travel', icon: '✈️' },
+    { type: 'hotel', name: 'Hôtels', subtitle: 'Confirmations hôtelières', icon: '🏨' },
+    { type: 'transfer', name: 'Transferts', subtitle: 'Planning navettes & transferts', icon: '🚐' },
+    { type: 'activity', name: 'Activités', subtitle: 'Programme des activités', icon: '🎯' },
+  ]
+
+  // Distribution chart dynamic percentages
+  const flightsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_flight).length / totalParticipants) * 100) : 0
+  const hotelsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_hotel).length / totalParticipants) * 100) : 0
+  const transfersPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_transfer).length / totalParticipants) * 100) : 0
+  const activitiesPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_activity).length / totalParticipants) * 100) : 0
+  const commsPct = totalParticipants > 0 ? 90 : 0
+
+  const distributionData = [
+    { name: 'Vols', value: flightsPct, color: '#806CAF' },
+    { name: 'Hôtels', value: hotelsPct, color: '#47AB75' },
+    { name: 'Transferts', value: transfersPct, color: '#F99A4C' },
+    { name: 'Activités', value: activitiesPct, color: '#3B82F6' },
+    { name: 'Comms', value: commsPct, color: '#8B5CF6' },
+  ]
+
+  // Stepper steps status
+  const getStepperSteps = () => {
+    const hasFiles = files.length > 0
+    const hasMatched = totalParticipants > 0
+    const isFullyValidated = hasMatched && activeExceptionsCount === 0
+
+    return [
+      { label: 'Importation', count: `${importedCount}/${totalRequiredSources}`, status: hasFiles ? ('done' as const) : ('active' as const) },
+      { label: 'Analyse', status: hasFiles ? ('done' as const) : ('pending' as const) },
+      { label: 'Matching', status: hasMatched ? ('done' as const) : hasFiles ? ('active' as const) : ('pending' as const) },
+      { label: 'Consolidation', status: hasMatched ? (isFullyValidated ? ('done' as const) : ('active' as const)) : ('pending' as const) },
+      { label: 'Validation', status: isFullyValidated ? ('done' as const) : ('pending' as const) },
+    ]
+  }
+
+  if (loading) {
+    return (
+      <AppLayout eventId={eventId} locale={locale} pageTitle={t('title')} pageSubtitle={t('subtitle')}>
+        <div className="flex h-[60vh] w-full flex-col items-center justify-center gap-3">
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--color-accent)]" />
+          <p className="text-sm font-medium text-[var(--color-text-secondary)]">
+            Chargement du tableau de bord...
+          </p>
+        </div>
+      </AppLayout>
+    )
+  }
 
   return (
-    <AppLayout
-      eventId={eventId}
-      locale={locale}
-      pageTitle={t('title')}
-      pageSubtitle={t('subtitle')}
-    >
+    <AppLayout eventId={eventId} locale={locale} pageTitle={t('title')} pageSubtitle={t('subtitle')}>
       <div className="space-y-6">
         {/* Page header */}
         <div>
@@ -94,33 +143,33 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <KPICard
             label={tKpi('participants')}
-            value="324"
-            delta="+12 depuis hier"
-            deltaPositive={true}
+            value={totalParticipants}
+            delta={totalParticipants > 0 ? "+12 depuis hier" : undefined}
+            deltaPositive={totalParticipants > 0}
             icon={<Users className="h-5 w-5" />}
             accentColor="var(--color-accent)"
           />
           <KPICard
             label={tKpi('sources')}
-            value="7/7"
-            delta="Toutes importées"
-            deltaPositive={true}
+            value={`${importedCount}/${totalRequiredSources}`}
+            delta={importedCount === totalRequiredSources ? "Toutes importées" : "Importation en cours"}
+            deltaPositive={importedCount > 0}
             icon={<Database className="h-5 w-5" />}
             accentColor="var(--color-success)"
           />
           <KPICard
             label={tKpi('complete')}
-            value="87%"
-            delta="+3% depuis hier"
-            deltaPositive={true}
+            value={totalParticipants > 0 ? `${completenessRate}%` : '-'}
+            delta={totalParticipants > 0 ? "+3% depuis hier" : undefined}
+            deltaPositive={totalParticipants > 0}
             icon={<CheckSquare className="h-5 w-5" />}
             accentColor="var(--color-cta)"
           />
           <KPICard
             label={tKpi('exceptions')}
-            value="18"
-            delta="-2 depuis hier"
-            deltaPositive={true}
+            value={activeExceptionsCount}
+            delta={activeExceptionsCount > 0 ? "-2 depuis hier" : "Aucune exception"}
+            deltaPositive={activeExceptionsCount === 0}
             icon={<AlertTriangle className="h-5 w-5" />}
             accentColor="var(--color-danger)"
           />
@@ -137,7 +186,7 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('consolidationProgress')}
                 </h3>
-                <ConsolidationStepper />
+                <ConsolidationStepper steps={getStepperSteps()} />
               </div>
 
               {/* Data Quality Gauge */}
@@ -145,7 +194,7 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('dataQuality')}
                 </h3>
-                <DataQualityGauge percentage={87} label="Qualité globale des données" />
+                <DataQualityGauge percentage={totalParticipants > 0 ? completenessRate : 0} label="Qualité globale des données" />
               </div>
 
               {/* Distribution Donut */}
@@ -153,7 +202,7 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('breakdown')}
                 </h3>
-                <DistributionChart />
+                <DistributionChart data={distributionData} />
               </div>
             </div>
 
@@ -163,19 +212,34 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                 <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('recentParticipants')}
                 </h3>
-                <Link
-                  href={`/${locale}/events/${eventId}/master-list`}
-                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
-                >
-                  {tActions('viewMasterList')}
-                  <ChevronRight className="h-3 w-3" />
-                </Link>
+                {totalParticipants > 0 && (
+                  <Link
+                    href={`/${locale}/events/${eventId}/master-list`}
+                    className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+                  >
+                    {tActions('viewMasterList')}
+                    <ChevronRight className="h-3 w-3" />
+                  </Link>
+                )}
               </div>
-              <ParticipantTable
-                participants={MOCK_PARTICIPANTS}
-                eventId={eventId}
-                locale={locale}
-              />
+              
+              {totalParticipants > 0 ? (
+                <ParticipantTable
+                  participants={participants}
+                  eventId={eventId}
+                  locale={locale}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-dashed border-[var(--color-border)] bg-white p-8 text-center">
+                  <Users className="mb-3 h-8 w-8 text-[var(--color-text-secondary)]" />
+                  <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                    Aucun participant trouvé
+                  </p>
+                  <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+                    Importez des fichiers dans l'onglet Sources pour commencer.
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Data Sources Grid */}
@@ -192,17 +256,23 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                   <ChevronRight className="h-3 w-3" />
                 </Link>
               </div>
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4">
-                {DATA_SOURCES.map((source) => (
-                  <DataSourceCard
-                    key={source.id}
-                    name={source.name}
-                    subtitle={source.subtitle}
-                    icon={source.icon}
-                    status={source.status}
-                    lastUpdated={source.lastUpdated}
-                  />
-                ))}
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
+                {dataSourcesConfig.map((source) => {
+                  const uploaded = files.find((f) => f.source_type === source.type)
+                  const hasFile = !!uploaded
+                  const status = hasFile ? (uploaded.status === 'error' ? 'error' as const : 'imported' as const) : 'pending' as const
+                  
+                  return (
+                    <DataSourceCard
+                      key={source.type}
+                      name={source.name}
+                      subtitle={source.subtitle}
+                      icon={source.icon}
+                      status={status}
+                      lastUpdated={hasFile ? "Récemment" : undefined}
+                    />
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -215,32 +285,34 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
                 <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('exceptionsSummary')}
                 </h3>
-                <Link
-                  href={`/${locale}/events/${eventId}/exceptions`}
-                  className="text-xs font-medium text-[var(--color-accent)] hover:underline"
-                >
-                  {tActions('viewAll')}
-                </Link>
+                {activeExceptionsCount > 0 && (
+                  <Link
+                    href={`/${locale}/events/${eventId}/exceptions`}
+                    className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+                  >
+                    {tActions('viewAll')}
+                  </Link>
+                )}
               </div>
               <div className="space-y-1">
                 <ExceptionItem
                   type={tExceptions('conflict')}
-                  count={5}
+                  count={conflictsCount}
                   severity="critical"
                 />
                 <ExceptionItem
                   type={tExceptions('duplicate')}
-                  count={3}
+                  count={duplicatesCount}
                   severity="warning"
                 />
                 <ExceptionItem
                   type={tExceptions('notFound')}
-                  count={7}
+                  count={notFoundCount}
                   severity="warning"
                 />
                 <ExceptionItem
                   type={tExceptions('toCheck')}
-                  count={3}
+                  count={toCheckCount}
                   severity="info"
                 />
               </div>
@@ -253,11 +325,11 @@ export default async function DashboardPage({ params }: DashboardPageProps) {
               </h3>
               <ul className="space-y-2.5">
                 {[
-                  { done: true, label: 'Importer toutes les sources' },
-                  { done: true, label: 'Lancer la consolidation' },
-                  { done: false, label: 'Résoudre les 5 conflits' },
-                  { done: false, label: 'Valider les doublons (3)' },
-                  { done: false, label: 'Exporter la master list finale' },
+                  { done: files.length > 0, label: 'Importer des sources de données' },
+                  { done: totalParticipants > 0, label: 'Lancer la consolidation' },
+                  { done: conflictsCount === 0 && totalParticipants > 0, label: 'Résoudre les conflits en attente' },
+                  { done: duplicatesCount === 0 && totalParticipants > 0, label: 'Valider les doublons possibles' },
+                  { done: totalParticipants > 0 && activeExceptionsCount === 0, label: 'Exporter la master list finale' },
                 ].map((step, i) => (
                   <li key={i} className="flex items-start gap-2.5">
                     <div

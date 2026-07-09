@@ -1,8 +1,8 @@
 'use client'
 
-import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from 'recharts'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 
-const data = [
+const defaultData = [
   { name: 'Vols', value: 72, color: '#806CAF' },
   { name: 'Hôtels', value: 68, color: '#47AB75' },
   { name: 'Transferts', value: 81, color: '#F99A4C' },
@@ -10,23 +10,20 @@ const data = [
   { name: 'Comms', value: 90, color: '#8B5CF6' },
 ]
 
-interface CustomLabelProps {
-  cx: number
-  cy: number
-  midAngle: number
-  innerRadius: number
-  outerRadius: number
-  percent: number
+interface DistributionChartProps {
+  data?: Array<{ name: string; value: number; color: string }>
 }
 
-export function DistributionChart() {
+export function DistributionChart({ data: customData }: DistributionChartProps) {
+  const activeData = customData || defaultData
+
   return (
     <div className="flex flex-col">
       <div className="h-[140px]">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
-              data={data}
+              data={activeData}
               cx="50%"
               cy="50%"
               innerRadius={35}
@@ -35,7 +32,7 @@ export function DistributionChart() {
               strokeWidth={2}
               stroke="#fff"
             >
-              {data.map((entry, index) => (
+              {activeData.map((entry, index) => (
                 <Cell key={index} fill={entry.color} />
               ))}
             </Pie>
@@ -54,7 +51,7 @@ export function DistributionChart() {
 
       {/* Legend */}
       <ul className="mt-2 grid grid-cols-1 gap-1">
-        {data.map((item) => (
+        {activeData.map((item) => (
           <li key={item.name} className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-1.5">
               <span
