@@ -246,7 +246,21 @@ export const api = {
       })
     },
   },
-
+  events: {
+    async list(): Promise<any[]> {
+      return request<any[]>('/api/events')
+    },
+    async create(name: string, projectId?: string): Promise<any> {
+      const projId = projectId ?? '00000000-0000-0000-0000-000000000002'
+      return request<any>('/api/events', {
+        method: 'POST',
+        body: JSON.stringify({
+          project_id: projId,
+          name,
+        }),
+      })
+    },
+  },
   exports: {
     async create(eventId: string, runId: string): Promise<Export> {
       return request<Export>(`/api/events/${eventId}/exports`, {
