@@ -418,7 +418,7 @@ async def run_consolidation(
             sr_resp = (
                 supabase.table("source_records")
                 .select("id, normalized_data")
-                .in_("id", inserted_ids)
+                .eq("file_id", file_id)
                 .execute()
             )
             for sr in sr_resp.data or []:
