@@ -310,7 +310,16 @@ export const api = {
     },
 
     async list(eventId: string): Promise<UploadedFile[]> {
-      return request<UploadedFile[]>(`/api/events/${eventId}/files`)
+      const files = await request<any[]>(`/api/events/${eventId}/files`)
+      return files.map(file => ({
+        id: file.id,
+        event_id: file.event_id || eventId,
+        filename: file.original_filename || '',
+        source_type: file.source_type,
+        row_count: file.row_count,
+        status: file.import_status === 'processed' || file.import_status === 'mapped' ? 'mapped' : file.import_status,
+        uploaded_at: file.imported_at,
+      }))
     },
 
     async delete(fileId: string): Promise<void> {
