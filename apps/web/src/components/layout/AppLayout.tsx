@@ -9,7 +9,6 @@ interface AppLayoutProps {
   pageTitle?: string
   pageSubtitle?: string
   headerExtra?: React.ReactNode
-  userRole?: string
 }
 
 export function AppLayout({
@@ -19,12 +18,11 @@ export function AppLayout({
   pageTitle,
   pageSubtitle,
   headerExtra,
-  userRole = 'Event Manager',
 }: AppLayoutProps) {
   return (
     <div className="min-h-screen bg-[var(--color-bg-subtle)]">
       {/* Sidebar */}
-      <Sidebar eventId={eventId} locale={locale} userRole={userRole} />
+      <Sidebar eventId={eventId} locale={locale} />
 
       {/* Main content area */}
       <div className="ml-[240px] flex min-h-screen flex-col">

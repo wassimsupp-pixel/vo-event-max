@@ -28,7 +28,10 @@ from models.schemas import (
     FileListItem,
     FilePreviewResponse,
     FileUploadResponse,
+    ColumnMappingSuggestion,
+    MessageResponse,
 )
+from services.mapping_service import suggest_mapping, CANONICAL_FIELDS
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +192,12 @@ async def upload_file(
         file_id, event_id, row_count, len(columns), current_user["id"],
     )
 
+    raw_suggestions = suggest_mapping(columns, sample_rows)
+    mapping_suggestions = {
+        col: ColumnMappingSuggestion(**sug) for col, sug in raw_suggestions.items()
+    }
+    canonical_fields_list = sorted(list(CANONICAL_FIELDS))
+
     return FileUploadResponse(
         file_id=uuid.UUID(file_id),
         original_filename=filename,
@@ -198,6 +207,8 @@ async def upload_file(
         columns=columns,
         sample_rows=sample_rows,
         import_status="pending",
+        mapping_suggestions=mapping_suggestions,
+        canonical_fields=canonical_fields_list,
     )
 
 
@@ -248,12 +259,22 @@ async def preview_file(
         ) from exc
 
     df = _parse_file_to_dataframe(raw, meta["original_filename"])
+    columns = df.columns.tolist()
+    sample_rows = _df_sample(df, 10)
+
+    raw_suggestions = suggest_mapping(columns, sample_rows)
+    mapping_suggestions = {
+        col: ColumnMappingSuggestion(**sug) for col, sug in raw_suggestions.items()
+    }
+    canonical_fields_list = sorted(list(CANONICAL_FIELDS))
 
     return FilePreviewResponse(
         file_id=uuid.UUID(file_id),
-        columns=df.columns.tolist(),
+        columns=columns,
         row_count=len(df),
-        sample_rows=_df_sample(df, 10),
+        sample_rows=sample_rows,
+        mapping_suggestions=mapping_suggestions,
+        canonical_fields=canonical_fields_list,
     )
 
 
@@ -375,3 +396,59 @@ async def list_event_files(
         ) from exc
 
     return [FileListItem(**row) for row in result.data]
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/files/{file_id}
+# ---------------------------------------------------------------------------
+
+@router.delete(
+    "/files/{file_id}",
+    response_model=MessageResponse,
+    summary="Delete an uploaded file",
+)
+async def delete_file(
+    file_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> MessageResponse:
+    """
+    Delete an uploaded file from both database and storage.
+    Verifies event access first.
+    """
+    # Load file metadata
+    meta_resp = (
+        supabase.table("uploaded_files")
+        .select("id, event_id, storage_path")
+        .eq("id", file_id)
+        .single()
+        .execute()
+    )
+    if not meta_resp.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
+
+    meta = meta_resp.data
+    await verify_event_access(meta["event_id"], current_user, supabase)
+
+    # 1. Delete from Supabase Storage
+    try:
+        supabase.storage.from_(config.SUPABASE_STORAGE_BUCKET).remove(
+            [meta["storage_path"]]
+        )
+    except Exception as exc:
+        logger.warning("Storage deletion failed/skipped for path %s: %s", meta["storage_path"], exc)
+
+    # 2. Delete from database (exceptions, source_records, uploaded_files)
+    try:
+        supabase.table("exceptions").delete().eq("file_id", file_id).execute()
+        supabase.table("source_records").delete().eq("file_id", file_id).execute()
+        supabase.table("uploaded_files").delete().eq("id", file_id).execute()
+    except Exception as exc:
+        logger.error("Database deletion failed for file %s: %s", file_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete file records.",
+        ) from exc
+
+    logger.info("File deleted: file_id=%s user=%s", file_id, current_user["id"])
+    return MessageResponse(message="File deleted successfully.")

@@ -1,61 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles } from 'lucide-react'
-
-// Mocked exceptions
-const INITIAL_EXCEPTIONS = [
-  {
-    id: 'e1',
-    type: 'DATA_CONFLICT',
-    severity: 'critical',
-    message: 'Conflit de données sur la société : "LivaNova" (Client) vs "Livanova Plc" (FCM)',
-    participant: 'Thomas Bernard',
-    email: 'thomas.bernard@livanoba.com',
-    details: {
-      field: 'company',
-      val_client: 'LivaNova',
-      val_fcm: 'Livanova Plc'
-    }
-  },
-  {
-    id: 'e2',
-    type: 'PARTICIPANT_NO_FLIGHT',
-    severity: 'warning',
-    message: 'Aucune réservation de vol trouvée pour ce participant',
-    participant: 'Marc Leroy',
-    email: 'marc.leroy@livanoba.com',
-    details: {}
-  },
-  {
-    id: 'e3',
-    type: 'DUPLICATE_EMAIL',
-    severity: 'critical',
-    message: 'Doublon détecté : L\'adresse email "camille.moreau@livanoba.com" est utilisée pour deux inscriptions',
-    participant: 'Camille Moreau',
-    email: 'camille.moreau@livanoba.com',
-    details: {}
-  },
-  {
-    id: 'e4',
-    type: 'DATE_INCOHERENCE',
-    severity: 'warning',
-    message: 'Date de départ après la date d\'arrivée',
-    participant: 'Isabelle Dupont',
-    email: 'isabelle.dupont@livanoba.com',
-    details: {
-      field: 'dates',
-      arrival: '10/11/2025',
-      departure: '08/11/2025'
-    }
-  }
-]
+import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles, Loader2 } from 'lucide-react'
+import { api, type Exception } from '@/lib/api'
 
 export default function ExceptionsPage() {
   const params = useParams()
@@ -64,20 +17,59 @@ export default function ExceptionsPage() {
 
   const t = useTranslations('nav')
 
-  const [exceptions, setExceptions] = useState(INITIAL_EXCEPTIONS)
-  const [activeResolve, setActiveResolve] = useState<any | null>(null)
+  const [exceptions, setExceptions] = useState<Exception[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [resolving, setResolving] = useState<string | null>(null)
+  const [activeResolve, setActiveResolve] = useState<Exception | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
-  const handleResolveConflict = (resolution: string) => {
+  const loadExceptions = async () => {
+    try {
+      setLoading(true)
+      const data = await api.exceptions.list(eventId)
+      setExceptions(data.filter(e => !e.resolved))
+    } catch {
+      setError('Impossible de charger les exceptions.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadExceptions()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId])
+
+  const handleResolveConflict = async (resolution: string) => {
     if (!activeResolve) return
 
-    // Update exception list by removing the resolved exception
-    setExceptions(prev => prev.filter(e => e.id !== activeResolve.id))
+    setResolving(activeResolve.id)
+    try {
+      await api.exceptions.resolve(activeResolve.id, resolution)
+      setSuccessMessage(`Conflit résolu pour ${activeResolve.participant_name ?? activeResolve.id}. Valeur retenue : "${resolution}".`)
+      setTimeout(() => setSuccessMessage(null), 3000)
+      setActiveResolve(null)
+      await loadExceptions()
+    } catch {
+      setError('Erreur lors de la résolution du conflit.')
+    } finally {
+      setResolving(null)
+    }
+  }
 
-    // Set success banner
-    setSuccessMessage(`Conflit résolu pour ${activeResolve.participant}. Valeur retenue : "${resolution}".`)
-    setTimeout(() => setSuccessMessage(null), 3000)
-    setActiveResolve(null)
+  const handleResolveSimple = async (exc: Exception) => {
+    setResolving(exc.id)
+    try {
+      await api.exceptions.resolve(exc.id, 'resolved')
+      setSuccessMessage(`Exception marquée comme résolue.`)
+      setTimeout(() => setSuccessMessage(null), 3000)
+      await loadExceptions()
+    } catch {
+      setError('Erreur lors de la résolution.')
+    } finally {
+      setResolving(null)
+    }
   }
 
   const getSeverityIcon = (severity: string) => {
@@ -125,7 +117,7 @@ export default function ExceptionsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">{t('exceptions')}</h1>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            {exceptions.length} exceptions en attente de traitement
+            {loading ? '\u2026' : `${exceptions.length} exceptions en attente de traitement`}
           </p>
         </div>
 
@@ -136,16 +128,27 @@ export default function ExceptionsPage() {
           </div>
         )}
 
+        {error && (
+          <div className="flex items-center gap-2 p-4 rounded-lg bg-[var(--color-danger-light)] border border-[var(--color-danger)]/20 text-[var(--color-danger)] text-sm font-medium">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-6">
           {/* Main Exceptions List */}
           <div className="col-span-12 lg:col-span-8 space-y-4">
-            {exceptions.length === 0 ? (
+            {loading ? (
+              <Card className="p-8 border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white flex items-center justify-center">
+                <Loader2 className="h-8 w-8 animate-spin text-[var(--color-accent)]" />
+              </Card>
+            ) : exceptions.length === 0 ? (
               <Card className="p-8 text-center border-[var(--color-border)] shadow-[var(--shadow-card)] flex flex-col items-center justify-center space-y-3 bg-white">
                 <div className="h-12 w-12 rounded-full bg-[var(--color-success-light)] flex items-center justify-center">
                   <CheckCircle2 className="h-6 w-6 text-[var(--color-success)]" />
                 </div>
                 <h3 className="font-semibold text-sm text-[var(--color-text-primary)]">Félicitations !</h3>
-                <p className="text-xs text-[var(--color-text-secondary)]">Aucune anomalie ou conflit de données n'est en attente.</p>
+                <p className="text-xs text-[var(--color-text-secondary)]">Aucune anomalie ou conflit de données n&apos;est en attente.</p>
               </Card>
             ) : (
               exceptions.map((exc) => (
@@ -157,9 +160,8 @@ export default function ExceptionsPage() {
                   <div className="flex-1 min-w-0 space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
-                        {exc.participant}
+                        {exc.participant_name ?? '\u2014'}
                       </h3>
-                      <span className="text-xs text-[var(--color-text-secondary)]">({exc.email})</span>
                       {getSeverityBadge(exc.severity)}
                       <Badge variant="outline" className="text-[10px] uppercase border-slate-200">
                         {exc.type}
@@ -170,17 +172,38 @@ export default function ExceptionsPage() {
                       {exc.message}
                     </p>
 
-                    {exc.type === 'DATA_CONFLICT' && (
-                      <div className="pt-2">
+                    <div className="pt-2 flex items-center gap-2">
+                      {exc.type === 'conflict' && exc.value_a !== undefined && exc.value_b !== undefined ? (
                         <Button
                           size="sm"
                           className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white text-xs h-8"
                           onClick={() => setActiveResolve(exc)}
+                          disabled={resolving === exc.id}
                         >
-                          <Sparkles className="h-3.5 w-3.5 mr-1.5" /> Résoudre le conflit
+                          {resolving === exc.id ? (
+                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                          )}
+                          Résoudre le conflit
                         </Button>
-                      </div>
-                    )}
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-xs h-8 border-[var(--color-border)]"
+                          onClick={() => handleResolveSimple(exc)}
+                          disabled={resolving === exc.id}
+                        >
+                          {resolving === exc.id ? (
+                            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                          ) : (
+                            <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+                          )}
+                          Marquer comme résolu
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </Card>
               ))
@@ -205,27 +228,37 @@ export default function ExceptionsPage() {
 
                 <div className="space-y-4">
                   <div className="text-xs text-[var(--color-text-primary)]">
-                    Participant : <strong className="font-semibold">{activeResolve.participant}</strong>
+                    Participant : <strong className="font-semibold">{activeResolve.participant_name ?? '\u2014'}</strong>
                   </div>
 
                   <div className="space-y-3">
-                    <div className="rounded-md border p-3 bg-slate-50 space-y-2 hover:border-[var(--color-accent)] cursor-pointer" onClick={() => handleResolveConflict(activeResolve.details.val_client)}>
+                    <div
+                      className="rounded-md border p-3 bg-slate-50 space-y-2 hover:border-[var(--color-accent)] cursor-pointer"
+                      onClick={() => handleResolveConflict(activeResolve.value_a || '')}
+                    >
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Source Client</span>
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                          {activeResolve.source_a ?? 'Source A'}
+                        </span>
                         <Badge className="bg-slate-200 text-slate-700 hover:bg-slate-200/90 text-[9px]">Conserver</Badge>
                       </div>
                       <div className="text-sm font-bold text-[var(--color-text-primary)]">
-                        {activeResolve.details.val_client}
+                        {activeResolve.value_a}
                       </div>
                     </div>
 
-                    <div className="rounded-md border p-3 bg-slate-50 space-y-2 hover:border-[var(--color-accent)] cursor-pointer" onClick={() => handleResolveConflict(activeResolve.details.val_fcm)}>
+                    <div
+                      className="rounded-md border p-3 bg-slate-50 space-y-2 hover:border-[var(--color-accent)] cursor-pointer"
+                      onClick={() => handleResolveConflict(activeResolve.value_b || '')}
+                    >
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Source FCM Broker</span>
+                        <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                          {activeResolve.source_b ?? 'Source B'}
+                        </span>
                         <Badge className="bg-slate-200 text-slate-700 hover:bg-slate-200/90 text-[9px]">Conserver</Badge>
                       </div>
                       <div className="text-sm font-bold text-[var(--color-text-primary)]">
-                        {activeResolve.details.val_fcm}
+                        {activeResolve.value_b}
                       </div>
                     </div>
                   </div>
@@ -244,11 +277,11 @@ export default function ExceptionsPage() {
                 <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">Instructions</h4>
                 <div className="space-y-3 text-xs text-[var(--color-text-secondary)] leading-relaxed">
                   <p>
-                    Les exceptions proviennent d'incohérences de données détectées lors de la consolidation de vos fichiers importés.
+                    Les exceptions proviennent d&apos;incohérences de données détectées lors de la consolidation de vos fichiers importés.
                   </p>
                   <div className="flex gap-2 items-start">
                     <UserCheck className="h-4 w-4 text-[var(--color-accent)] shrink-0" />
-                    <span><strong>Consolidation Non Destructive :</strong> Résoudre un conflit verrouille le champ sélectionné afin d'éviter qu'une mise à jour future n'écrase votre correction.</span>
+                    <span><strong>Consolidation Non Destructive :</strong> Résoudre un conflit verrouille le champ sélectionné afin d&apos;éviter qu&apos;une mise à jour future n&apos;écrase votre correction.</span>
                   </div>
                 </div>
               </Card>

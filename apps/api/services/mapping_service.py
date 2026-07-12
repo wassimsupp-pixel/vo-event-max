@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+import unicodedata
 from datetime import date
 from typing import Any, Optional
 
@@ -21,11 +22,14 @@ logger = logging.getLogger(__name__)
 
 # Canonical target field names that the rest of the system expects
 CANONICAL_FIELDS = {
-    "first_name", "last_name", "email", "company", "phone",
+    "id", "first_name", "last_name", "email", "company", "phone",
     "nationality", "dietary_requirements",
     "departure_date", "return_date", "flight_number",
-    "hotel_name", "check_in_date", "check_out_date",
-    "transfer_type", "activity_name",
+    "departure_airport", "arrival_airport", "departure_time", "arrival_time",
+    "pnr_code", "airline", "baggage_info",
+    "hotel_name", "check_in_date", "check_out_date", "room_type",
+    "transfer_type", "pickup_location", "dropoff_location", "pickup_time", "vehicle_type",
+    "activity_name",
 }
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -104,6 +108,28 @@ def _parse_date(raw: str) -> Optional[str]:
     return None
 
 
+import math
+
+def clean_nans(val: Any) -> Any:
+    """Recursively replace float('nan') or None equivalents with None."""
+    if isinstance(val, dict):
+        return {k: clean_nans(v) for k, v in val.items()}
+    elif isinstance(val, list):
+        return [clean_nans(v) for v in val]
+    elif isinstance(val, float):
+        if math.isnan(val) or not math.isfinite(val):
+            return None
+    elif val == "NaN" or val == "nan":
+        return None
+    elif hasattr(val, "__class__") and val.__class__.__name__ in ("float", "double", "float64"):
+        try:
+            if math.isnan(float(val)):
+                return None
+        except:
+            pass
+    return val
+
+
 def parse_and_insert_source_records(
     supabase: Client,
     file_id: str,
@@ -135,8 +161,11 @@ def parse_and_insert_source_records(
     records_to_insert: list[dict[str, Any]] = []
 
     for i, raw_row in enumerate(df_rows):
-        mapped = apply_mapping(raw_row, mapping)
+        cleaned_raw_row = clean_nans(raw_row)
+        mapped = apply_mapping(cleaned_raw_row, mapping)
         normalised = normalise_fields(mapped)
+        cleaned_normalised = clean_nans(normalised)
+        
         record_id = str(uuid.uuid4())
         records_to_insert.append(
             {
@@ -144,8 +173,8 @@ def parse_and_insert_source_records(
                 "file_id": file_id,
                 "event_id": event_id,
                 "row_index": i,
-                "raw_data": raw_row,
-                "normalized_data": normalised,
+                "raw_data": cleaned_raw_row,
+                "normalized_data": cleaned_normalised,
             }
         )
 
@@ -169,3 +198,182 @@ def parse_and_insert_source_records(
         len(inserted_ids), file_id, event_id,
     )
     return inserted_ids
+
+
+def _normalize_column_name(col: str) -> str:
+    """
+    Normalize a column name by lowercasing, stripping accents,
+    and removing all spaces, underscores, and special characters.
+    """
+    col = col.lower()
+    # Stripping accents
+    col = "".join(
+        c for c in unicodedata.normalize("NFD", col)
+        if unicodedata.category(c) != "Mn"
+    )
+    # Removing spaces, punctuation, dashes, underscores
+    col = re.sub(r"[\s_\-\/\\(\)\[\]\.\,\:\;]+", "", col)
+    return col
+
+
+SYNONYMS: dict[str, list[str]] = {
+    "id": ["id", "idparticipant", "code", "codeparticipant", "registrationcode", "ref", "reference", "participantid"],
+    "first_name": ["prenom", "first", "firstname", "givenname", "nom1", "nomdebateme"],
+    "last_name": ["nom", "last", "lastname", "surname", "familyname", "nomdefamille"],
+    "email": ["email", "mail", "courriel", "adressemail", "emailaddress", "emailadr", "contactemail"],
+    "company": ["company", "societe", "compagnie", "entreprise", "organisation", "org", "boite", "employer", "employeur"],
+    "phone": ["phone", "telephone", "tel", "gsm", "mobile", "cel", "cellulaire", "contactphone"],
+    "nationality": ["nationality", "nationalite", "pays", "citizen", "citizenship", "orig"],
+    "dietary_requirements": ["dietaryrequirements", "dietary", "regime", "regimealimentaire", "aliment", "food", "allergy", "allergie"],
+    
+    # Flights
+    "departure_date": ["departuredate", "datedepart", "outbounddate", "flightdepdate"],
+    "return_date": ["returndate", "dateretour", "inbounddate", "flightretdate"],
+    "flight_number": ["flightnumber", "numvol", "novol", "flightno", "numdevol", "flightcode"],
+    "departure_airport": ["departureairport", "aeroportdepart", "depapt", "depairp", "origairport"],
+    "arrival_airport": ["arrivalairport", "aeroportarrivee", "arrapt", "arrairp", "destairport"],
+    "departure_time": ["departuretime", "heuredepart", "flightdeptime", "deptime", "datedepart"],
+    "arrival_time": ["arrivaltime", "heurearrivee", "flightarrtime", "arrtime", "datearrivee", "retdate"],
+    "pnr_code": ["pnrcode", "pnr", "codepnr", "bookingref", "recordlocator"],
+    "airline": ["airline", "compagnie", "compagnieaerienne", "carrier", "aircarrier"],
+    "baggage_info": ["baggageinfo", "baggage", "luggage", "infosbagages", "bags"],
+    
+    # Hotels
+    "hotel_name": ["hotelname", "hotel", "nomhotel", "hebergement", "nomdebergement"],
+    "check_in_date": ["checkindate", "checkin", "datecheckin", "dateentree", "entree", "arrivalhotel", "hotelarr"],
+    "check_out_date": ["checkoutdate", "checkout", "datecheckout", "datesortie", "sortie", "departurehotel", "hoteldep"],
+    "room_type": ["roomtype", "room", "chambre", "typechambre", "roomcategory"],
+    
+    # Transfers
+    "transfer_type": ["transfertype", "shuttletype", "typenavette"],
+    "pickup_location": ["pickuplocation", "lieupriseencharge", "priseencharge", "depart", "pickup", "lieudedepart"],
+    "dropoff_location": ["dropofflocation", "destination", "lieuarrivee", "arrivee", "dropoff", "lieudarrivee"],
+    "pickup_time": ["pickuptime", "heurepriseencharge", "heurepickup", "heurenavette", "shuttletime"],
+    "vehicle_type": ["vehicletype", "vehicle", "vehicule", "car", "bus", "voiture", "typevehicule"],
+    
+    # Activities
+    "activity_name": ["activityname", "activity", "activite", "nomactivite", "excursion", "loisir", "programme"],
+}
+
+
+_FLIGHT_NO_RE = re.compile(r"^[A-Z0-9]{2,3}\s*[0-9]{1,4}[A-Z]?$", re.IGNORECASE)
+
+
+def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, dict]:
+    """
+    Analyze column names and sample data to suggest canonical fields mappings.
+    Returns:
+    {
+      col_name: {
+        "suggested_field": Optional[str],
+        "confidence": float,
+        "alternatives": list[str]
+      }
+    }
+    """
+    suggestions = {}
+    for col in columns:
+        norm_col = _normalize_column_name(col)
+        
+        # 1. Gather non-empty values for content checks
+        vals = []
+        for row in sample_rows:
+            val = row.get(col)
+            if val is not None:
+                val_str = str(val).strip()
+                if val_str != "":
+                    vals.append(val_str)
+                    
+        # Content match indicators
+        is_email = False
+        is_date = False
+        is_flight = False
+        
+        if vals:
+            email_count = sum(1 for v in vals if _EMAIL_RE.match(v))
+            is_email = (email_count / len(vals)) > 0.5
+            
+            date_count = sum(1 for v in vals if _parse_date(v) is not None)
+            is_date = (date_count / len(vals)) > 0.5
+            
+            flight_count = sum(1 for v in vals if _FLIGHT_NO_RE.match(v))
+            is_flight = (flight_count / len(vals)) > 0.5
+            
+        # 2. Evaluate scores for each canonical field
+        field_scores = {}
+        for field in CANONICAL_FIELDS:
+            score = 0.0
+            norm_field = _normalize_column_name(field)
+            
+            # Exact matches
+            if norm_col == norm_field:
+                score = max(score, 0.95)
+            else:
+                # Check synonyms
+                for syn in SYNONYMS.get(field, []):
+                    norm_syn = _normalize_column_name(syn)
+                    if norm_col == norm_syn:
+                        score = max(score, 0.90)
+                        break
+                    elif norm_col.startswith(norm_syn) or norm_col.endswith(norm_syn) or norm_syn in norm_col:
+                        score = max(score, 0.60)
+                    elif norm_syn.startswith(norm_col) or norm_col in norm_syn:
+                        score = max(score, 0.40)
+            field_scores[field] = score
+            
+        # 3. Content-based adjustments/boosts
+        if is_email:
+            field_scores["email"] = max(field_scores.get("email", 0.0), 0.95)
+            # de-boost all others
+            for f in field_scores:
+                if f != "email":
+                    field_scores[f] *= 0.1
+        elif is_date:
+            date_fields = {
+                "check_in_date", "check_out_date", "departure_date", "return_date",
+                "departure_time", "arrival_time", "pickup_time"
+            }
+            for f in field_scores:
+                if f in date_fields:
+                    if field_scores[f] > 0.0:
+                        field_scores[f] = max(field_scores[f], 0.95)
+                    else:
+                        field_scores[f] = 0.5
+                else:
+                    field_scores[f] *= 0.1
+        elif is_flight:
+            field_scores["flight_number"] = max(field_scores.get("flight_number", 0.0), 0.95)
+            for f in field_scores:
+                if f != "flight_number":
+                    field_scores[f] *= 0.1
+                    
+        # 4. Filter, sort, and format results
+        candidates = []
+        for field, score in field_scores.items():
+            if score >= 0.1:
+                candidates.append((field, score))
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        suggested_field = None
+        confidence = 0.0
+        alternatives = []
+        
+        if candidates:
+            # Check if top candidate meets confidence threshold
+            if candidates[0][1] >= 0.5:
+                suggested_field = candidates[0][0]
+                confidence = round(candidates[0][1], 2)
+                # alternatives are other candidates with score >= 0.3
+                alternatives = [f for f, s in candidates[1:] if s >= 0.3]
+            else:
+                suggested_field = None
+                confidence = 0.0
+                alternatives = [f for f, s in candidates if s >= 0.3]
+                
+        suggestions[col] = {
+            "suggested_field": suggested_field,
+            "confidence": confidence,
+            "alternatives": alternatives
+        }
+        
+    return suggestions

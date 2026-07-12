@@ -38,21 +38,10 @@ def _insert_exception(
     participant_id: Optional[str] = None,
     source_record_id: Optional[str] = None,
     context_data: Optional[dict] = None,
+    exceptions_list: Optional[list[dict]] = None,
 ) -> None:
     """
-    Insert a single exception record into the ``exceptions`` table.
-
-    Parameters
-    ----------
-    supabase:         Supabase client.
-    run_id:           UUID of the consolidation run that generated this exception.
-    event_id:         UUID of the event.
-    exception_type:   One of the exception_type enum values.
-    severity:         ``critical`` | ``warning`` | ``info``.
-    message:          Human-readable description of the exception.
-    participant_id:   Optional UUID of the related participant.
-    source_record_id: Optional UUID of the related source record.
-    context_data:     Optional JSON-serialisable dict with structured context.
+    Insert a single exception record into the ``exceptions`` table (or collect in list).
     """
     record = {
         "id": str(uuid.uuid4()),
@@ -66,8 +55,22 @@ def _insert_exception(
         "context_data": context_data,
         "resolved": False,
     }
+    if exceptions_list is not None:
+        exceptions_list.append(record)
+        return
+
+    # Translate only on direct database insert
+    db_record = record.copy()
+    if db_record["exception_type"] == "NAME_MISMATCH_BETWEEN_SOURCES":
+        db_record["exception_type"] = "DATA_CONFLICT"
+        if db_record["context_data"] is None:
+            db_record["context_data"] = {}
+        else:
+            db_record["context_data"] = db_record["context_data"].copy()
+        db_record["context_data"]["original_type"] = "NAME_MISMATCH_BETWEEN_SOURCES"
+
     try:
-        supabase.table("exceptions").insert(record).execute()
+        supabase.table("exceptions").insert(db_record).execute()
     except Exception as exc:
         logger.error("Failed to insert exception %s: %s", exception_type, exc)
 
@@ -81,29 +84,41 @@ def detect_all(
 ) -> int:
     """
     Run all exception detectors for an event after consolidation.
-
-    Calls each specialised detector in turn and returns the total number of
-    exceptions inserted.
-
-    Parameters
-    ----------
-    event_id:         UUID of the event.
-    run_id:           UUID of the consolidation run.
-    supabase:         Supabase client.
-    event_start_date: ISO-8601 date string of the event start (optional, for DATE_INCOHERENCE).
-    event_end_date:   ISO-8601 date string of the event end (optional, for DATE_INCOHERENCE).
-
-    Returns
-    -------
-    Total number of exception records inserted.
     """
-    total = 0
-    total += _detect_participant_no_flight(event_id, run_id, supabase)
-    total += _detect_flight_no_participant(event_id, run_id, supabase)
-    total += _detect_missing_required_fields(event_id, run_id, supabase)
-    total += _detect_invalid_formats(event_id, run_id, supabase)
-    total += _detect_date_incoherence(event_id, run_id, supabase, event_start_date, event_end_date)
-    total += _detect_data_conflicts(event_id, run_id, supabase)
+    exceptions_to_insert: list[dict] = []
+
+    _detect_participant_no_flight(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_flight_no_participant(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_missing_required_fields(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_invalid_formats(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_date_incoherence(event_id, run_id, supabase, event_start_date, event_end_date, exceptions_to_insert)
+    _detect_data_conflicts(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_possible_duplicates(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_name_mismatches_between_sources(event_id, run_id, supabase, exceptions_to_insert)
+
+    total = len(exceptions_to_insert)
+    
+    if exceptions_to_insert:
+        db_payload = []
+        for exc in exceptions_to_insert:
+            db_exc = exc.copy()
+            if db_exc["exception_type"] == "NAME_MISMATCH_BETWEEN_SOURCES":
+                db_exc["exception_type"] = "DATA_CONFLICT"
+                if db_exc["context_data"] is None:
+                    db_exc["context_data"] = {}
+                else:
+                    db_exc["context_data"] = db_exc["context_data"].copy()
+                db_exc["context_data"]["original_type"] = "NAME_MISMATCH_BETWEEN_SOURCES"
+            db_payload.append(db_exc)
+
+        try:
+            logger.info("Bulk inserting %d exceptions for event %s run %s...", total, event_id, run_id)
+            # Batch in chunks of 100
+            for i in range(0, len(db_payload), 100):
+                supabase.table("exceptions").insert(db_payload[i:i+100]).execute()
+        except Exception as exc:
+            logger.error("Failed to bulk insert exceptions: %s", exc)
+
     logger.info("Exception detection complete: %d exceptions for event %s run %s", total, event_id, run_id)
     return total
 
@@ -112,12 +127,9 @@ def detect_all(
 # Individual detectors
 # ---------------------------------------------------------------------------
 
-def _detect_participant_no_flight(event_id: str, run_id: str, supabase: Client) -> int:
+def _detect_participant_no_flight(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     PARTICIPANT_NO_FLIGHT — participants with has_flight=False.
-
-    These participants are registered but have no flight assignment, which is
-    an operational gap that must be resolved before the event.
     """
     try:
         result = (
@@ -143,6 +155,7 @@ def _detect_participant_no_flight(event_id: str, run_id: str, supabase: Client) 
             message=f"Participant '{name}' ({p.get('email', 'no email')}) has no flight record.",
             participant_id=p["id"],
             context_data={"participant_name": name, "email": p.get("email")},
+            exceptions_list=exceptions_list,
         )
         count += 1
 
@@ -150,12 +163,9 @@ def _detect_participant_no_flight(event_id: str, run_id: str, supabase: Client) 
     return count
 
 
-def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client) -> int:
+def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     FLIGHT_NO_PARTICIPANT — FCM source records not linked to any participant.
-
-    These flight records exist in the FCM file but could not be matched to
-    a participant. They may represent guests not in the registration list.
     """
     try:
         result = (
@@ -163,15 +173,12 @@ def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client) 
             .select("id, normalized_data, file_id")
             .eq("event_id", event_id)
             .is_("participant_id", "null")
-            # We join via uploaded_files.source_type = 'fcm'
             .execute()
         )
     except Exception as exc:
         logger.error("FLIGHT_NO_PARTICIPANT query failed: %s", exc)
         return 0
 
-    # Filter to only FCM-origin records by checking their file's source_type
-    # (We load file IDs in bulk to minimise queries)
     if not result.data:
         return 0
 
@@ -203,6 +210,7 @@ def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client) 
             message=f"FCM record for '{name}' could not be matched to any registered participant.",
             source_record_id=sr["id"],
             context_data={"normalized_data": nd},
+            exceptions_list=exceptions_list,
         )
         count += 1
 
@@ -210,13 +218,9 @@ def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client) 
     return count
 
 
-def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client) -> int:
+def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     MISSING_REQUIRED_FIELD — participants where first_name, last_name, or email is absent.
-
-    While first_name and last_name are NOT NULL in the schema, their normalised
-    counterparts in source_records may be empty. Detect any participant whose
-    key identity fields are incomplete.
     """
     try:
         result = (
@@ -246,6 +250,7 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
                 message=f"Participant {p['id']} is missing required fields: {', '.join(missing)}.",
                 participant_id=p["id"],
                 context_data={"missing_fields": missing},
+                exceptions_list=exceptions_list,
             )
             count += 1
 
@@ -253,12 +258,9 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
     return count
 
 
-def _detect_invalid_formats(event_id: str, run_id: str, supabase: Client) -> int:
+def _detect_invalid_formats(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     INVALID_FORMAT — source records with unparseable dates or invalid emails.
-
-    Scans normalised_data in source_records for values that failed normalisation
-    (e.g. a date field that still contains a non-ISO string after normalisation).
     """
     date_fields = {"departure_date", "return_date", "check_in_date", "check_out_date"}
 
@@ -300,6 +302,7 @@ def _detect_invalid_formats(event_id: str, run_id: str, supabase: Client) -> int
                 message=f"Source record {sr['id']} has format issues: {'; '.join(issues)}.",
                 source_record_id=sr["id"],
                 context_data={"issues": issues, "normalized_data": nd},
+                exceptions_list=exceptions_list,
             )
             count += 1
 
@@ -313,11 +316,10 @@ def _detect_date_incoherence(
     supabase: Client,
     event_start: Optional[str],
     event_end: Optional[str],
+    exceptions_list: list[dict],
 ) -> int:
     """
     DATE_INCOHERENCE — departure_date < arrival_date or dates outside event window.
-
-    Only evaluated when event start/end dates are provided.
     """
     try:
         result = (
@@ -363,6 +365,7 @@ def _detect_date_incoherence(
                 message=f"Source record {sr['id']} has date issues: {'; '.join(issues)}.",
                 source_record_id=sr["id"],
                 context_data={"issues": issues},
+                exceptions_list=exceptions_list,
             )
             count += 1
 
@@ -370,16 +373,11 @@ def _detect_date_incoherence(
     return count
 
 
-def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client) -> int:
+def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     DATA_CONFLICT — same participant has conflicting values between registration and FCM.
-
-    Compares the ``company`` field between the registration source record and the
-    FCM source record for each participant that has both. Extend to other fields
-    as needed.
     """
     try:
-        # Load participants that have both a registration and FCM source
         result = (
             supabase.table("participants")
             .select(
@@ -447,8 +445,155 @@ def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client) -> int:
                 ),
                 participant_id=p["id"],
                 context_data={"conflicts": conflicts},
+                exceptions_list=exceptions_list,
             )
             count += 1
 
     logger.debug("DATA_CONFLICT: %d exceptions", count)
     return count
+
+
+def _detect_possible_duplicates(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    POSSIBLE_DUPLICATE — participants with very similar names but different email addresses.
+    """
+    from rapidfuzz import fuzz
+
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, company")
+            .eq("event_id", event_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("POSSIBLE_DUPLICATE query failed: %s", exc)
+        return 0
+
+    participants = result.data or []
+    if len(participants) < 2:
+        return 0
+
+    count = 0
+    for i in range(len(participants)):
+        for j in range(i + 1, len(participants)):
+            p1 = participants[i]
+            p2 = participants[j]
+
+            email1 = (p1.get("email") or "").strip().lower()
+            email2 = (p2.get("email") or "").strip().lower()
+
+            if email1 == email2 or not email1 or not email2:
+                continue
+
+            name1 = f"{p1.get('first_name') or ''} {p1.get('last_name') or ''}".strip().lower()
+            name2 = f"{p2.get('first_name') or ''} {p2.get('last_name') or ''}".strip().lower()
+
+            if not name1 or not name2:
+                continue
+
+            score = fuzz.token_sort_ratio(name1, name2)
+            if score >= 80:
+                name_display1 = f"{p1.get('first_name') or ''} {p1.get('last_name') or ''}".strip()
+                name_display2 = f"{p2.get('first_name') or ''} {p2.get('last_name') or ''}".strip()
+                
+                _insert_exception(
+                    supabase=supabase,
+                    run_id=run_id,
+                    event_id=event_id,
+                    exception_type="POSSIBLE_DUPLICATE",
+                    severity="warning",
+                    message=(
+                        f"Potential duplicate participant detected: '{name_display1}' ({email1}) "
+                        f"and '{name_display2}' ({email2}) share very similar names (similarity={score:.1f}%)."
+                    ),
+                    participant_id=p1["id"],
+                    context_data={
+                        "participant_a_id": p1["id"],
+                        "participant_b_id": p2["id"],
+                        "name_a": name_display1,
+                        "name_b": name_display2,
+                        "email_a": email1,
+                        "email_b": email2,
+                        "score": float(score),
+                    },
+                    exceptions_list=exceptions_list,
+                )
+                count += 1
+
+    return count
+
+
+def _detect_name_mismatches_between_sources(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    NAME_MISMATCH_BETWEEN_SOURCES — same participant has name mismatch between registration and flight source files.
+    """
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, registration_source_id, fcm_source_id")
+            .eq("event_id", event_id)
+            .not_.is_("registration_source_id", "null")
+            .not_.is_("fcm_source_id", "null")
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("NAME_MISMATCH_BETWEEN_SOURCES query failed: %s", exc)
+        return 0
+
+    participants = result.data or []
+    if not participants:
+        return 0
+
+    reg_ids = [p["registration_source_id"] for p in participants]
+    fcm_ids = [p["fcm_source_id"] for p in participants]
+    all_ids = list(set(reg_ids + fcm_ids))
+
+    try:
+        sr_resp = (
+            supabase.table("source_records")
+            .select("id, normalized_data")
+            .in_("id", all_ids)
+            .execute()
+        )
+        sr_map = {r["id"]: r["normalized_data"] or {} for r in sr_resp.data or []}
+    except Exception as exc:
+        logger.error("Failed to load source_records for NAME_MISMATCH_BETWEEN_SOURCES: %s", exc)
+        return 0
+
+    count = 0
+    for p in participants:
+        reg_data = sr_map.get(p["registration_source_id"], {})
+        fcm_data = sr_map.get(p["fcm_source_id"], {})
+
+        reg_first = (reg_data.get("first_name") or "").strip().lower()
+        reg_last = (reg_data.get("last_name") or "").strip().lower()
+        fcm_first = (fcm_data.get("first_name") or "").strip().lower()
+        fcm_last = (fcm_data.get("last_name") or "").strip().lower()
+
+        if (reg_first or reg_last) and (fcm_first or fcm_last):
+            if reg_first != fcm_first or reg_last != fcm_last:
+                reg_name = f"{reg_data.get('first_name') or ''} {reg_data.get('last_name') or ''}".strip()
+                fcm_name = f"{fcm_data.get('first_name') or ''} {fcm_data.get('last_name') or ''}".strip()
+                
+                _insert_exception(
+                    supabase=supabase,
+                    run_id=run_id,
+                    event_id=event_id,
+                    exception_type="NAME_MISMATCH_BETWEEN_SOURCES",
+                    severity="warning",
+                    message=(
+                        f"Name mismatch: registration name is '{reg_name}' "
+                        f"but FCM flight record name is '{fcm_name}'."
+                    ),
+                    participant_id=p["id"],
+                    context_data={
+                        "registration_name": reg_name,
+                        "fcm_name": fcm_name,
+                    },
+                    exceptions_list=exceptions_list,
+                )
+                count += 1
+
+    return count
+

@@ -3,7 +3,7 @@
  * All endpoints target NEXT_PUBLIC_API_URL (Railway deployment).
  */
 
-const BASE_URL = 'https://web-production-f0ba2.up.railway.app'
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://vo-event-max-api-production.up.railway.app'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -20,12 +20,12 @@ export interface Participant {
   phone?: string
   nationality?: string
   dietary_requirements?: string
-  status: ParticipantStatus
+  completeness_status: ParticipantStatus
   confidence: ConfidenceLevel
   has_flight: boolean
   has_hotel: boolean
   has_transfer: boolean
-  has_activity: boolean
+  has_activities: boolean
   locked_fields: string[]
   sources: string[]
   match_score?: number
@@ -33,19 +33,26 @@ export interface Participant {
   updated_at: string
 }
 
+export interface ParticipantLookupItem {
+  id: string
+  first_name: string
+  last_name: string
+  completeness_status: string
+}
+
 export interface ParticipantListParams {
   page?: number
-  per_page?: number
+  page_size?: number
   search?: string
   status?: ParticipantStatus
   confidence?: ConfidenceLevel
 }
 
 export interface PaginatedParticipants {
-  data: Participant[]
+  items: Participant[]
   total: number
   page: number
-  per_page: number
+  page_size: number
   total_pages: number
 }
 
@@ -58,18 +65,28 @@ export interface ParticipantUpdate {
   [key: string]: string | undefined
 }
 
+export interface ColumnMappingSuggestion {
+  suggested_field: string | null
+  confidence: number
+  alternatives: string[]
+}
+
 export interface FileUploadResponse {
   file_id: string
   filename: string
   row_count: number
   columns: string[]
   uploaded_at: string
+  mapping_suggestions: Record<string, ColumnMappingSuggestion>
+  canonical_fields: string[]
 }
 
 export interface FilePreviewResponse {
   columns: string[]
   rows: Record<string, string>[]
   total_rows: number
+  mapping_suggestions: Record<string, ColumnMappingSuggestion>
+  canonical_fields: string[]
 }
 
 export interface UploadedFile {
@@ -132,9 +149,98 @@ export interface Exception {
   created_at: string
 }
 
+export interface EmailProposal {
+  id: string
+  event_id: string
+  sender: string
+  subject: string
+  body: string
+  received_at: string
+  participant_id?: string
+  status: 'pending' | 'applied' | 'rejected'
+  proposed_changes: Record<string, string>
+  ai_explanation?: string
+  created_at: string
+  participant_name?: string
+}
+
 import { createClient } from './supabase'
 
 const supabase = createClient()
+
+
+function mapParticipant(p: any): Participant {
+  if (!p) return p
+  
+  let lockedFieldsArray: string[] = []
+  if (p.locked_fields) {
+    if (Array.isArray(p.locked_fields)) {
+      lockedFieldsArray = p.locked_fields
+    } else if (typeof p.locked_fields === 'object') {
+      lockedFieldsArray = Object.keys(p.locked_fields).filter(k => p.locked_fields[k] === true)
+    }
+  }
+
+  let sourcesArray: string[] = []
+  if (p.sources) {
+    sourcesArray = p.sources
+  } else {
+    if (p.registration_source_id) sourcesArray.push('registration')
+    if (p.fcm_source_id) sourcesArray.push('fcm')
+  }
+
+  return {
+    ...p,
+    completeness_status: p.completeness_status || p.status || 'incomplete',
+    has_activities: p.has_activities !== undefined ? p.has_activities : (p.has_activity !== undefined ? p.has_activity : false),
+    locked_fields: lockedFieldsArray,
+    sources: sourcesArray,
+    confidence: p.confidence || 'certain',
+  }
+}
+
+function mapException(exc: any): Exception {
+  if (!exc) return exc
+  const ctx = exc.context_data || {}
+  let value_a: string | undefined = undefined
+  let value_b: string | undefined = undefined
+  let source_a: string | undefined = undefined
+  let source_b: string | undefined = undefined
+  let participant_name: string | undefined = exc.participant_name
+
+  if (exc.exception_type === 'conflict' || exc.exception_type === 'DATA_CONFLICT') {
+    if (ctx.conflicts && ctx.conflicts.length > 0) {
+      const c = ctx.conflicts[0]
+      value_a = c.registration_value
+      value_b = c.fcm_value
+      source_a = "Fiche Inscription"
+      source_b = "Import FCM (Vols)"
+      if (!participant_name) {
+        participant_name = c.participant_name
+      }
+    } else {
+      value_a = ctx.value_a
+      value_b = ctx.value_b
+      source_a = ctx.source_a
+      source_b = ctx.source_b
+    }
+  }
+
+  if (!participant_name && ctx.participant_name) {
+    participant_name = ctx.participant_name
+  }
+
+  return {
+    ...exc,
+    type: (exc.exception_type === 'DATA_CONFLICT' || exc.exception_type === 'conflict') ? 'conflict' : (exc.type || exc.exception_type || 'to_verify'),
+    participant_name,
+    value_a,
+    value_b,
+    source_a,
+    source_b,
+  }
+}
+
 
 // ─── HTTP helpers ──────────────────────────────────────────────────────────────
 
@@ -143,18 +249,21 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession()
-  const authHeaders: Record<string, string> = {}
+  const isFormData = options.body instanceof FormData
+  const headers = new Headers(options.headers)
+
   if (session?.access_token) {
-    authHeaders['Authorization'] = `Bearer ${session.access_token}`
+    headers.set('Authorization', `Bearer ${session.access_token}`)
   }
 
+  if (!isFormData && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
+  const { headers: _, ...restOptions } = options
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...options.headers,
-    },
-    ...options,
+    headers,
+    ...restOptions,
   })
 
   if (!res.ok) {
@@ -181,7 +290,8 @@ export const api = {
       const form = new FormData()
       form.append('file', file)
       form.append('source_type', sourceType)
-      return request<FileUploadResponse>(`/api/events/${eventId}/files`, {
+      form.append('event_id', eventId)
+      return request<FileUploadResponse>('/api/files/upload', {
         method: 'POST',
         body: form,
         headers: {}, // let browser set Content-Type with boundary
@@ -193,30 +303,93 @@ export const api = {
     },
 
     async mapColumns(fileId: string, mapping: Record<string, string>): Promise<void> {
-      await request(`/api/files/${fileId}/mapping`, {
+      await request(`/api/files/${fileId}/map-columns`, {
         method: 'POST',
-        body: JSON.stringify({ mapping }),
+        body: JSON.stringify({ mapping, confirmed: true }),
       })
     },
 
     async list(eventId: string): Promise<UploadedFile[]> {
       return request<UploadedFile[]>(`/api/events/${eventId}/files`)
     },
+
+    async delete(fileId: string): Promise<void> {
+      await request(`/api/files/${fileId}`, {
+        method: 'DELETE',
+      })
+    },
   },
 
   consolidation: {
     async run(eventId: string): Promise<ConsolidationRun> {
-      return request<ConsolidationRun>(`/api/events/${eventId}/consolidation`, {
+      const run = await request<any>(`/api/events/${eventId}/consolidate`, {
         method: 'POST',
       })
+      let status = run.status
+      if (run.status === 'completed') status = 'done'
+      else if (run.status === 'failed') status = 'error'
+
+      return {
+        id: run.id,
+        event_id: run.event_id,
+        status: status as any,
+        started_at: run.started_at,
+        finished_at: run.completed_at,
+      }
     },
 
     async list(eventId: string): Promise<ConsolidationRun[]> {
-      return request<ConsolidationRun[]>(`/api/events/${eventId}/consolidation`)
+      const list = await request<any[]>(`/api/events/${eventId}/runs`)
+      return list.map(run => {
+        let status = run.status
+        if (run.status === 'completed') status = 'done'
+        else if (run.status === 'failed') status = 'error'
+        return {
+          id: run.id,
+          event_id: run.event_id,
+          status: status as any,
+          started_at: run.started_at,
+          finished_at: run.completed_at,
+        }
+      })
     },
 
     async get(eventId: string, runId: string): Promise<ConsolidationRunDetail> {
-      return request<ConsolidationRunDetail>(`/api/events/${eventId}/consolidation/${runId}`)
+      const resp = await request<{
+        run: any
+        exceptions: any[]
+        exception_count: number
+      }>(`/api/events/${eventId}/runs/${runId}`)
+      
+      const run = resp.run || {}
+      let status = run.status
+      if (run.status === 'completed') status = 'done'
+      else if (run.status === 'failed') status = 'error'
+
+      const backendStats = run.stats || {}
+      const stats = {
+        total: backendStats.total_source_records || 0,
+        matched: (backendStats.matched_certain || 0) + (backendStats.matched_probable || 0),
+        conflicts: backendStats.exceptions_count || 0,
+        duplicates: 0,
+        not_found: backendStats.not_found || 0,
+      }
+
+      return {
+        id: run.id,
+        event_id: run.event_id,
+        status: status as any,
+        started_at: run.started_at,
+        finished_at: run.completed_at,
+        stats,
+        steps: [
+          { name: 'Importation', status: 'done', count: resp.exception_count },
+          { name: 'Analyse', status: 'done' },
+          { name: 'Matching', status: run.status === 'running' ? 'active' : 'done' },
+          { name: 'Consolidation', status: run.status === 'running' ? 'pending' : 'done' },
+          { name: 'Validation', status: run.status === 'running' ? 'pending' : 'done' },
+        ]
+      }
     },
   },
 
@@ -224,23 +397,43 @@ export const api = {
     async list(eventId: string, params?: ParticipantListParams): Promise<PaginatedParticipants> {
       const query = qs({
         page: params?.page,
-        per_page: params?.per_page,
+        page_size: params?.page_size,
         search: params?.search,
         status: params?.status,
         confidence: params?.confidence,
       })
-      return request<PaginatedParticipants>(`/api/events/${eventId}/participants${query}`)
+      const resp = await request<{
+        items: any[]
+        total: number
+        page: number
+        page_size: number
+        total_pages: number
+      }>(`/api/events/${eventId}/participants${query}`)
+      
+      return {
+        items: (resp.items || []).map(mapParticipant),
+        total: resp.total || 0,
+        page: resp.page || 1,
+        page_size: resp.page_size || 50,
+        total_pages: resp.total_pages || 1
+      }
+    },
+
+    async lookup(eventId: string): Promise<ParticipantLookupItem[]> {
+      return request<ParticipantLookupItem[]>(`/api/events/${eventId}/participants/lookup`)
     },
 
     async get(participantId: string): Promise<Participant> {
-      return request<Participant>(`/api/participants/${participantId}`)
+      const p = await request<any>(`/api/participants/${participantId}`)
+      return mapParticipant(p)
     },
 
     async update(participantId: string, update: ParticipantUpdate): Promise<Participant> {
-      return request<Participant>(`/api/participants/${participantId}`, {
+      const p = await request<any>(`/api/participants/${participantId}`, {
         method: 'PATCH',
         body: JSON.stringify(update),
       })
+      return mapParticipant(p)
     },
 
     async lockField(participantId: string, field: string): Promise<void> {
@@ -273,10 +466,10 @@ export const api = {
     },
   },
   exports: {
-    async create(eventId: string, runId: string): Promise<Export> {
+    async create(eventId: string, runId?: string): Promise<Export> {
       return request<Export>(`/api/events/${eventId}/exports`, {
         method: 'POST',
-        body: JSON.stringify({ run_id: runId }),
+        body: JSON.stringify({ run_id: runId || null }),
       })
     },
 
@@ -289,7 +482,8 @@ export const api = {
 
   exceptions: {
     async list(eventId: string): Promise<Exception[]> {
-      return request<Exception[]>(`/api/events/${eventId}/exceptions`)
+      const list = await request<any[]>(`/api/events/${eventId}/exceptions`)
+      return list.map(mapException)
     },
 
     async resolve(exceptionId: string, resolution: string): Promise<void> {
@@ -338,6 +532,12 @@ export const api = {
     },
     async assignRooming(eventId: string, payload: any): Promise<any> {
       return request<any>(`/api/events/${eventId}/hotels/rooming`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
+    async assignRoomingBulk(eventId: string, payload: any): Promise<any> {
+      return request<any>(`/api/events/${eventId}/hotels/rooming/bulk`, {
         method: 'POST',
         body: JSON.stringify(payload),
       })
@@ -432,6 +632,28 @@ export const api = {
   globalParticipants: {
     async getHistory(email: string): Promise<any[]> {
       return request<any[]>(`/api/global-participants/history?email=${encodeURIComponent(email)}`)
+    },
+  },
+
+  emailAgent: {
+    async list(eventId: string): Promise<EmailProposal[]> {
+      return request<EmailProposal[]>(`/api/events/${eventId}/email-agent`)
+    },
+    async analyze(eventId: string, sender: string, subject: string, body: string): Promise<EmailProposal> {
+      return request<EmailProposal>(`/api/events/${eventId}/email-agent/analyze`, {
+        method: 'POST',
+        body: JSON.stringify({ sender, subject, body }),
+      })
+    },
+    async apply(proposalId: string): Promise<void> {
+      await request(`/api/email-agent/${proposalId}/apply`, {
+        method: 'POST',
+      })
+    },
+    async reject(proposalId: string): Promise<void> {
+      await request(`/api/email-agent/${proposalId}/reject`, {
+        method: 'POST',
+      })
     },
   },
 

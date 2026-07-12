@@ -2,10 +2,12 @@
 
 import React, { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
+import { TableSkeleton } from '@/components/ui/TableSkeleton'
 import { Compass, Users, Plus, Calendar, Search } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, type ParticipantLookupItem } from '@/lib/api'
 
 interface Activity {
   id: string
@@ -28,10 +30,11 @@ interface ParticipantRegistration {
 
 export default function ActivitiesPage() {
   const { eventId, locale } = useParams() as { eventId: string; locale: string }
+  const t = useTranslations('activities')
   const [activities, setActivities] = useState<Activity[]>([])
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null)
   const [roster, setRoster] = useState<ParticipantRegistration[]>([])
-  const [participants, setParticipants] = useState<any[]>([])
+  const [participants, setParticipants] = useState<ParticipantLookupItem[]>([])
   const [loading, setLoading] = useState(true)
   const [rosterLoading, setRosterLoading] = useState(false)
 
@@ -47,11 +50,12 @@ export default function ActivitiesPage() {
   const fetchActivities = async () => {
     try {
       setLoading(true)
-      const data = await api.activities.list(eventId)
-      setActivities(data)
-      
-      const partRes = await api.participants.list(eventId, { per_page: 200 })
-      setParticipants(partRes.data)
+      const [activitiesData, partList] = await Promise.all([
+        api.activities.list(eventId),
+        api.participants.lookup(eventId)
+      ])
+      setActivities(activitiesData)
+      setParticipants(partList)
     } catch (err) {
       console.error('Failed to fetch activities', err)
     } finally {
@@ -141,10 +145,10 @@ export default function ActivitiesPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-primary)] flex items-center gap-2">
               <Compass className="h-6 w-6 text-[var(--color-accent)]" />
-              Activités & Dîners
+              {t('title')}
             </h1>
             <p className="text-sm text-[var(--color-text-secondary)]">
-              Gérez les excursions, visites guidées et attributions de tables avec suivi des régimes alimentaires.
+              {t('subtitle')}
             </p>
           </div>
         </div>
@@ -152,19 +156,19 @@ export default function ActivitiesPage() {
         {/* KPIs */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <KPICard
-            label="Activités proposées"
+            label={t('kpiProposed')}
             value={activities.length}
             icon={<Compass className="h-5 w-5" />}
             accentColor="var(--color-accent)"
           />
           <KPICard
-            label="Inscriptions enregistrées"
+            label={t('kpiRegistered')}
             value={activities.reduce((acc, a) => acc + a.registrations_count, 0)}
             icon={<Users className="h-5 w-5" />}
             accentColor="var(--color-success)"
           />
           <KPICard
-            label="Capacité totale"
+            label={t('kpiCapacity')}
             value={activities.reduce((acc, a) => acc + (a.capacity || 0), 0)}
             icon={<Calendar className="h-5 w-5" />}
             accentColor="var(--color-cta)"
@@ -176,12 +180,12 @@ export default function ActivitiesPage() {
           <div className="rounded-[var(--radius-card)] border bg-white p-6 shadow-sm h-fit">
             <h2 className="text-lg font-bold text-[var(--color-text-primary)] mb-4 flex items-center gap-2">
               <Plus className="h-5 w-5 text-[var(--color-accent)]" />
-              Créer une activité
+              {t('createTitle')}
             </h2>
             <form onSubmit={handleCreateActivity} className="flex flex-col gap-4">
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                  Nom de l&apos;activité
+                  {t('activityName')}
                 </label>
                 <input
                   type="text"
@@ -194,7 +198,7 @@ export default function ActivitiesPage() {
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                  Description
+                  {t('description')}
                 </label>
                 <textarea
                   placeholder="Ex. Menu 3 services au bord de l'eau"
@@ -205,7 +209,7 @@ export default function ActivitiesPage() {
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                  Lieu
+                  {t('location')}
                 </label>
                 <input
                   type="text"
@@ -218,7 +222,7 @@ export default function ActivitiesPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                    Capacité
+                    {t('capacity')}
                   </label>
                   <input
                     type="number"
@@ -229,7 +233,7 @@ export default function ActivitiesPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                    Date & Heure
+                    {t('dateTime')}
                   </label>
                   <input
                     type="datetime-local"
@@ -243,7 +247,7 @@ export default function ActivitiesPage() {
                 type="submit"
                 className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors"
               >
-                Ajouter l&apos;activité
+                {t('addActivityButton')}
               </button>
             </form>
           </div>
@@ -251,29 +255,25 @@ export default function ActivitiesPage() {
           {/* Activities List */}
           <div className="rounded-[var(--radius-card)] border bg-white shadow-sm overflow-hidden lg:col-span-2">
             <div className="p-6 border-b">
-              <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Liste des Activités</h2>
+              <h2 className="text-lg font-bold text-[var(--color-text-primary)]">{t('activitiesListTitle')}</h2>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] font-medium">
-                    <th className="p-4">Activité</th>
-                    <th className="p-4">Lieu / Date</th>
-                    <th className="p-4">Inscrits / Capacité</th>
-                    <th className="p-4 text-right">Action</th>
+                    <th className="p-4">{t('tableActivity')}</th>
+                    <th className="p-4">{t('tableLocationDate')}</th>
+                    <th className="p-4">{t('tableRegistrationsCapacity')}</th>
+                    <th className="p-4 text-right">{t('tableAction')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y text-[var(--color-text-primary)]">
                   {loading ? (
-                    <tr>
-                      <td colSpan={4} className="p-8 text-center text-[var(--color-text-secondary)]">
-                        Chargement des activités...
-                      </td>
-                    </tr>
+                    <TableSkeleton cols={4} rows={3} />
                   ) : activities.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="p-8 text-center text-[var(--color-text-secondary)]">
-                        Aucune activité configurée.
+                        {t('noActivities')}
                       </td>
                     </tr>
                   ) : (
@@ -292,7 +292,7 @@ export default function ActivitiesPage() {
                         <td className="p-4">
                           <div className="text-xs font-semibold">{act.location || '-'}</div>
                           <div className="text-[10px] text-gray-400">
-                            {act.date_time ? new Date(act.date_time).toLocaleString('fr-FR', {
+                            {act.date_time ? new Date(act.date_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
                               dateStyle: 'short',
                               timeStyle: 'short',
                             }) : '-'}
@@ -306,7 +306,7 @@ export default function ActivitiesPage() {
                         </td>
                         <td className="p-4 text-right">
                           <button className="text-[var(--color-accent)] font-semibold text-xs transition-colors">
-                            Voir le Roster ➔
+                            {t('viewRoster')}
                           </button>
                         </td>
                       </tr>
@@ -324,10 +324,10 @@ export default function ActivitiesPage() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center border-b pb-4 mb-4 gap-4">
               <div>
                 <h3 className="text-lg font-bold text-[var(--color-text-primary)]">
-                  Roster des inscrits : {selectedActivity.name}
+                  {t('rosterTitle', { name: selectedActivity.name })}
                 </h3>
                 <p className="text-xs text-[var(--color-text-secondary)]">
-                  Gérez la liste de présence pour cette excursion ou ce dîner.
+                  {t('rosterSubtitle')}
                 </p>
               </div>
               <form onSubmit={handleRegister} className="flex gap-2">
@@ -337,7 +337,7 @@ export default function ActivitiesPage() {
                   className="border rounded-lg px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-[var(--color-accent)] bg-white w-48"
                   required
                 >
-                  <option value="">Sélectionner un participant...</option>
+                  <option value="">{t('selectParticipantPlaceholder')}</option>
                   {participants.map(p => (
                     <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
                   ))}
@@ -346,7 +346,7 @@ export default function ActivitiesPage() {
                   type="submit"
                   className="rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors"
                 >
-                  Inscrire
+                  {t('registerButton')}
                 </button>
               </form>
             </div>
@@ -355,23 +355,23 @@ export default function ActivitiesPage() {
               <table className="w-full text-left text-sm border-collapse">
                 <thead>
                   <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] font-medium">
-                    <th className="p-3">Participant</th>
-                    <th className="p-3">Régime Alimentaire</th>
-                    <th className="p-3">Statut</th>
-                    <th className="p-3 text-right">Actions</th>
+                    <th className="p-3">{t('tableParticipant')}</th>
+                    <th className="p-3">{t('tableDietary')}</th>
+                    <th className="p-3">{t('tableStatus')}</th>
+                    <th className="p-3 text-right">{t('tableActions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y text-[var(--color-text-primary)]">
                   {rosterLoading ? (
                     <tr>
                       <td colSpan={4} className="p-4 text-center text-[var(--color-text-secondary)]">
-                        Chargement des inscrits...
+                        {t('loadingRoster')}
                       </td>
                     </tr>
                   ) : roster.length === 0 ? (
                     <tr>
                       <td colSpan={4} className="p-4 text-center text-[var(--color-text-secondary)]">
-                        Aucun inscrit pour le moment.
+                        {t('noRegistered')}
                       </td>
                     </tr>
                   ) : (
@@ -389,7 +389,7 @@ export default function ActivitiesPage() {
                         </td>
                         <td className="p-3">
                           <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            Inscrit
+                            {t('statusRegistered')}
                           </span>
                         </td>
                         <td className="p-3 text-right">
@@ -397,7 +397,7 @@ export default function ActivitiesPage() {
                             onClick={() => handleUnregister(reg.participant_id)}
                             className="text-rose-600 hover:text-rose-900 font-semibold text-xs transition-colors"
                           >
-                            Désinscrire
+                            {t('unregisterButton')}
                           </button>
                         </td>
                       </tr>

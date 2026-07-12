@@ -32,6 +32,45 @@ from services.audit_service import log_change
 from services.file_service import download_and_parse_file, get_mapped_files_for_event
 from services.mapping_service import apply_mapping, normalise_fields, parse_and_insert_source_records
 
+def fetch_all_source_records(supabase: Client, file_ids: list[str]) -> list[dict]:
+    all_data = []
+    limit = 1000
+    offset = 0
+    while True:
+        resp = supabase.table("source_records").select("id, normalized_data, raw_data, file_id, event_id, row_index").in_("file_id", file_ids).range(offset, offset + limit - 1).execute()
+        data = resp.data or []
+        all_data.extend(data)
+        if len(data) < limit:
+            break
+        offset += limit
+    return all_data
+
+def fetch_all_hotel_nights(supabase: Client, hotel_ids: list[str]) -> list[dict]:
+    all_data = []
+    limit = 1000
+    offset = 0
+    while True:
+        resp = supabase.table("hotel_nights").select("id, participant_id, night_date").in_("hotel_id", hotel_ids).range(offset, offset + limit - 1).execute()
+        data = resp.data or []
+        all_data.extend(data)
+        if len(data) < limit:
+            break
+        offset += limit
+    return all_data
+
+def fetch_all_participants(supabase: Client, event_id: str) -> list[dict]:
+    all_data = []
+    limit = 1000
+    offset = 0
+    while True:
+        resp = supabase.table("participants").select("id, email, locked_fields, nationality").eq("event_id", event_id).range(offset, offset + limit - 1).execute()
+        data = resp.data or []
+        all_data.extend(data)
+        if len(data) < limit:
+            break
+        offset += limit
+    return all_data
+
 logger = logging.getLogger(__name__)
 
 # Thresholds for name-matching confidence
@@ -208,11 +247,22 @@ def merge_participant_fields(
     Merged dict ready to be passed to ``supabase.table("participants").update()``.
     """
     merged = existing.copy()
+    if isinstance(locked_fields, list):
+        locked_fields = {f: True for f in locked_fields}
+    elif not isinstance(locked_fields, dict):
+        locked_fields = {}
+
     for field, value in new_data.items():
         if locked_fields.get(field):
             continue  # preserve manually set value
         if value is not None and value != "":
             merged[field] = value
+
+    # Clean up nationality if it's one of the source type indicators
+    src_indicators = {'Formulaire web', 'Assistant', 'Import Excel', 'Email direct'}
+    if merged.get("nationality") in src_indicators:
+        merged["nationality"] = None
+
     return merged
 
 
@@ -225,6 +275,7 @@ def detect_duplicate_emails(
     run_id: str,
     event_id: str,
     supabase: Client,
+    exceptions_list: Optional[list[dict]] = None,
 ) -> int:
     """
     Detect duplicate email addresses within the registration source records.
@@ -260,6 +311,7 @@ def detect_duplicate_emails(
                     "participant_names": names,
                     "source_record_ids": [r.source_record_id for r in records],
                 },
+                exceptions_list=exceptions_list,
             )
             count += 1
 
@@ -381,13 +433,8 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         # Build a quick lookup: email → existing participant_id
         existing_participants: dict[str, str] = {}
-        existing_resp = (
-            supabase.table("participants")
-            .select("id, email, locked_fields")
-            .eq("event_id", event_id)
-            .execute()
-        )
-        for p in existing_resp.data or []:
+        existing_data = fetch_all_participants(supabase, event_id)
+        for p in existing_data:
             if p.get("email"):
                 existing_participants[p["email"].lower()] = p
 
@@ -404,6 +451,9 @@ async def run_consolidation(
                 locked = existing.get("locked_fields") or {}
                 merged = merge_participant_fields(existing, nd, locked)
                 merged["has_flight"] = existing.get("has_flight", False)
+                merged["registration_source_id"] = reg.source_record_id
+                for key in ["id", "created_at", "updated_at", "locked_fields", "event_id"]:
+                    merged.pop(key, None)
                 supabase.table("participants").update(merged).eq("id", existing["id"]).execute()
                 participant_id = existing["id"]
                 stats["participants_updated"] += 1
@@ -493,8 +543,20 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         # 6. Duplicate email detection
         # ---------------------------------------------------------------
-        dup_count = detect_duplicate_emails(registrations, run_id, event_id, supabase)
+        dup_exceptions = []
+        dup_count = detect_duplicate_emails(registrations, run_id, event_id, supabase, exceptions_list=dup_exceptions)
+        if dup_exceptions:
+            try:
+                for i in range(0, len(dup_exceptions), 100):
+                    supabase.table("exceptions").insert(dup_exceptions[i:i+100]).execute()
+            except Exception as exc:
+                logger.error("Failed to bulk insert duplicate email exceptions: %s", exc)
         stats["exceptions_count"] += dup_count
+
+        # ---------------------------------------------------------------
+        # 6b. Match non-registration source records to participants
+        # ---------------------------------------------------------------
+        match_non_registration_files_to_participants(event_id, supabase)
 
         # ---------------------------------------------------------------
         # 7. Full exception detection
@@ -509,18 +571,23 @@ async def run_consolidation(
         stats["exceptions_count"] += exc_count
 
         # ---------------------------------------------------------------
-        # 8. Update completeness_status on all participants
+        # 8. Extract flights, hotels, transfers, and activities from source records
+        # ---------------------------------------------------------------
+        extract_domain_data_from_sources(event_id, supabase)
+
+        # ---------------------------------------------------------------
+        # 9. Update completeness_status on all participants
         # ---------------------------------------------------------------
         _update_completeness_statuses(event_id, supabase)
 
         # ---------------------------------------------------------------
-        # 9. Mark files as processed
+        # 10. Mark files as processed
         # ---------------------------------------------------------------
         for f in mapped_files:
             supabase.table("uploaded_files").update({"import_status": "processed"}).eq("id", f["id"]).execute()
 
         # ---------------------------------------------------------------
-        # 10. Finalise run record
+        # 11. Finalise run record
         # ---------------------------------------------------------------
         supabase.table("consolidation_runs").update({
             "status": "completed",
@@ -582,3 +649,514 @@ def _update_completeness_statuses(event_id: str, supabase: Client) -> None:
             }).eq("id", p["id"]).execute()
     except Exception as exc:
         logger.warning("Failed to update completeness_status: %s", exc)
+
+
+def combine_to_iso_timestamp(date_val: Any, time_val: Any, default_date: str = "2025-11-10") -> str:
+    import re
+    # Clean inputs
+    d_str = str(date_val or "").strip()
+    t_str = str(time_val or "").strip()
+    
+    # Check if either is already a full ISO datetime (contains YYYY-MM-DD and THH:MM)
+    iso_pattern = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+    if iso_pattern.search(d_str):
+        val = d_str.replace(" ", "T")
+        if not val.endswith("Z") and "+" not in val:
+            val += "Z"
+        return val
+    if iso_pattern.search(t_str):
+        val = t_str.replace(" ", "T")
+        if not val.endswith("Z") and "+" not in val:
+            val += "Z"
+        return val
+
+    # Extract date (YYYY-MM-DD)
+    date_pattern = re.compile(r"(\d{4}[-/]\d{2}[-/]\d{2})|(\d{2}[-/]\d{2}[-/]\d{4})")
+    match_d = date_pattern.search(d_str)
+    
+    target_date = default_date
+    if match_d:
+        raw_date = match_d.group(0).replace("/", "-")
+        parts = raw_date.split("-")
+        if len(parts[0]) == 2: # DD-MM-YYYY
+            target_date = f"{parts[2]}-{parts[1]}-{parts[0]}"
+        else: # YYYY-MM-DD
+            target_date = raw_date
+            
+    # Extract time (HH:MM or HH:MM:SS)
+    time_pattern = re.compile(r"(\d{2}:\d{2}(:\d{2})?)")
+    match_t = time_pattern.search(t_str) or time_pattern.search(d_str)
+    
+    target_time = "00:00:00"
+    if match_t:
+        target_time = match_t.group(1)
+        if len(target_time.split(":")) == 2:
+            target_time += ":00"
+            
+    return f"{target_date}T{target_time}Z"
+
+
+def match_non_registration_files_to_participants(event_id: str, supabase: Client) -> None:
+    """
+    Match source_records from non-registration files (hotel, transfer, activity)
+    to the correct participant based on registration code, email, or name.
+    """
+    logger.info("Matching non-registration files to participants for event_id=%s", event_id)
+    try:
+        parts_resp = supabase.table("participants").select("id, first_name, last_name, email, registration_source_id").eq("event_id", event_id).execute()
+        participants = parts_resp.data or []
+    except Exception as exc:
+        logger.error("Failed to load participants for non-registration mapping: %s", exc)
+        return
+
+    if not participants:
+        return
+
+    reg_sr_ids = [p["registration_source_id"] for p in participants if p.get("registration_source_id")]
+    reg_sr_map = {}
+    if reg_sr_ids:
+        for k in range(0, len(reg_sr_ids), 100):
+            chunk = reg_sr_ids[k:k+100]
+            try:
+                sr_resp = supabase.table("source_records").select("id, normalized_data").in_("id", chunk).execute()
+                for sr in sr_resp.data or []:
+                    reg_sr_map[sr["id"]] = sr["normalized_data"] or {}
+            except Exception as exc:
+                logger.error("Failed to load registration source records chunk: %s", exc)
+
+    part_lookup = []
+    for p in participants:
+        reg_data = reg_sr_map.get(p.get("registration_source_id"), {})
+        reg_code = (reg_data.get("id") or reg_data.get("participant_id") or "").strip().lower()
+        part_lookup.append({
+            "id": p["id"],
+            "first_name": (p["first_name"] or "").strip().lower(),
+            "last_name": (p["last_name"] or "").strip().lower(),
+            "email": (p["email"] or "").strip().lower(),
+            "reg_code": reg_code
+        })
+
+    try:
+        files_resp = supabase.table("uploaded_files").select("id, source_type").eq("event_id", event_id).execute()
+        target_files = [f for f in files_resp.data or [] if f["source_type"] in ("hotel", "transfer", "activity")]
+    except Exception as exc:
+        logger.error("Failed to load uploaded files for non-registration matching: %s", exc)
+        return
+
+    if not target_files:
+        return
+
+    file_ids = [f["id"] for f in target_files]
+    try:
+        records = fetch_all_source_records(supabase, file_ids)
+    except Exception as exc:
+        logger.error("Failed to load source records for non-registration matching: %s", exc)
+        return
+
+    updates = []
+    for rec in records:
+        normalized = rec.get("normalized_data") or {}
+        raw = rec.get("raw_data") or {}
+
+        rec_first = (normalized.get("first_name") or "").strip().lower()
+        rec_last = (normalized.get("last_name") or "").strip().lower()
+        if not rec_first and " " in rec_last:
+            parts = rec_last.split(" ", 1)
+            rec_first = parts[0]
+            rec_last = parts[1]
+
+        rec_full_name = f"{rec_first} {rec_last}".strip()
+        rec_email = (normalized.get("email") or "").strip().lower()
+        rec_code = (normalized.get("id") or normalized.get("participant_id") or raw.get("ID Participant") or "").strip().lower()
+
+        matched_id = None
+
+        if rec_code:
+            for p in part_lookup:
+                if p["reg_code"] == rec_code:
+                    matched_id = p["id"]
+                    break
+
+        if not matched_id and rec_email:
+            for p in part_lookup:
+                if p["email"] == rec_email:
+                    matched_id = p["id"]
+                    break
+
+        if not matched_id and rec_full_name:
+            for p in part_lookup:
+                p_full = f"{p['first_name']} {p['last_name']}".strip()
+                if p_full == rec_full_name:
+                    matched_id = p["id"]
+                    break
+
+            if not matched_id:
+                best_score = 0
+                best_p_id = None
+                for p in part_lookup:
+                    p_full = f"{p['first_name']} {p['last_name']}".strip()
+                    if not p_full:
+                        continue
+                    score = fuzz.token_sort_ratio(rec_full_name, p_full)
+                    if score > best_score:
+                        best_score = score
+                        best_p_id = p["id"]
+                if best_score >= 80:
+                    matched_id = best_p_id
+
+        if matched_id:
+            updates.append({
+                "id": rec["id"],
+                "file_id": rec["file_id"],
+                "event_id": rec["event_id"],
+                "row_index": rec["row_index"],
+                "raw_data": rec["raw_data"],
+                "normalized_data": rec["normalized_data"],
+                "participant_id": matched_id
+            })
+
+    if updates:
+        logger.info("Matching non-registration records: updating %d records with participant_id...", len(updates))
+        try:
+            for i in range(0, len(updates), 100):
+                supabase.table("source_records").upsert(updates[i:i+100]).execute()
+        except Exception as exc:
+            logger.error("Failed to bulk update participant_id on source_records: %s", exc)
+
+
+def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
+    """
+    Extract flights, hotels, transfers, and activities from mapped source_records
+    and populate the respective domain tables.
+    """
+    from datetime import date, timedelta
+    logger.info("Extracting domain data from sources for event_id=%s", event_id)
+
+    # Load default event date as fallback
+    default_date = "2025-11-10"
+    try:
+        ev_resp = supabase.table("events").select("start_date").eq("id", event_id).single().execute()
+        if ev_resp.data and ev_resp.data.get("start_date"):
+            default_date = str(ev_resp.data["start_date"])
+    except Exception:
+        pass
+
+    # 1. Flights Extraction (from fcm files)
+    try:
+        fcm_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "fcm").execute()
+        if fcm_files.data:
+            file_ids = [f["id"] for f in fcm_files.data]
+            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
+            
+            # Load existing flights to optimize queries (bulk upsert)
+            existing_flights = supabase.table("flights").select("id, participant_id, flight_number").eq("event_id", event_id).execute()
+            existing_flights_map = {
+                (f["participant_id"], f["flight_number"]): f["id"] for f in (existing_flights.data or [])
+            }
+            
+            flight_payloads = {}
+            participants_has_flight = set()
+
+            for record in records.data:
+                try:
+                    part_id = record["participant_id"]
+                    data = record["normalized_data"] or record["raw_data"] or {}
+                    
+                    flight_num = data.get("flight_number") or data.get("passenger_flight")
+                    dep_apt = data.get("departure_airport") or data.get("departure")
+                    arr_apt = data.get("arrival_airport") or data.get("arrival")
+                    
+                    if flight_num and dep_apt and arr_apt:
+                        flight_num_clean = str(flight_num).strip().upper()
+                        dep_ts = combine_to_iso_timestamp(
+                            data.get("departure_date") or data.get("departure_time"),
+                            data.get("departure_time"),
+                            default_date
+                        )
+                        arr_ts = combine_to_iso_timestamp(
+                            data.get("return_date") or data.get("arrival_date") or data.get("arrival_time"),
+                            data.get("arrival_time"),
+                            default_date
+                        )
+                        
+                        pnr = data.get("pnr_code") or data.get("pnr")
+                        airline = data.get("airline")
+                        baggage = data.get("baggage_info") or data.get("baggage")
+                        
+                        payload = {
+                            "id": str(uuid.uuid4()),
+                            "event_id": event_id,
+                            "participant_id": part_id,
+                            "flight_number": flight_num_clean,
+                            "departure_airport": str(dep_apt).strip().upper(),
+                            "arrival_airport": str(arr_apt).strip().upper(),
+                            "departure_time": dep_ts,
+                            "arrival_time": arr_ts,
+                            "pnr_code": pnr,
+                            "airline": airline,
+                            "baggage_info": baggage,
+                            "status": "confirmed",
+                        }
+                        
+                        # Add primary key ID if it exists to trigger update instead of duplicate insert
+                        existing_id = existing_flights_map.get((part_id, flight_num_clean))
+                        if existing_id:
+                            payload["id"] = existing_id
+                            
+                        flight_payloads[(part_id, flight_num_clean)] = payload
+                        participants_has_flight.add(part_id)
+                except Exception as record_exc:
+                    logger.warning("Failed to extract flight record: %s", record_exc)
+            
+            # Bulk upsert flights
+            payload_list = list(flight_payloads.values())
+            if payload_list:
+                for i in range(0, len(payload_list), 100):
+                    supabase.table("flights").upsert(payload_list[i:i+100]).execute()
+            
+            # Bulk update participants
+            if participants_has_flight:
+                part_ids = list(participants_has_flight)
+                for i in range(0, len(part_ids), 50):
+                    supabase.table("participants").update({"has_flight": True}).in_("id", part_ids[i:i+50]).execute()
+
+    except Exception as exc:
+        logger.error("Failed to extract flights during consolidation: %s", exc)
+
+    # 2. Hotels Extraction (from hotel files)
+    try:
+        hotel_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "hotel").execute()
+        if hotel_files.data:
+            file_ids = [f["id"] for f in hotel_files.data]
+            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
+            
+            # Load existing hotels
+            existing_hotels = supabase.table("hotels").select("id, name").eq("event_id", event_id).execute()
+            hotel_map = {h["name"]: h["id"] for h in (existing_hotels.data or [])}
+            
+            # Load existing nights for all event hotels to avoid duplicate inserts
+            existing_nights_map = {}
+            if hotel_map:
+                existing_nights = fetch_all_hotel_nights(supabase, list(hotel_map.values()))
+                existing_nights_map = {
+                    (n["participant_id"], n["night_date"]): n["id"] for n in existing_nights
+                }
+            
+            nights_payloads = {}
+            participants_has_hotel = set()
+
+            for record in records.data:
+                try:
+                    part_id = record["participant_id"]
+                    data = record["normalized_data"] or record["raw_data"] or {}
+                    
+                    hotel_name = data.get("hotel_name")
+                    if not hotel_name:
+                        continue
+                    
+                    # Check / Create Hotel Property
+                    if hotel_name not in hotel_map:
+                        new_hotel = supabase.table("hotels").insert({
+                            "event_id": event_id,
+                            "name": hotel_name
+                        }).execute()
+                        hotel_id = new_hotel.data[0]["id"]
+                        hotel_map[hotel_name] = hotel_id
+                    else:
+                        hotel_id = hotel_map[hotel_name]
+                    
+                    check_in_str = data.get("check_in_date")
+                    check_out_str = data.get("check_out_date")
+                    room_type = data.get("room_type") or "single"
+                    
+                    if check_in_str and check_out_str:
+                        try:
+                            ci_clean = str(check_in_str).split("T")[0].split(" ")[0].strip()
+                            co_clean = str(check_out_str).split("T")[0].split(" ")[0].strip()
+                            check_in = date.fromisoformat(ci_clean)
+                            check_out = date.fromisoformat(co_clean)
+                            
+                            current_date = check_in
+                            while current_date < check_out:
+                                night_str = current_date.isoformat()
+                                payload = {
+                                    "id": str(uuid.uuid4()),
+                                    "hotel_id": hotel_id,
+                                    "participant_id": part_id,
+                                    "night_date": night_str,
+                                    "room_type": room_type,
+                                    "status": "confirmed"
+                                }
+                                
+                                # Add primary key ID if it exists
+                                existing_id = existing_nights_map.get((part_id, night_str))
+                                if existing_id:
+                                    payload["id"] = existing_id
+                                    
+                                nights_payloads[(part_id, night_str)] = payload
+                                current_date += timedelta(days=1)
+                            
+                            participants_has_hotel.add(part_id)
+                        except Exception as e:
+                            logger.error("Failed to parse check_in/check_out date for hotel: %s", e)
+                except Exception as record_exc:
+                    logger.warning("Failed to extract hotel record: %s", record_exc)
+            
+            # Bulk upsert hotel nights
+            payload_list = list(nights_payloads.values())
+            if payload_list:
+                for i in range(0, len(payload_list), 100):
+                    supabase.table("hotel_nights").upsert(payload_list[i:i+100]).execute()
+                    
+            # Bulk update participants
+            if participants_has_hotel:
+                part_ids = list(participants_has_hotel)
+                for i in range(0, len(part_ids), 50):
+                    supabase.table("participants").update({"has_hotel": True}).in_("id", part_ids[i:i+50]).execute()
+
+    except Exception as exc:
+        logger.error("Failed to extract hotels during consolidation: %s", exc)
+
+    # 3. Activities Extraction (from activity files)
+    try:
+        activity_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "activity").execute()
+        if activity_files.data:
+            file_ids = [f["id"] for f in activity_files.data]
+            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
+            
+            # Load existing activities
+            existing_acts = supabase.table("activities").select("id, name").eq("event_id", event_id).execute()
+            act_map = {a["name"]: a["id"] for a in (existing_acts.data or [])}
+            
+            # Load existing participant activity registrations
+            existing_regs_map = {}
+            if act_map:
+                existing_regs = supabase.table("participant_activities").select("id, participant_id, activity_id").in_("activity_id", list(act_map.values())).execute()
+                existing_regs_map = {
+                    (r["participant_id"], r["activity_id"]): r["id"] for r in (existing_regs.data or [])
+                }
+                
+            reg_payloads = {}
+            participants_has_activity = set()
+
+            for record in records.data:
+                try:
+                    part_id = record["participant_id"]
+                    data = record["normalized_data"] or record["raw_data"] or {}
+                    
+                    act_name = data.get("activity_name")
+                    if not act_name:
+                        continue
+                    
+                    # Check / Create Activity
+                    if act_name not in act_map:
+                        new_act = supabase.table("activities").insert({
+                            "event_id": event_id,
+                            "name": act_name
+                        }).execute()
+                        act_id = new_act.data[0]["id"]
+                        act_map[act_name] = act_id
+                    else:
+                        act_id = act_map[act_name]
+                    
+                    payload = {
+                        "id": str(uuid.uuid4()),
+                        "participant_id": part_id,
+                        "activity_id": act_id,
+                        "status": "registered"
+                    }
+                    
+                    # Add primary key ID if it exists
+                    existing_id = existing_regs_map.get((part_id, act_id))
+                    if existing_id:
+                        payload["id"] = existing_id
+                        
+                    reg_payloads[(part_id, act_id)] = payload
+                    participants_has_activity.add(part_id)
+                except Exception as record_exc:
+                    logger.warning("Failed to extract activity record: %s", record_exc)
+            
+            # Bulk upsert registrations
+            payload_list = list(reg_payloads.values())
+            if payload_list:
+                for i in range(0, len(payload_list), 100):
+                    supabase.table("participant_activities").upsert(payload_list[i:i+100]).execute()
+                    
+            # Bulk update participants
+            if participants_has_activity:
+                part_ids = list(participants_has_activity)
+                for i in range(0, len(part_ids), 50):
+                    supabase.table("participants").update({"has_activities": True}).in_("id", part_ids[i:i+50]).execute()
+
+    except Exception as exc:
+        logger.error("Failed to extract activities during consolidation: %s", exc)
+
+    # 4. Transfers Extraction (from transfer files)
+    try:
+        transfer_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "transfer").execute()
+        if transfer_files.data:
+            file_ids = [f["id"] for f in transfer_files.data]
+            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
+            
+            # Load existing transfers
+            existing_trans = supabase.table("transfers").select("id, participant_id, pickup_time").eq("event_id", event_id).execute()
+            existing_trans_map = {
+                (t["participant_id"], t["pickup_time"]): t["id"] for t in (existing_trans.data or [])
+            }
+            
+            trans_payloads = {}
+            participants_has_transfer = set()
+
+            for record in records.data:
+                try:
+                    part_id = record["participant_id"]
+                    data = record["normalized_data"] or record["raw_data"] or {}
+                    
+                    pickup_loc = data.get("pickup_location") or data.get("pickup")
+                    dropoff_loc = data.get("dropoff_location") or data.get("dropoff")
+                    
+                    if pickup_loc and dropoff_loc:
+                        pickup_time_str = combine_to_iso_timestamp(
+                            data.get("pickup_time") or data.get("departure_time") or data.get("pickup_date"),
+                            data.get("pickup_time") or data.get("departure_time"),
+                            default_date
+                        )
+                        transfer_type = data.get("transfer_type") or "arrival"
+                        vehicle_type = data.get("vehicle_type") or "shuttle"
+                        
+                        payload = {
+                            "id": str(uuid.uuid4()),
+                            "event_id": event_id,
+                            "participant_id": part_id,
+                            "transfer_type": transfer_type,
+                            "pickup_location": pickup_loc,
+                            "dropoff_location": dropoff_loc,
+                            "pickup_time": pickup_time_str,
+                            "vehicle_type": vehicle_type,
+                            "status": "scheduled"
+                        }
+                        
+                        # Add primary key ID if it exists
+                        existing_id = existing_trans_map.get((part_id, pickup_time_str))
+                        if existing_id:
+                            payload["id"] = existing_id
+                            
+                        trans_payloads[(part_id, pickup_time_str)] = payload
+                        participants_has_transfer.add(part_id)
+                except Exception as record_exc:
+                    logger.warning("Failed to extract transfer record: %s", record_exc)
+            
+            # Bulk upsert transfers
+            payload_list = list(trans_payloads.values())
+            if payload_list:
+                for i in range(0, len(payload_list), 100):
+                    supabase.table("transfers").upsert(payload_list[i:i+100]).execute()
+                    
+            # Bulk update participants
+            if participants_has_transfer:
+                part_ids = list(participants_has_transfer)
+                for i in range(0, len(part_ids), 50):
+                    supabase.table("participants").update({"has_transfer": True}).in_("id", part_ids[i:i+50]).execute()
+
+    except Exception as exc:
+        logger.error("Failed to extract transfers during consolidation: %s", exc)

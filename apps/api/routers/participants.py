@@ -25,6 +25,7 @@ from models.schemas import (
     ParticipantListResponse,
     ParticipantResponse,
     ParticipantUpdate,
+    ParticipantLookupItem,
 )
 from services.audit_service import log_change
 
@@ -140,6 +141,52 @@ async def list_participants(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+@router.get(
+    "/events/{event_id}/participants/lookup",
+    response_model=list[ParticipantLookupItem],
+    summary="Get minimal participant info for select dropdowns (non-paginated)",
+)
+async def lookup_participants(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> list[ParticipantLookupItem]:
+    """
+    Get a minimal lookup list of participants for dropdowns.
+    Always verifies event access first.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+
+    all_items = []
+    page_size = 1000
+    offset = 0
+
+    while True:
+        try:
+            res = (
+                supabase.table("participants")
+                .select("id, first_name, last_name, completeness_status")
+                .eq("event_id", event_id)
+                .order("last_name")
+                .order("first_name")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            data = res.data or []
+            all_items.extend(data)
+            if len(data) < page_size:
+                break
+            offset += page_size
+        except Exception as exc:
+            logger.error("Failed to lookup participants: %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve participant list.",
+            ) from exc
+
+    return [ParticipantLookupItem(**row) for row in all_items]
 
 
 # ---------------------------------------------------------------------------

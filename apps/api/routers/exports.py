@@ -58,17 +58,55 @@ async def create_export(
     await verify_event_access(event_id, current_user, supabase)
 
     # Verify the run exists and belongs to this event
-    run_resp = (
-        supabase.table("consolidation_runs")
-        .select("id, status")
-        .eq("id", str(body.run_id))
-        .eq("event_id", event_id)
-        .single()
-        .execute()
-    )
-    if not run_resp.data:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Consolidation run not found.")
-    if run_resp.data["status"] != "completed":
+    run_id = body.run_id
+    if not run_id:
+        # Find latest completed consolidation run
+        try:
+            runs_resp = (
+                supabase.table("consolidation_runs")
+                .select("id, status")
+                .eq("event_id", event_id)
+                .eq("status", "completed")
+                .order("started_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            logger.error("Failed to query latest completed run for event %s: %s", event_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to find latest consolidation run.",
+            ) from exc
+
+        if not runs_resp.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No completed consolidation run found to export.",
+            )
+        run_id = uuid.UUID(runs_resp.data[0]["id"])
+        run_status = runs_resp.data[0]["status"]
+    else:
+        try:
+            run_resp = (
+                supabase.table("consolidation_runs")
+                .select("id, status")
+                .eq("id", str(run_id))
+                .eq("event_id", event_id)
+                .single()
+                .execute()
+            )
+        except Exception as exc:
+            logger.error("Failed to verify specified run %s: %s", run_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Consolidation run not found.",
+            ) from exc
+            
+        if not run_resp.data:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Consolidation run not found.")
+        run_status = run_resp.data["status"]
+
+    if run_status != "completed":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Cannot export an incomplete or failed consolidation run.",
@@ -78,7 +116,7 @@ async def create_export(
     try:
         excel_bytes: bytes = await export_service.generate_excel(
             event_id=event_id,
-            run_id=str(body.run_id),
+            run_id=str(run_id),
             user_id=current_user["id"],
             supabase=supabase,
         )
@@ -113,7 +151,7 @@ async def create_export(
     # Register in exports table
     export_record = {
         "id": export_id,
-        "run_id": str(body.run_id),
+        "run_id": str(run_id),
         "event_id": event_id,
         "storage_path": storage_path,
         "filename": filename,
@@ -130,7 +168,7 @@ async def create_export(
 
     logger.info(
         "Export created: export_id=%s event_id=%s run_id=%s user=%s",
-        export_id, event_id, body.run_id, current_user["id"],
+        export_id, event_id, run_id, current_user["id"],
     )
 
     return ExportResponse(**result.data[0])

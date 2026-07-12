@@ -327,3 +327,86 @@ async def delete_rooming_night(
 
     supabase.table("hotel_nights").delete().eq("id", rooming_id).execute()
     return MessageResponse(message="Successfully deleted rooming night allocation.")
+
+
+from pydantic import BaseModel, Field
+from uuid import UUID
+
+class HotelNightBulkCreate(BaseModel):
+    hotel_id: UUID
+    night_date: str
+    room_type: str = Field(default="single")
+    status: str = Field(default="confirmed")
+
+
+@router.post(
+    "/events/{event_id}/hotels/rooming/bulk",
+    response_model=MessageResponse,
+    summary="Assign a hotel night to all participants in bulk",
+)
+async def bulk_assign_rooming_night(
+    event_id: str,
+    body: HotelNightBulkCreate,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> MessageResponse:
+    """
+    Assign a rooming night to all participants of the event in bulk.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+
+    # Verify hotel belongs to event
+    hotel = (
+        supabase.table("hotels")
+        .select("id")
+        .eq("id", str(body.hotel_id))
+        .eq("event_id", event_id)
+        .single()
+        .execute()
+    )
+    if not hotel.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hotel not found in this event.",
+        )
+
+    # Fetch all participants for this event
+    parts_resp = supabase.table("participants").select("id").eq("event_id", event_id).execute()
+    part_ids = [p["id"] for p in parts_resp.data or []]
+
+    if not part_ids:
+        return MessageResponse(message="No participants found in this event to assign.")
+
+    # Fetch existing rooming nights for these participants on this date
+    existing = (
+        supabase.table("hotel_nights")
+        .select("id, participant_id")
+        .in_("participant_id", part_ids)
+        .eq("night_date", body.night_date)
+        .execute()
+    )
+    existing_map = {n["participant_id"]: n["id"] for n in existing.data or []}
+
+    payloads = []
+    for p_id in part_ids:
+        payload = {
+            "hotel_id": str(body.hotel_id),
+            "participant_id": p_id,
+            "night_date": body.night_date,
+            "room_type": body.room_type,
+            "status": body.status
+        }
+        if p_id in existing_map:
+            payload["id"] = existing_map[p_id]
+        payloads.append(payload)
+
+    # Bulk upsert hotel nights in chunks of 100
+    if payloads:
+        for i in range(0, len(payloads), 100):
+            supabase.table("hotel_nights").upsert(payloads[i:i+100]).execute()
+
+    # Bulk update participants in chunks of 50
+    for i in range(0, len(part_ids), 50):
+        supabase.table("participants").update({"has_hotel": True}).in_("id", part_ids[i:i+50]).execute()
+
+    return MessageResponse(message="Successfully assigned rooming night to all participants.")

@@ -1,7 +1,8 @@
 'use client'
 
+import { useState, useEffect } from 'react'
 import { useTranslations } from 'next-intl'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   LayoutDashboard,
@@ -17,8 +18,10 @@ import {
   BarChart3,
   Settings,
   Zap,
+  LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { createClient } from '@/lib/supabase'
 
 interface NavItem {
   key: string
@@ -28,7 +31,7 @@ interface NavItem {
   badge?: string
 }
 
-function getNavItems(eventId: string, locale: string, userRole: string): NavItem[] {
+function getNavItems(eventId: string, locale: string, userRole: string, exceptionCount: number): NavItem[] {
   const base = `/${locale}/events/${eventId}`
   const items = [
     { key: 'dashboard', href: `${base}/dashboard`, icon: LayoutDashboard },
@@ -40,7 +43,7 @@ function getNavItems(eventId: string, locale: string, userRole: string): NavItem
     { key: 'activities', href: `${base}/activities`, icon: Sparkles },
     { key: 'transfers', href: `${base}/transfers`, icon: Bus },
     { key: 'communications', href: `${base}/communications`, icon: Mail },
-    { key: 'exceptions', href: `${base}/exceptions`, icon: AlertTriangle, badge: '18' },
+    { key: 'exceptions', href: `${base}/exceptions`, icon: AlertTriangle, badge: exceptionCount > 0 ? String(exceptionCount) : undefined },
     { key: 'reports', href: `${base}/reports`, icon: BarChart3 },
     { key: 'settings', href: `/${locale}/settings`, icon: Settings },
   ]
@@ -55,21 +58,78 @@ function getNavItems(eventId: string, locale: string, userRole: string): NavItem
 interface SidebarProps {
   eventId: string
   locale: string
-  userName?: string
-  userRole?: string
-  userInitials?: string
 }
 
-export function Sidebar({
-  eventId,
-  locale,
-  userName = 'Marie Dubois',
-  userRole = 'Event Manager',
-  userInitials = 'MD',
-}: SidebarProps) {
+export function Sidebar({ eventId, locale }: SidebarProps) {
   const t = useTranslations('nav')
   const pathname = usePathname()
-  const navItems = getNavItems(eventId, locale, userRole)
+  const router = useRouter()
+
+  const [userName, setUserName] = useState('Marie Dubois')
+  const [userRole, setUserRole] = useState('Event Manager')
+  const [userInitials, setUserInitials] = useState('MD')
+  const [exceptionCount, setExceptionCount] = useState<number>(0)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+
+  // 1. Fetch user profile
+  useEffect(() => {
+    async function getUser() {
+      const supabase = createClient()
+      const { data: { user } } = await supabase.auth.getUser()
+      if (user) {
+        const name = user.user_metadata?.full_name || user.email?.split('@')[0] || 'Utilisateur VO'
+        setUserName(name)
+        const parts = name.trim().split(/\s+/)
+        const initials = parts.map((p: string) => p[0]).join('').toUpperCase().substring(0, 2)
+        setUserInitials(initials || 'VO')
+
+        try {
+          const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+          if (profile) {
+            setUserRole(profile.role === 'admin' ? 'Administrateur' : profile.role === 'pm' ? 'Chef de projet' : 'Utilisateur')
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    getUser()
+  }, [])
+
+  // 2. Fetch exceptions count in real-time
+  useEffect(() => {
+    async function loadExceptionCount() {
+      if (!eventId || eventId === 'global' || eventId === '00000000-0000-0000-0000-000000000003') {
+        setExceptionCount(0)
+        return
+      }
+      try {
+        const supabase = createClient()
+        const { count, error } = await supabase
+          .from('exceptions')
+          .select('*', { count: 'exact', head: true })
+          .eq('event_id', eventId)
+          .eq('resolved', false)
+        
+        if (error) {
+          console.warn('Failed to fetch exception count:', error)
+          return
+        }
+        if (count !== null) {
+          setExceptionCount(count)
+        }
+      } catch (err) {
+        console.error('Exception count query error:', err)
+      }
+    }
+    loadExceptionCount()
+    
+    // Poll count every 5 seconds to keep it synced
+    const timer = setInterval(loadExceptionCount, 5000)
+    return () => clearInterval(timer)
+  }, [eventId])
+
+  const navItems = getNavItems(eventId, locale, userRole, exceptionCount)
 
   return (
     <aside
@@ -77,14 +137,16 @@ export function Sidebar({
       style={{ boxShadow: 'var(--shadow-sidebar)' }}
     >
       {/* Logo */}
-      <div className="flex h-[60px] flex-shrink-0 items-center gap-2.5 border-b border-[var(--color-border)] px-5">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-accent)]">
-          <Zap className="h-4 w-4 text-white" />
+      <div className="flex flex-col items-start justify-center border-b border-[var(--color-border)] px-6 py-5 select-none text-[var(--color-text-primary)]">
+        <div className="w-[125px] h-[86px]">
+          <svg className="w-full h-full" viewBox="0 0 160 110">
+            <text x="0" y="42" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="48" letter-spacing="-2px" fill="currentColor">VO</text>
+            <line x1="0" y1="54" x2="70" y2="54" stroke="currentColor" stroke-width="7" />
+            <text x="0" y="80" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">communication</text>
+            <text x="0" y="100" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">group</text>
+          </svg>
         </div>
-        <div>
-          <span className="text-base font-bold text-[var(--color-accent)]">VO</span>
-          <span className="text-base font-bold text-[var(--color-text-primary)]"> Event Max</span>
-        </div>
+        <span className="mt-2 text-[9px] font-bold uppercase tracking-[3px] text-[var(--color-accent)]">Event Max</span>
       </div>
 
       {/* Navigation */}
@@ -148,12 +210,30 @@ export function Sidebar({
       </nav>
 
       {/* User section */}
-      <div className="flex-shrink-0 border-t border-[var(--color-border)] p-4">
-        <div className="flex items-center gap-3">
+      <div className="flex-shrink-0 border-t border-[var(--color-border)] p-4 relative">
+        {showUserMenu && (
+          <div className="absolute bottom-[60px] left-4 right-4 bg-white border border-[var(--color-border)] rounded-lg shadow-lg p-1.5 z-50">
+            <button
+              onClick={async () => {
+                const supabase = createClient()
+                await supabase.auth.signOut()
+                router.push(`/${locale}/login`)
+              }}
+              className="w-full text-left px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-md transition-colors flex items-center gap-2"
+            >
+              <LogOut className="h-4 w-4" />
+              {t('logout')}
+            </button>
+          </div>
+        )}
+        <div
+          className="flex items-center gap-3 cursor-pointer p-1.5 -m-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+          onClick={() => setShowUserMenu(!showUserMenu)}
+        >
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[var(--color-accent)] text-xs font-bold text-white">
             {userInitials}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
               {userName}
             </p>

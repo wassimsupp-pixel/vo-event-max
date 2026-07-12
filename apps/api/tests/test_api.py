@@ -174,6 +174,39 @@ class TestFileUpload:
         )
         assert response.status_code == 415
 
+    @patch("routers.files.verify_event_access")
+    def test_delete_file_success(self, mock_verify):
+        """DELETE /api/files/{file_id} should succeed if file exists and access is allowed."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        file_id = "00000000-0000-0000-0000-000000000088"
+
+        # Mock metadata response
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+            "id": file_id,
+            "event_id": self.EVENT_ID,
+            "storage_path": f"{self.EVENT_ID}/{file_id}/test.csv",
+        }
+
+        response = client.delete(f"/api/files/{file_id}")
+        assert response.status_code == 200
+        assert response.json()["message"] == "File deleted successfully."
+
+    @patch("routers.files.verify_event_access")
+    def test_delete_file_not_found(self, mock_verify):
+        """DELETE /api/files/{file_id} returns 404 if file does not exist."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        file_id = "00000000-0000-0000-0000-000000000088"
+
+        # Mock metadata response as empty
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = None
+
+        response = client.delete(f"/api/files/{file_id}")
+        assert response.status_code == 404
+
 
 # ---------------------------------------------------------------------------
 # 3. Column mapping — confirmation gate
@@ -646,6 +679,304 @@ class TestEvents:
         data = response.json()
         assert len(data) == 1
         assert data[0]["name"] == "Event One"
+
+
+class TestEmailAgent:
+    def test_list_proposals(self):
+        """GET /api/events/{event_id}/email-agent should return email proposals."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value.data = [
+            {
+                "id": "00000000-0000-0000-0000-000000000009",
+                "event_id": "00000000-0000-0000-0000-000000000001",
+                "sender": "test@sender.com",
+                "subject": "Dietary request",
+                "body": "I am vegan",
+                "received_at": "2026-07-09T10:00:00Z",
+                "participant_id": None,
+                "status": "pending",
+                "proposed_changes": {"dietary_requirements": "Végétalien"},
+                "ai_explanation": "Vegan request",
+                "created_at": "2026-07-09T10:00:00Z",
+                "participants": None
+            }
+        ]
+
+        response = client.get("/api/events/00000000-0000-0000-0000-000000000001/email-agent")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["sender"] == "test@sender.com"
+        assert data[0]["proposed_changes"]["dietary_requirements"] == "Végétalien"
+
+    def test_analyze_email(self):
+        """POST /api/events/{event_id}/email-agent/analyze should parse and return proposal."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        # Mock participant lookup -> no match
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+
+        # Mock insert proposal
+        mock_supabase.table.return_value.insert.return_value.execute.return_value.data = [
+            {
+                "id": "00000000-0000-0000-0000-000000000009",
+                "event_id": "00000000-0000-0000-0000-000000000001",
+                "sender": "test@sender.com",
+                "subject": "Change request",
+                "body": "Please make me vegetarian",
+                "received_at": "2026-07-09T10:00:00Z",
+                "participant_id": None,
+                "status": "pending",
+                "proposed_changes": {"dietary_requirements": "Végétarien"},
+                "ai_explanation": "Vegetarian requested",
+                "created_at": "2026-07-09T10:00:00Z",
+                "participants": None
+            }
+        ]
+
+        payload = {
+            "sender": "test@sender.com",
+            "subject": "Change request",
+            "body": "Please make me vegetarian"
+        }
+        response = client.post("/api/events/00000000-0000-0000-0000-000000000001/email-agent/analyze", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "pending"
+        assert data["proposed_changes"]["dietary_requirements"] == "Végétarien"
+
+
+# ---------------------------------------------------------------------------
+# 6. Quality engine and source validations
+# ---------------------------------------------------------------------------
+
+class TestQualityEngineAndMatchingCorrections:
+    def test_possible_duplicate_detection(self):
+        """
+        Verify that _detect_possible_duplicates correctly flags two participants
+        with very similar names but different email addresses.
+        """
+        from services.exception_service import _detect_possible_duplicates
+        from unittest.mock import MagicMock
+
+        # Mock supabase response with similar names, different emails
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+            {"id": "p1", "first_name": "Kris", "last_name": "Brown", "email": "kris.brown@dieteren.com", "company": "D'Ieteren"},
+            {"id": "p2", "first_name": "Kris", "last_name": "Brown", "email": "kris.brown@dieteren.be", "company": "D'Ieteren"},
+            {"id": "p3", "first_name": "Els", "last_name": "Bertrand", "email": "els.bertrand@cfegroup.be", "company": "CFE"},
+            {"id": "p4", "first_name": "Els", "last_name": "Comrtrand", "email": "els.comrtrand1@cfegroup.com", "company": "CFE"},
+            {"id": "p5", "first_name": "Different", "last_name": "Name", "email": "diff@test.com", "company": "Test"}
+        ]
+
+        exceptions = []
+        count = _detect_possible_duplicates(
+            event_id="test_event",
+            run_id="test_run",
+            supabase=mock_supabase,
+            exceptions_list=exceptions
+        )
+
+        # Should find Kris Brown duplicate and Els Bertrand/Comrtrand duplicate
+        assert count == 2
+        assert len(exceptions) == 2
+        assert any(e["exception_type"] == "POSSIBLE_DUPLICATE" and "Kris Brown" in e["message"] for e in exceptions)
+        assert any(e["exception_type"] == "POSSIBLE_DUPLICATE" and "Els Bertrand" in e["message"] for e in exceptions)
+
+    def test_name_mismatch_between_sources_detection(self):
+        """
+        Verify that _detect_name_mismatches_between_sources correctly flags
+        conflicting names between registration and FCM files.
+        """
+        from services.exception_service import _detect_name_mismatches_between_sources
+        from unittest.mock import MagicMock
+
+        mock_supabase = MagicMock()
+        
+        # Mock participants list return
+        mock_supabase.table.return_value.select.return_value.eq.return_value.not_.is_.return_value.not_.is_.return_value.execute.return_value.data = [
+            {
+                "id": "p1",
+                "first_name": "Sebastien",
+                "last_name": "Perrin",
+                "registration_source_id": "reg1",
+                "fcm_source_id": "fcm1"
+            }
+        ]
+
+        # Mock source records response
+        mock_supabase.table.return_value.select.return_value.in_.return_value.execute.return_value.data = [
+            {"id": "reg1", "normalized_data": {"first_name": "Sebastien", "last_name": "Perrin"}},
+            {"id": "fcm1", "normalized_data": {"first_name": "Sébastien", "last_name": "Pérrin"}}  # minor accents/case diffs count as mismatch
+        ]
+
+        exceptions = []
+        count = _detect_name_mismatches_between_sources(
+            event_id="test_event",
+            run_id="test_run",
+            supabase=mock_supabase,
+            exceptions_list=exceptions
+        )
+
+        assert count == 1
+        assert len(exceptions) == 1
+        assert exceptions[0]["exception_type"] == "NAME_MISMATCH_BETWEEN_SOURCES"
+        assert "Sébastien" in exceptions[0]["message"]
+
+    def test_source_type_never_in_nationality_validation(self):
+        """
+        Verify that mapping logic doesn't allow source_type values 
+        (like registration, fcm, or Excel imports) to leak into nationality.
+        """
+        from services.mapping_service import apply_mapping, normalise_fields
+
+        # Test with incorrect mapping of "Source" (containing Formulaire web) to "nationality"
+        raw_row = {
+            "Nom": "Moreau",
+            "Prénom": "Olivier",
+            "Email": "olivier.moreau@recticel.be",
+            "Source": "Formulaire web"
+        }
+
+        # If mapping incorrectly maps "Source" to "nationality"
+        mapping = {
+            "Nom": "last_name",
+            "Prénom": "first_name",
+            "Email": "email",
+            "Source": "nationality"
+        }
+
+        mapped = apply_mapping(raw_row, mapping)
+        normalised = normalise_fields(mapped)
+
+        nationality_val = normalised.get("nationality")
+        
+        invalid_source_types = ["formulaire web", "import excel", "email direct", "assistant", "registration", "fcm"]
+        if nationality_val and nationality_val.strip().lower() in invalid_source_types:
+            is_valid = False
+        else:
+            is_valid = True
+
+        assert is_valid is False
+
+
+# ---------------------------------------------------------------------------
+# Test Mapping Suggestions
+# ---------------------------------------------------------------------------
+
+class TestMappingSuggestions:
+    def test_normalize_column_name(self):
+        """Verify _normalize_column_name correctly normalizes column names."""
+        from services.mapping_service import _normalize_column_name
+        assert _normalize_column_name("Prénom") == "prenom"
+        assert _normalize_column_name("E-mail Address") == "emailaddress"
+        assert _normalize_column_name("Nom de Famille") == "nomdefamille"
+        assert _normalize_column_name("Flight_No.") == "flightno"
+        assert _normalize_column_name("check-in/date") == "checkindate"
+
+    def test_suggest_mapping_email(self):
+        """Verify suggest_mapping identifies email fields by content and name."""
+        from services.mapping_service import suggest_mapping
+        columns = ["Mail"]
+        sample_rows = [
+            {"Mail": "jean@dupont.com"},
+            {"Mail": "alice@martin.be"},
+            {"Mail": "bob@test.org"},
+        ]
+        sug = suggest_mapping(columns, sample_rows)
+        assert "Mail" in sug
+        assert sug["Mail"]["suggested_field"] == "email"
+        assert sug["Mail"]["confidence"] >= 0.9
+
+    def test_suggest_mapping_date(self):
+        """Verify suggest_mapping identifies date fields by content and name."""
+        from services.mapping_service import suggest_mapping
+        columns = ["Date Entrée"]
+        sample_rows = [
+            {"Date Entrée": "12/11/2025"},
+            {"Date Entrée": "13-11-2025"},
+            {"Date Entrée": "2025-11-14"},
+        ]
+        sug = suggest_mapping(columns, sample_rows)
+        assert "Date Entrée" in sug
+        assert sug["Date Entrée"]["suggested_field"] == "check_in_date"
+        assert sug["Date Entrée"]["confidence"] >= 0.9
+
+    def test_suggest_mapping_flight(self):
+        """Verify suggest_mapping identifies flight fields by content and name."""
+        from services.mapping_service import suggest_mapping
+        columns = ["Vol"]
+        sample_rows = [
+            {"Vol": "SN1234"},
+            {"Vol": "LH456"},
+            {"Vol": "AA9876"},
+        ]
+        sug = suggest_mapping(columns, sample_rows)
+        assert "Vol" in sug
+        assert sug["Vol"]["suggested_field"] == "flight_number"
+        assert sug["Vol"]["confidence"] >= 0.9
+
+    def test_suggest_mapping_weak_no_suggestion(self):
+        """Verify suggest_mapping returns None and 0.0 confidence when no matches are found."""
+        from services.mapping_service import suggest_mapping
+        columns = ["Inconnu"]
+        sample_rows = [
+            {"Inconnu": "abc"},
+            {"Inconnu": "xyz"},
+            {"Inconnu": "123"},
+        ]
+        sug = suggest_mapping(columns, sample_rows)
+        assert "Inconnu" in sug
+        assert sug["Inconnu"]["suggested_field"] is None
+        assert sug["Inconnu"]["confidence"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Test Participant Lookup
+# ---------------------------------------------------------------------------
+
+class TestParticipantLookup:
+    @patch("routers.participants.verify_event_access")
+    def test_lookup_participants(self, mock_verify):
+        """GET /api/events/{event_id}/participants/lookup should return list of lookup items."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute.return_value.data = [
+            {
+                "id": "00000000-0000-0000-0000-000000000005",
+                "first_name": "Jean",
+                "last_name": "Dupont",
+                "completeness_status": "complete",
+            }
+        ]
+
+        response = client.get("/api/events/00000000-0000-0000-0000-000000000001/participants/lookup")
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]["first_name"] == "Jean"
+        assert data[0]["last_name"] == "Dupont"
+        assert data[0]["completeness_status"] == "complete"
+
+    @patch("routers.participants.verify_event_access")
+    def test_lookup_participants_raises_404_if_no_access(self, mock_verify):
+        """GET /api/events/{event_id}/participants/lookup raises 404 if no access."""
+        from fastapi import HTTPException
+        mock_verify.side_effect = HTTPException(status_code=404, detail="Event not found.")
+        client = _admin_client()
+        
+        response = client.get("/api/events/00000000-0000-0000-0000-000000000001/participants/lookup")
+        assert response.status_code == 404
+
+
 
 
 

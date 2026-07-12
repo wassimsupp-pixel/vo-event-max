@@ -11,7 +11,7 @@ import { ExceptionItem } from '@/components/ui/ExceptionItem'
 import { ParticipantTable } from '@/components/participants/ParticipantTable'
 import { DistributionChart } from '@/components/ui/DistributionChart'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import {
   Users,
   Database,
@@ -21,11 +21,15 @@ import {
   CheckCircle2,
   Loader2,
   Calendar,
+  Play,
+  Zap,
+  XCircle,
 } from 'lucide-react'
-import { api, type Participant, type UploadedFile, type Exception } from '@/lib/api'
+import { api, type Participant, type UploadedFile, type Exception, type ConsolidationRun } from '@/lib/api'
 
 export default function DashboardPage() {
   const params = useParams()
+  const router = useRouter()
   const locale = (params.locale as string) || 'fr'
   const eventId = params.eventId as string
 
@@ -33,6 +37,7 @@ export default function DashboardPage() {
   const tKpi = useTranslations('dashboard.kpi')
   const tActions = useTranslations('actions')
   const tExceptions = useTranslations('exceptions')
+  const tSources = useTranslations('sources')
 
   const [loading, setLoading] = useState(true)
   const [participants, setParticipants] = useState<Participant[]>([])
@@ -40,17 +45,21 @@ export default function DashboardPage() {
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [exceptions, setExceptions] = useState<Exception[]>([])
 
-  useEffect(() => {
-    async function loadDashboardData() {
+  // Consolidation state
+  const [consolidating, setConsolidating] = useState(false)
+  const [consolidationRun, setConsolidationRun] = useState<ConsolidationRun | null>(null)
+  const [consolidationMsg, setConsolidationMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  const loadDashboardData = async () => {
       if (!eventId) return
       setLoading(true)
       try {
         const [participantsData, filesData, exceptionsData] = await Promise.all([
-          api.participants.list(eventId, { per_page: 5 }),
+          api.participants.list(eventId, { page_size: 5 }),
           api.files.list(eventId),
           api.exceptions.list(eventId),
         ])
-        setParticipants(participantsData.data)
+        setParticipants(participantsData.items)
         setTotalParticipants(participantsData.total)
         setFiles(filesData)
         setExceptions(exceptionsData)
@@ -60,11 +69,46 @@ export default function DashboardPage() {
         setLoading(false)
       }
     }
+
+  useEffect(() => {
     loadDashboardData()
   }, [eventId])
 
+  // Kick off a consolidation run and poll until done
+  const handleRunConsolidation = async () => {
+    if (consolidating || files.length === 0) return
+    setConsolidating(true)
+    setConsolidationMsg(null)
+    try {
+      const run = await api.consolidation.run(eventId)
+      setConsolidationRun(run)
+
+      // Poll every 2s until the run finishes
+      const poll = async (): Promise<void> => {
+        const updated = await api.consolidation.get(eventId, run.id)
+        setConsolidationRun(updated)
+        if (updated.status === 'running' || updated.status === 'pending') {
+          await new Promise(r => setTimeout(r, 2000))
+          return poll()
+        }
+        if (updated.status === 'done') {
+          setConsolidationMsg({ type: 'success', text: t('successRun', { matched: updated.stats?.matched ?? 0, conflicts: updated.stats?.conflicts ?? 0 }) })
+          await loadDashboardData()
+        } else {
+          setConsolidationMsg({ type: 'error', text: t('errorRun') })
+        }
+      }
+      await poll()
+    } catch (err) {
+      console.error('Consolidation failed:', err)
+      setConsolidationMsg({ type: 'error', text: t('errorApi') })
+    } finally {
+      setConsolidating(false)
+    }
+  }
+
   // Calculations
-  const completeCount = participants.filter((p) => p.status === 'complete').length
+  const completeCount = participants.filter((p) => p.completeness_status === 'complete').length
   const completenessRate = totalParticipants > 0 ? Math.round((completeCount / totalParticipants) * 100) : 0
 
   const activeExceptionsCount = exceptions.filter((e) => !e.resolved).length
@@ -91,7 +135,7 @@ export default function DashboardPage() {
   const flightsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_flight).length / totalParticipants) * 100) : 0
   const hotelsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_hotel).length / totalParticipants) * 100) : 0
   const transfersPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_transfer).length / totalParticipants) * 100) : 0
-  const activitiesPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_activity).length / totalParticipants) * 100) : 0
+  const activitiesPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_activities).length / totalParticipants) * 100) : 0
   const commsPct = totalParticipants > 0 ? 90 : 0
 
   const distributionData = [
@@ -133,11 +177,40 @@ export default function DashboardPage() {
   return (
     <AppLayout eventId={eventId} locale={locale} pageTitle={t('title')} pageSubtitle={t('subtitle')}>
       <div className="space-y-6">
-        {/* Page header */}
-        <div>
-          <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">{t('title')}</h1>
-          <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{t('subtitle')}</p>
+        {/* Page header with Consolidation CTA */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">{t('title')}</h1>
+            <p className="mt-1 text-sm text-[var(--color-text-secondary)]">{t('subtitle')}</p>
+          </div>
+          <button
+            onClick={handleRunConsolidation}
+            disabled={consolidating || files.length === 0 || loading}
+            className="flex items-center gap-2 rounded-lg bg-[var(--color-cta)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-cta)]/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+          >
+            {consolidating ? (
+              <><Loader2 className="h-4 w-4 animate-spin" /> Consolidation en cours...</>
+            ) : (
+              <><Zap className="h-4 w-4" /> Lancer la consolidation</>
+            )}
+          </button>
         </div>
+
+        {/* Consolidation status banner */}
+        {consolidationMsg && (
+          <div className={`flex items-center gap-3 rounded-lg border p-4 text-sm font-medium ${
+            consolidationMsg.type === 'success'
+              ? 'bg-[var(--color-success-light)] border-[var(--color-success)]/20 text-[var(--color-success)]'
+              : 'bg-[var(--color-danger-light)] border-[var(--color-danger)]/20 text-[var(--color-danger)]'
+          }`}>
+            {consolidationMsg.type === 'success'
+              ? <CheckCircle2 className="h-5 w-5 shrink-0" />
+              : <XCircle className="h-5 w-5 shrink-0" />
+            }
+            <span>{consolidationMsg.text}</span>
+            <button onClick={() => setConsolidationMsg(null)} className="ml-auto text-xs underline opacity-70 hover:opacity-100">Fermer</button>
+          </div>
+        )}
 
         {/* KPI Row */}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -269,7 +342,8 @@ export default function DashboardPage() {
                       subtitle={source.subtitle}
                       icon={source.icon}
                       status={status}
-                      lastUpdated={hasFile ? "Récemment" : undefined}
+                      lastUpdated={hasFile ? tSources('recently') : undefined}
+                      onImport={() => router.push(`/${locale}/events/${eventId}/sources`)}
                     />
                   )
                 })}

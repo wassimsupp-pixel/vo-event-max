@@ -13,6 +13,7 @@ import logging
 import uuid
 from typing import Any
 
+from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from supabase import Client
 
@@ -21,6 +22,7 @@ from models.schemas import (
     ConsolidationRunListItem,
     ConsolidationRunResponse,
     ExceptionResponse,
+    ExceptionResolutionRequest,
 )
 from services import consolidation_service
 
@@ -57,12 +59,12 @@ async def trigger_consolidation(
     """
     await verify_event_access(event_id, current_user, supabase)
 
-    # Check that at least one mapped file exists
+    # Check that at least one mapped or processed file exists
     mapped_files = (
         supabase.table("uploaded_files")
         .select("id")
         .eq("event_id", event_id)
-        .eq("import_status", "mapped")
+        .in_("import_status", ["mapped", "processed"])
         .execute()
     )
     if not mapped_files.data:
@@ -206,3 +208,123 @@ async def get_run(
         "exceptions": exceptions,
         "exception_count": len(exceptions),
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /api/events/{event_id}/exceptions
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/events/{event_id}/exceptions",
+    response_model=list[ExceptionResponse],
+    summary="List all unresolved exceptions for an event",
+)
+async def list_event_exceptions(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> list[ExceptionResponse]:
+    """
+    Return all unresolved exceptions for a given event.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+
+    try:
+        result = (
+            supabase.table("exceptions")
+            .select("*")
+            .eq("event_id", event_id)
+            .eq("resolved", False)
+            .order("severity")
+            .order("created_at")
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("Failed to list exceptions for event %s: %s", event_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve exceptions.",
+        ) from exc
+
+    return [ExceptionResponse(**row) for row in (result.data or [])]
+
+
+# ---------------------------------------------------------------------------
+# POST /api/exceptions/{exception_id}/resolve
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/exceptions/{exception_id}/resolve",
+    summary="Resolve a data exception",
+)
+async def resolve_exception(
+    exception_id: str,
+    body: ExceptionResolutionRequest,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+):
+    """
+    Mark an exception as resolved. If it's a conflict exception and a resolution
+    value is provided, update the participant profile and lock the field.
+    """
+    # 1. Fetch the exception to find event_id and participant_id
+    try:
+        exc_res = supabase.table("exceptions").select("*").eq("id", exception_id).single().execute()
+    except Exception as exc:
+        logger.error("Exception not found: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Exception not found.",
+        ) from exc
+
+    exception = exc_res.data
+    event_id = exception["event_id"]
+    participant_id = exception.get("participant_id")
+    context_data = exception.get("context_data") or {}
+
+    # Verify event access
+    await verify_event_access(event_id, current_user, supabase)
+
+    # 2. Mark exception as resolved
+    try:
+        supabase.table("exceptions").update({
+            "resolved": True,
+            "resolved_by": current_user["id"],
+            "resolved_at": datetime.now().isoformat(),
+        }).eq("id", exception_id).execute()
+    except Exception as exc:
+        logger.error("Failed to update exception: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to resolve exception.",
+        ) from exc
+
+    # 3. If it's a conflict resolution (value chosen is not generic "resolved")
+    if body.resolution != "resolved" and participant_id:
+        field_name = context_data.get("field")
+        if field_name:
+            try:
+                # Get the participant to read their locked_fields
+                part_res = supabase.table("participants").select("locked_fields").eq("id", participant_id).single().execute()
+                locked_fields = part_res.data.get("locked_fields") or {}
+                
+                # Add current field to locked_fields list/object
+                if isinstance(locked_fields, list):
+                    if field_name not in locked_fields:
+                        locked_fields.append(field_name)
+                elif isinstance(locked_fields, dict):
+                    locked_fields[field_name] = True
+                else:
+                    locked_fields = {field_name: True}
+
+                # Update the participant field value and locked_fields
+                payload = {
+                    field_name: body.resolution,
+                    "locked_fields": locked_fields,
+                    "updated_at": datetime.now().isoformat(),
+                }
+                supabase.table("participants").update(payload).eq("id", participant_id).execute()
+            except Exception as exc:
+                logger.error("Failed to update participant during exception resolution: %s", exc)
+
+    return {"status": "ok", "message": "Exception resolved successfully."}

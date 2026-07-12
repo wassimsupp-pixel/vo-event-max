@@ -111,6 +111,17 @@ class EventResponse(ORMBase):
 # Files & Column Mapping
 # ---------------------------------------------------------------------------
 
+class ColumnMappingSuggestion(BaseModel):
+    suggested_field: Optional[str] = None
+    confidence: float
+    alternatives: list[str] = []
+
+
+class MappingSuggestionsResponse(BaseModel):
+    suggestions: dict[str, ColumnMappingSuggestion]
+    canonical_fields: list[str]
+
+
 class FileUploadResponse(ORMBase):
     """Returned after a file is successfully uploaded and parsed."""
     file_id: UUID
@@ -121,6 +132,8 @@ class FileUploadResponse(ORMBase):
     columns: list[str]
     sample_rows: list[dict[str, Any]]   # First 5 rows as list of dicts
     import_status: str
+    mapping_suggestions: dict[str, ColumnMappingSuggestion]
+    canonical_fields: list[str]
 
 
 class FileListItem(ORMBase):
@@ -140,6 +153,8 @@ class FilePreviewResponse(ORMBase):
     columns: list[str]
     row_count: int
     sample_rows: list[dict[str, Any]]   # 10 rows
+    mapping_suggestions: dict[str, ColumnMappingSuggestion]
+    canonical_fields: list[str]
 
 
 class ColumnMappingRequest(BaseModel):
@@ -219,6 +234,14 @@ class ParticipantListItem(ORMBase):
     has_hotel: bool
     has_transfer: bool
     has_activities: bool
+
+
+class ParticipantLookupItem(ORMBase):
+    """Minimal participant record for dropdowns/selectors."""
+    id: UUID
+    first_name: str
+    last_name: str
+    completeness_status: str
 
 
 class ParticipantUpdate(BaseModel):
@@ -316,13 +339,18 @@ class ExceptionResolveRequest(BaseModel):
     note: Optional[str] = None
 
 
+class ExceptionResolutionRequest(BaseModel):
+    """Request body to mark an exception as resolved with a chosen value."""
+    resolution: str
+
+
 # ---------------------------------------------------------------------------
 # Exports
 # ---------------------------------------------------------------------------
 
 class ExportRequest(BaseModel):
     """Request body for POST /events/{event_id}/exports."""
-    run_id: UUID = Field(..., description="UUID of the consolidation run to export.")
+    run_id: Optional[UUID] = Field(None, description="UUID of the consolidation run to export. If not provided, exports the latest completed run.")
 
 
 class ExportResponse(ORMBase):
@@ -555,6 +583,30 @@ class GlobalParticipantHistoryResponse(BaseModel):
     email: str
     full_name: str
     history: list[GlobalParticipantHistoryItem]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — AI Email Agent
+# ---------------------------------------------------------------------------
+
+class EmailProposalAnalyzeRequest(BaseModel):
+    sender: str
+    subject: str
+    body: str
+
+class EmailProposalResponse(ORMBase):
+    id: UUID
+    event_id: UUID
+    sender: str
+    subject: str
+    body: str
+    received_at: datetime
+    participant_id: Optional[UUID] = None
+    status: str
+    proposed_changes: dict[str, Any]
+    ai_explanation: Optional[str] = None
+    created_at: datetime
+    participant_name: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

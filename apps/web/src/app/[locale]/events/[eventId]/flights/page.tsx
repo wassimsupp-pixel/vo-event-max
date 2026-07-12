@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
+import { TableSkeleton } from '@/components/ui/TableSkeleton'
 import { Plane, Upload, AlertCircle, RefreshCw, CheckCircle, Search } from 'lucide-react'
 import { api } from '@/lib/api'
 
@@ -24,7 +25,7 @@ interface Flight {
 
 export default function FlightsPage() {
   const { eventId, locale } = useParams() as { eventId: string; locale: string }
-  const t = useTranslations('nav')
+  const t = useTranslations('flights')
   const [flights, setFlights] = useState<Flight[]>([])
   const [loading, setLoading] = useState(true)
   const [extracting, setExtracting] = useState(false)
@@ -52,11 +53,11 @@ export default function FlightsPage() {
       setExtracting(true)
       setStatusMessage('')
       const res = await api.flights.extract(eventId)
-      setStatusMessage(res.message)
+      setStatusMessage(t('extractSuccess') + ': ' + res.message)
       await fetchFlights()
     } catch (err) {
       console.error('Failed to extract flights', err)
-      setStatusMessage('Error extracting flights.')
+      setStatusMessage(t('extractError'))
     } finally {
       setExtracting(false)
     }
@@ -78,10 +79,10 @@ export default function FlightsPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-primary)] flex items-center gap-2">
               <Plane className="h-6 w-6 text-[var(--color-accent)]" />
-              Gestion des Vols
+              {t('title')}
             </h1>
             <p className="text-sm text-[var(--color-text-secondary)]">
-              Visualisation et synchronisation des détails de vols des participants.
+              {t('subtitle')}
             </p>
           </div>
           <button
@@ -94,7 +95,7 @@ export default function FlightsPage() {
             ) : (
               <Upload className="h-4 w-4" />
             )}
-            Extraire depuis FCM
+            {t('extractButton')}
           </button>
         </div>
 
@@ -108,19 +109,19 @@ export default function FlightsPage() {
         {/* KPIs */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <KPICard
-            label="Total passagers avec vol"
+            label={t('kpiTotal')}
             value={flights.length}
             icon={<Plane className="h-5 w-5" />}
             accentColor="var(--color-accent)"
           />
           <KPICard
-            label="Aéroports de départ différents"
+            label={t('kpiAirports')}
             value={new Set(flights.map(f => f.departure_airport)).size}
             icon={<Plane className="h-5 w-5 rotate-45" />}
             accentColor="var(--color-success)"
           />
           <KPICard
-            label="Vols signalés annulés"
+            label={t('kpiCancelled')}
             value={missingFlightsCount}
             icon={<AlertCircle className="h-5 w-5" />}
             accentColor="var(--color-danger)"
@@ -132,7 +133,7 @@ export default function FlightsPage() {
           <Search className="h-4 w-4 text-[var(--color-text-secondary)]" />
           <input
             type="text"
-            placeholder="Rechercher par passager, vol, PNR..."
+            placeholder={t('searchPlaceholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full text-sm outline-none bg-transparent"
@@ -145,26 +146,22 @@ export default function FlightsPage() {
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] font-medium">
-                  <th className="p-4">Passager</th>
-                  <th className="p-4">N° de Vol</th>
-                  <th className="p-4">PNR</th>
-                  <th className="p-4">Route</th>
-                  <th className="p-4">Départ</th>
-                  <th className="p-4">Arrivée</th>
-                  <th className="p-4">Statut</th>
+                  <th className="p-4">{t('tablePassenger')}</th>
+                  <th className="p-4">{t('tableFlight')}</th>
+                  <th className="p-4">{t('tablePnr')}</th>
+                  <th className="p-4">{t('tableRoute')}</th>
+                  <th className="p-4">{t('tableDeparture')}</th>
+                  <th className="p-4">{t('tableArrival')}</th>
+                  <th className="p-4">{t('tableStatus')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y text-[var(--color-text-primary)]">
                 {loading ? (
-                  <tr>
-                    <td colSpan={7} className="p-8 text-center text-[var(--color-text-secondary)]">
-                      Chargement des vols en cours...
-                    </td>
-                  </tr>
+                  <TableSkeleton cols={7} rows={4} />
                 ) : filteredFlights.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center text-[var(--color-text-secondary)]">
-                      Aucun vol trouvé.
+                      {t('noFlights')}
                     </td>
                   </tr>
                 ) : (
@@ -181,13 +178,13 @@ export default function FlightsPage() {
                         {flight.departure_airport} ➔ {flight.arrival_airport}
                       </td>
                       <td className="p-4 text-xs">
-                        {new Date(flight.departure_time).toLocaleString('fr-FR', {
+                        {new Date(flight.departure_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
                           dateStyle: 'short',
                           timeStyle: 'short',
                         })}
                       </td>
                       <td className="p-4 text-xs">
-                        {new Date(flight.arrival_time).toLocaleString('fr-FR', {
+                        {new Date(flight.arrival_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
                           dateStyle: 'short',
                           timeStyle: 'short',
                         })}
@@ -198,7 +195,7 @@ export default function FlightsPage() {
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-rose-50 text-rose-700 border border-rose-200'
                         }`}>
-                          {flight.status === 'confirmed' ? 'Confirmé' : 'Annulé'}
+                          {flight.status === 'confirmed' ? t('statusConfirmed') : t('statusCancelled')}
                         </span>
                       </td>
                     </tr>

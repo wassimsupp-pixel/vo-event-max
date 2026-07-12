@@ -1,48 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ParticipantTable } from '@/components/participants/ParticipantTable'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react'
-import type { Participant } from '@/lib/api'
+import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
+import type { Participant, ParticipantStatus } from '@/lib/api'
+import { api } from '@/lib/api'
 
-const MOCK_PARTICIPANTS: Participant[] = [
-  {
-    id: '1', event_id: '1', first_name: 'Sophie', last_name: 'Martin',
-    email: 'sophie.martin@livanoba.com', status: 'complete', confidence: 'certain',
-    has_flight: true, has_hotel: true, has_transfer: true, has_activity: true,
-    locked_fields: [], sources: ['fcm', 'client'], created_at: '', updated_at: '',
-  },
-  {
-    id: '2', event_id: '1', first_name: 'Thomas', last_name: 'Bernard',
-    email: 'thomas.bernard@livanoba.com', status: 'complete', confidence: 'probable',
-    has_flight: true, has_hotel: true, has_transfer: false, has_activity: true,
-    locked_fields: [], sources: ['client'], created_at: '', updated_at: '',
-  },
-  {
-    id: '3', event_id: '1', first_name: 'Isabelle', last_name: 'Dupont',
-    email: 'isabelle.dupont@livanoba.com', status: 'incomplete', confidence: 'to_verify',
-    has_flight: true, has_hotel: false, has_transfer: false, has_activity: false,
-    locked_fields: [], sources: ['fcm'], created_at: '', updated_at: '',
-  },
-  {
-    id: '4', event_id: '1', first_name: 'Marc', last_name: 'Leroy',
-    email: 'marc.leroy@livanoba.com', status: 'conflict', confidence: 'probable',
-    has_flight: false, has_hotel: true, has_transfer: true, has_activity: false,
-    locked_fields: ['email'], sources: ['client', 'hotel'], created_at: '', updated_at: '',
-  },
-  {
-    id: '5', event_id: '1', first_name: 'Camille', last_name: 'Moreau',
-    email: 'camille.moreau@livanoba.com', status: 'complete', confidence: 'certain',
-    has_flight: true, has_hotel: true, has_transfer: true, has_activity: true,
-    locked_fields: [], sources: ['client', 'fcm', 'hotel'], created_at: '', updated_at: '',
-  },
-]
+const PER_PAGE = 20
 
 export default function MasterListPage() {
   const params = useParams()
@@ -54,49 +23,78 @@ export default function MasterListPage() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
-  const [participants, setParticipants] = useState<Participant[]>(MOCK_PARTICIPANTS)
+  const [participants, setParticipants] = useState<Participant[]>([])
+  const [total, setTotal] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
   const [isExporting, setIsExporting] = useState(false)
 
+  // Debounced search query
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+      setPage(1) // reset to first page on new search
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
+  // Also reset page when filter changes
+  useEffect(() => {
+    setPage(1)
+  }, [statusFilter])
+
+  const fetchParticipants = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const result = await api.participants.list(eventId, {
+        page,
+        page_size: PER_PAGE,
+        search: debouncedSearch || undefined,
+        status: (statusFilter as ParticipantStatus) ?? undefined,
+      })
+      setParticipants(result.items)
+      setTotal(result.total)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors du chargement des participants')
+      setParticipants([])
+      setTotal(0)
+    } finally {
+      setLoading(false)
+    }
+  }, [eventId, page, debouncedSearch, statusFilter])
+
+  useEffect(() => {
+    fetchParticipants()
+  }, [fetchParticipants])
+
   const handleSearch = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const query = e.target.value
-    setSearchQuery(query)
-    filterData(query, statusFilter)
+    setSearchQuery(e.target.value)
   }
 
   const handleFilterStatus = (status: string | null) => {
     setStatusFilter(status)
-    filterData(searchQuery, status)
   }
 
-  const filterData = (query: string, status: string | null) => {
-    let filtered = MOCK_PARTICIPANTS
-    if (query) {
-      const q = query.toLowerCase()
-      filtered = filtered.filter(
-        p => p.first_name.toLowerCase().includes(q) ||
-             p.last_name.toLowerCase().includes(q) ||
-             p.email?.toLowerCase().includes(q)
-      )
-    }
-    if (status) {
-      filtered = filtered.filter(p => p.status === status)
-    }
-    setParticipants(filtered)
-  }
-
-  const handleExport = () => {
+  const handleExport = async () => {
     setIsExporting(true)
-    setTimeout(() => {
+    try {
+      const exp = await api.exports.create(eventId, '')
+      const { signed_url } = await api.exports.getDownloadUrl(exp.id)
+      window.open(signed_url, '_blank')
+    } catch {
+      console.warn('Export not available - API not configured')
+    } finally {
       setIsExporting(false)
-      // Trigger a direct mock download of a spreadsheet file
-      const link = document.createElement('a')
-      link.href = '#'
-      link.setAttribute('download', `VO_Event_Max_Masterlist_${eventId}.xlsx`)
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-    }, 1500)
+    }
   }
+
+  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE))
+  const startItem = total === 0 ? 0 : (page - 1) * PER_PAGE + 1
+  const endItem = Math.min(page * PER_PAGE, total)
 
   return (
     <AppLayout
@@ -118,7 +116,11 @@ export default function MasterListPage() {
             onClick={handleExport}
             disabled={isExporting}
           >
-            <Download className="h-4.5 w-4.5" />
+            {isExporting ? (
+              <Loader2 className="h-4.5 w-4.5 animate-spin" />
+            ) : (
+              <Download className="h-4.5 w-4.5" />
+            )}
             {isExporting ? 'Génération...' : tActions('export')}
           </Button>
         </div>
@@ -175,17 +177,45 @@ export default function MasterListPage() {
           </div>
         </Card>
 
+        {/* Error State */}
+        {error && (
+          <div className="flex items-center gap-2 rounded-md border border-[var(--color-danger)] bg-red-50 p-4 text-sm text-[var(--color-danger)]">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         {/* Master Table */}
         <Card className="border-[var(--color-border)] shadow-[var(--shadow-card)] overflow-hidden">
-          <ParticipantTable participants={participants} loading={false} />
-          
+          <ParticipantTable participants={participants} loading={loading} />
+
           <div className="p-4 bg-slate-50 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
             <div>
-              Affichage de {participants.length} sur {MOCK_PARTICIPANTS.length} participants
+              {loading
+                ? 'Chargement...'
+                : total === 0
+                ? 'Aucun participant trouvé'
+                : `Affichage de ${startItem} à ${endItem} sur ${total} participants`}
             </div>
             <div className="flex gap-1.5">
-              <Button variant="outline" size="sm" className="h-7 text-xs border-[var(--color-border)]" disabled>Précédent</Button>
-              <Button variant="outline" size="sm" className="h-7 text-xs border-[var(--color-border)]" disabled>Suivant</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs border-[var(--color-border)]"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+              >
+                Précédent
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs border-[var(--color-border)]"
+                disabled={page >= totalPages || loading}
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              >
+                Suivant
+              </Button>
             </div>
           </div>
         </Card>

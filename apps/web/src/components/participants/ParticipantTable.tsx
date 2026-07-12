@@ -121,10 +121,10 @@ export function ParticipantTable({
                       <ServiceIcon active={p.has_transfer} />
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <ServiceIcon active={p.has_activity} />
+                      <ServiceIcon active={p.has_activities} />
                     </td>
                     <td className="px-4 py-3">
-                      <StatusBadge status={p.status} />
+                      <StatusBadge status={p.completeness_status} />
                     </td>
                   </tr>
                 ))}

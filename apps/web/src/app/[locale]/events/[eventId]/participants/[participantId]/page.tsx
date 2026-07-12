@@ -1,42 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2 } from 'lucide-react'
+import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2 } from 'lucide-react'
+import { api } from '@/lib/api'
 import type { Participant } from '@/lib/api'
 
-const MOCK_PARTICIPANT: Participant = {
-  id: '1',
-  event_id: '1',
-  first_name: 'Sophie',
-  last_name: 'Martin',
-  email: 'sophie.martin@livanoba.com',
-  company: 'LivaNova',
-  phone: '+32 490 12 34 56',
-  nationality: 'Belge',
-  dietary_requirements: 'Sans gluten',
-  status: 'complete',
-  confidence: 'certain',
-  has_flight: true,
-  has_hotel: true,
-  has_transfer: true,
-  has_activity: true,
-  locked_fields: ['email'],
-  sources: ['fcm', 'client'],
-  created_at: '2026-07-08T10:00:00Z',
-  updated_at: '2026-07-08T14:30:00Z',
-}
-
-const MOCK_AUDIT_LOG = [
-  { id: 'l1', user: 'Marie Dupont', action: 'Lock email', field: 'email', old: 'sophie.martin@livanoba.com', new: 'sophie.martin@livanoba.com', date: '2026-07-08T14:30:00Z' },
-  { id: 'l2', user: 'Système (Auto-merge)', action: 'Consolidation', field: 'company', old: '', new: 'LivaNova', date: '2026-07-08T12:00:00Z' },
-  { id: 'l3', user: 'Marie Dupont', action: 'Création participant', field: 'all', old: '', new: '', date: '2026-07-08T10:00:00Z' }
-]
+const EDITABLE_FIELDS = ['first_name', 'last_name', 'email', 'company', 'phone', 'nationality', 'dietary_requirements']
 
 export default function ParticipantDetailPage() {
   const params = useParams()
@@ -47,26 +22,101 @@ export default function ParticipantDetailPage() {
 
   const t = useTranslations('nav')
 
-  const [participant, setParticipant] = useState<Participant>(MOCK_PARTICIPANT)
-  const [lockedFields, setLockedFields] = useState<Record<string, boolean>>({
-    email: true,
-    first_name: false,
-    last_name: false,
-    company: false,
-    phone: false,
-    dietary_requirements: false,
-  })
+  const [participant, setParticipant] = useState<Participant | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [lockedFields, setLockedFields] = useState<Record<string, boolean>>({})
   const [isSaved, setIsSaved] = useState(false)
 
-  const handleToggleLock = (field: string) => {
+  useEffect(() => {
+    async function load() {
+      try {
+        setLoading(true)
+        const data = await api.participants.get(participantId)
+        setParticipant(data)
+        const locks: Record<string, boolean> = {}
+        EDITABLE_FIELDS.forEach(f => { locks[f] = data.locked_fields.includes(f) })
+        setLockedFields(locks)
+      } catch {
+        setError('Impossible de charger le participant.')
+      } finally {
+        setLoading(false)
+      }
+    }
+    if (participantId) load()
+  }, [participantId])
+
+  const handleToggleLock = async (field: string) => {
+    if (!participant) return
+    const isLocked = lockedFields[field]
     setLockedFields(prev => ({ ...prev, [field]: !prev[field] }))
+    try {
+      if (isLocked) {
+        await api.participants.unlockField(participantId, field)
+      } else {
+        await api.participants.lockField(participantId, field)
+      }
+    } catch {
+      // Revert on failure
+      setLockedFields(prev => ({ ...prev, [field]: isLocked }))
+    }
   }
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    setIsSaved(true)
-    setTimeout(() => setIsSaved(false), 2000)
+    if (!participant) return
+    setSaving(true)
+    try {
+      const formData = new FormData(e.currentTarget)
+      const update: Record<string, string> = {}
+      EDITABLE_FIELDS.forEach(f => {
+        const val = formData.get(f)
+        if (val !== null) update[f] = val as string
+      })
+      const updated = await api.participants.update(participantId, update)
+      setParticipant(updated)
+      setIsSaved(true)
+      setTimeout(() => setIsSaved(false), 2000)
+    } catch {
+      setError('Erreur lors de la sauvegarde.')
+    } finally {
+      setSaving(false)
+    }
   }
+
+  if (loading) {
+    return (
+      <AppLayout
+        eventId={eventId}
+        locale={locale}
+        pageTitle="Détails du Participant"
+        pageSubtitle="Consultez les informations consolidées, gérez les verrous de champs et l'audit trail"
+      >
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-10 w-10 animate-spin text-[var(--color-accent)]" />
+        </div>
+      </AppLayout>
+    )
+  }
+
+  if (error && !participant) {
+    return (
+      <AppLayout
+        eventId={eventId}
+        locale={locale}
+        pageTitle="Détails du Participant"
+        pageSubtitle="Consultez les informations consolidées, gérez les verrous de champs et l'audit trail"
+      >
+        <div className="flex flex-col items-center justify-center py-24 gap-4">
+          <p className="text-sm text-[var(--color-danger)]">{error}</p>
+          <Button variant="outline" onClick={() => router.back()}>Retour</Button>
+        </div>
+      </AppLayout>
+    )
+  }
+
+  if (!participant) return null
 
   return (
     <AppLayout
@@ -95,6 +145,12 @@ export default function ParticipantDetailPage() {
           </div>
         )}
 
+        {error && (
+          <div className="flex items-center gap-2 p-4 rounded-lg bg-[var(--color-danger-light)] border border-[var(--color-danger)]/20 text-[var(--color-danger)] text-sm font-medium">
+            <span>{error}</span>
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-6">
           {/* Main Edit Form */}
           <div className="col-span-12 lg:col-span-8 space-y-6">
@@ -106,7 +162,7 @@ export default function ParticipantDetailPage() {
                     <h3 className="font-semibold text-sm text-[var(--color-text-primary)]">Profil du Participant</h3>
                   </div>
                   <Badge variant="outline" className="border-[var(--color-success)] text-[var(--color-success)] bg-[var(--color-success-light)]">
-                    Consolidé (Certain)
+                    Consolidé ({participant.confidence})
                   </Badge>
                 </div>
 
@@ -146,6 +202,7 @@ export default function ParticipantDetailPage() {
                       <div className="relative">
                         <input
                           type="text"
+                          name={item.field}
                           defaultValue={item.val}
                           disabled={lockedFields[item.field]}
                           className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-[var(--color-text-primary)] disabled:bg-slate-50 disabled:text-slate-500 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
@@ -159,8 +216,17 @@ export default function ParticipantDetailPage() {
                   <Button variant="outline" type="button" onClick={() => router.back()}>
                     Retour
                   </Button>
-                  <Button type="submit" className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white flex items-center gap-2">
-                    <Save className="h-4 w-4" /> Enregistrer les modifications
+                  <Button
+                    type="submit"
+                    disabled={saving}
+                    className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white flex items-center gap-2"
+                  >
+                    {saving ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Save className="h-4 w-4" />
+                    )}
+                    Enregistrer les modifications
                   </Button>
                 </div>
               </form>
@@ -175,45 +241,27 @@ export default function ParticipantDetailPage() {
                 <FileText className="h-4.5 w-4.5 text-[var(--color-accent)]" /> Sources associées
               </h4>
               <div className="space-y-3">
-                <div className="flex items-center justify-between p-2.5 rounded border border-slate-100 bg-slate-50">
-                  <span className="text-xs font-medium text-[var(--color-text-primary)]">Fichier Inscriptions Client</span>
-                  <Badge className="bg-[var(--color-success-light)] text-[var(--color-success)] border-0 text-[10px]">Présent</Badge>
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded border border-slate-100 bg-slate-50">
-                  <span className="text-xs font-medium text-[var(--color-text-primary)]">Fichier Broker FCM Travel</span>
-                  <Badge className="bg-[var(--color-success-light)] text-[var(--color-success)] border-0 text-[10px]">Présent</Badge>
-                </div>
-                <div className="flex items-center justify-between p-2.5 rounded border border-slate-100 bg-slate-50">
-                  <span className="text-xs font-medium text-[var(--color-text-primary)]">Confirmations Hôtels</span>
-                  <Badge className="bg-slate-100 text-slate-500 border-0 text-[10px]">Absent</Badge>
-                </div>
+                {participant.sources.length === 0 ? (
+                  <p className="text-xs text-[var(--color-text-secondary)]">Aucune source associée.</p>
+                ) : (
+                  participant.sources.map((source) => (
+                    <div key={source} className="flex items-center justify-between p-2.5 rounded border border-slate-100 bg-slate-50">
+                      <span className="text-xs font-medium text-[var(--color-text-primary)] capitalize">{source}</span>
+                      <Badge className="bg-[var(--color-success-light)] text-[var(--color-success)] border-0 text-[10px]">Présent</Badge>
+                    </div>
+                  ))
+                )}
               </div>
             </Card>
 
             {/* Audit Trail */}
             <Card className="p-5 border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white space-y-4">
               <h4 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-2">
-                <Clock className="h-4.5 w-4.5 text-[var(--color-accent)]" /> Journal d'audit (Audit Trail)
+                <Clock className="h-4.5 w-4.5 text-[var(--color-accent)]" /> Journal d&apos;audit (Audit Trail)
               </h4>
-              <div className="relative border-l border-slate-200 pl-4 ml-2 space-y-4">
-                {MOCK_AUDIT_LOG.map((log) => (
-                  <div key={log.id} className="relative text-xs">
-                    {/* Circle dot on timeline */}
-                    <div className="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full border border-white bg-[var(--color-accent)]" />
-                    <div className="font-semibold text-[var(--color-text-primary)]">
-                      {log.action} ({log.field !== 'all' ? log.field : 'Profil'})
-                    </div>
-                    <div className="text-[10px] text-[var(--color-text-secondary)] mt-0.5">
-                      Par {log.user} • {new Date(log.date).toLocaleString('fr-FR')}
-                    </div>
-                    {log.old !== log.new && (
-                      <div className="text-[9px] bg-slate-50 p-1 border rounded mt-1 text-[var(--color-text-secondary)] font-mono">
-                        "{log.old}" → "{log.new}"
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+              <p className="text-xs text-[var(--color-text-secondary)] leading-relaxed">
+                L&apos;audit trail sera disponible après configuration de la base de données.
+              </p>
             </Card>
           </div>
         </div>
@@ -221,3 +269,4 @@ export default function ParticipantDetailPage() {
     </AppLayout>
   )
 }
+
