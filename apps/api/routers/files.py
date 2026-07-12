@@ -438,10 +438,27 @@ async def delete_file(
     except Exception as exc:
         logger.warning("Storage deletion failed/skipped for path %s: %s", meta["storage_path"], exc)
 
-    # 2. Delete from database (exceptions, source_records, uploaded_files)
+    # 2. Delete from database (exceptions linked to source records, source records, uploaded_files)
     try:
-        supabase.table("exceptions").delete().eq("file_id", file_id).execute()
+        # Get source record IDs for this file
+        source_recs_resp = (
+            supabase.table("source_records")
+            .select("id")
+            .eq("file_id", file_id)
+            .execute()
+        )
+        source_rec_ids = [row["id"] for row in source_recs_resp.data or []]
+        
+        # Delete exceptions linked to those source records
+        if source_rec_ids:
+            for i in range(0, len(source_rec_ids), 1000):
+                chunk = source_rec_ids[i : i + 1000]
+                supabase.table("exceptions").delete().in_("source_record_id", chunk).execute()
+
+        # Delete source_records
         supabase.table("source_records").delete().eq("file_id", file_id).execute()
+        
+        # Delete uploaded_files
         supabase.table("uploaded_files").delete().eq("id", file_id).execute()
     except Exception as exc:
         logger.error("Database deletion failed for file %s: %s", file_id, exc)
