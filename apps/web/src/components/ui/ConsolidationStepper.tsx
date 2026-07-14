@@ -13,11 +13,13 @@ interface Step {
 interface ConsolidationStepperProps {
   steps?: Step[]
   className?: string
+  /** When provided, each step row becomes clickable and calls this with its index. */
+  onStepClick?: (index: number, step: Step) => void
 }
 
 const defaultStepKeys = ['import', 'analysis', 'matching', 'consolidation', 'validation'] as const
 
-export function ConsolidationStepper({ steps, className }: ConsolidationStepperProps) {
+export function ConsolidationStepper({ steps, className, onStepClick }: ConsolidationStepperProps) {
   const t = useTranslations('steps')
 
   const resolvedSteps: Step[] = steps ?? [
@@ -30,8 +32,9 @@ export function ConsolidationStepper({ steps, className }: ConsolidationStepperP
 
   return (
     <div className={cn('flex flex-col gap-3', className)}>
-      {resolvedSteps.map((step, index) => (
-        <div key={index} className="flex items-start gap-3">
+      {resolvedSteps.map((step, index) => {
+        const rowInner = (
+          <>
           {/* Step indicator column */}
           <div className="flex flex-col items-center">
             {/* Circle */}
@@ -84,8 +87,28 @@ export function ConsolidationStepper({ steps, className }: ConsolidationStepperP
               <p className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{step.count}</p>
             )}
           </div>
-        </div>
-      ))}
+          </>
+        )
+
+        if (onStepClick) {
+          return (
+            <button
+              key={index}
+              type="button"
+              onClick={() => onStepClick(index, step)}
+              className="group flex w-full items-start gap-3 rounded-lg -mx-1 px-1 text-left transition-colors cursor-pointer hover:bg-[var(--color-bg-subtle)]"
+            >
+              {rowInner}
+            </button>
+          )
+        }
+
+        return (
+          <div key={index} className="flex items-start gap-3">
+            {rowInner}
+          </div>
+        )
+      })}
     </div>
   )
 }

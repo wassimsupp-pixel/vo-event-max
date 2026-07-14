@@ -1,4 +1,5 @@
 import { ReactNode } from 'react'
+import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
@@ -10,6 +11,8 @@ interface KPICardProps {
   icon?: ReactNode
   accentColor?: string
   className?: string
+  /** When provided, the whole card becomes a link to this route. */
+  href?: string
 }
 
 export function KPICard({
@@ -20,6 +23,7 @@ export function KPICard({
   icon,
   accentColor = 'var(--color-accent)',
   className,
+  href,
 }: KPICardProps) {
   const DeltaIcon =
     deltaPositive === true
@@ -35,11 +39,12 @@ export function KPICard({
         ? 'text-[var(--color-danger)]'
         : 'text-[var(--color-text-secondary)]'
 
-  return (
+  const content = (
     <div
       className={cn(
-        'relative overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5',
-        'shadow-[var(--shadow-card)] transition-shadow hover:shadow-md',
+        'relative h-full overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5',
+        'shadow-[var(--shadow-card)] transition-all hover:shadow-md',
+        href && 'cursor-pointer hover:border-[var(--color-accent)]',
         className
       )}
       style={{ borderLeft: `3px solid ${accentColor}` }}
@@ -73,4 +78,14 @@ export function KPICard({
       )}
     </div>
   )
+
+  if (href) {
+    return (
+      <Link href={href} className="block h-full">
+        {content}
+      </Link>
+    )
+  }
+
+  return content
 }

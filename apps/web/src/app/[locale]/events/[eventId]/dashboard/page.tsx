@@ -117,6 +117,16 @@ export default function DashboardPage() {
   const notFoundCount = exceptions.filter((e) => e.type === 'not_found' && !e.resolved).length
   const toCheckCount = exceptions.filter((e) => e.type === 'to_verify' && !e.resolved).length
 
+  // Navigation targets for the dashboard's clickable blocks
+  const exceptionsBase = `/${locale}/events/${eventId}/exceptions`
+  const stepperRoutes = [
+    `/${locale}/events/${eventId}/sources`,     // 0 Importation
+    `/${locale}/events/${eventId}/sources`,     // 1 Analyse
+    `/${locale}/events/${eventId}/master-list`, // 2 Matching
+    `/${locale}/events/${eventId}/master-list`, // 3 Consolidation
+    exceptionsBase,                             // 4 Validation
+  ]
+
   // Files checklist counts
   const sourceTypesUploaded = files.map((f) => f.source_type)
   const importedCount = Array.from(new Set(sourceTypesUploaded)).length
@@ -217,10 +227,9 @@ export default function DashboardPage() {
           <KPICard
             label={tKpi('participants')}
             value={totalParticipants}
-            delta={totalParticipants > 0 ? "+12 depuis hier" : undefined}
-            deltaPositive={totalParticipants > 0}
             icon={<Users className="h-5 w-5" />}
             accentColor="var(--color-accent)"
+            href={`/${locale}/events/${eventId}/master-list`}
           />
           <KPICard
             label={tKpi('sources')}
@@ -229,22 +238,23 @@ export default function DashboardPage() {
             deltaPositive={importedCount > 0}
             icon={<Database className="h-5 w-5" />}
             accentColor="var(--color-success)"
+            href={`/${locale}/events/${eventId}/sources`}
           />
           <KPICard
             label={tKpi('complete')}
             value={totalParticipants > 0 ? `${completenessRate}%` : '-'}
-            delta={totalParticipants > 0 ? "+3% depuis hier" : undefined}
-            deltaPositive={totalParticipants > 0}
             icon={<CheckSquare className="h-5 w-5" />}
             accentColor="var(--color-cta)"
+            href={`/${locale}/events/${eventId}/master-list`}
           />
           <KPICard
             label={tKpi('exceptions')}
             value={activeExceptionsCount}
-            delta={activeExceptionsCount > 0 ? "-2 depuis hier" : "Aucune exception"}
+            delta={activeExceptionsCount === 0 ? "Aucune exception" : undefined}
             deltaPositive={activeExceptionsCount === 0}
             icon={<AlertTriangle className="h-5 w-5" />}
             accentColor="var(--color-danger)"
+            href={`/${locale}/events/${eventId}/exceptions`}
           />
         </div>
 
@@ -259,7 +269,10 @@ export default function DashboardPage() {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('consolidationProgress')}
                 </h3>
-                <ConsolidationStepper steps={getStepperSteps()} />
+                <ConsolidationStepper
+                  steps={getStepperSteps()}
+                  onStepClick={(i) => router.push(stepperRoutes[i])}
+                />
               </div>
 
               {/* Data Quality Gauge */}
@@ -267,7 +280,11 @@ export default function DashboardPage() {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('dataQuality')}
                 </h3>
-                <DataQualityGauge percentage={totalParticipants > 0 ? completenessRate : 0} label="Qualité globale des données" />
+                <DataQualityGauge
+                  percentage={totalParticipants > 0 ? completenessRate : 0}
+                  label="Qualité globale des données"
+                  onClick={() => router.push(`/${locale}/events/${eventId}/master-list`)}
+                />
               </div>
 
               {/* Distribution Donut */}
@@ -373,21 +390,25 @@ export default function DashboardPage() {
                   type={tExceptions('conflict')}
                   count={conflictsCount}
                   severity="critical"
+                  onClick={() => router.push(`${exceptionsBase}?type=conflict`)}
                 />
                 <ExceptionItem
                   type={tExceptions('duplicate')}
                   count={duplicatesCount}
                   severity="warning"
+                  onClick={() => router.push(`${exceptionsBase}?type=duplicate`)}
                 />
                 <ExceptionItem
                   type={tExceptions('notFound')}
                   count={notFoundCount}
                   severity="warning"
+                  onClick={() => router.push(`${exceptionsBase}?type=not_found`)}
                 />
                 <ExceptionItem
                   type={tExceptions('toCheck')}
                   count={toCheckCount}
                   severity="info"
+                  onClick={() => router.push(`${exceptionsBase}?type=to_verify`)}
                 />
               </div>
             </div>

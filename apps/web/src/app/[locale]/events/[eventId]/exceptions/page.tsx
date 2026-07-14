@@ -16,6 +16,28 @@ export default function ExceptionsPage() {
   const eventId = params.eventId as string
 
   const t = useTranslations('nav')
+  const tExc = useTranslations('exceptions')
+
+  // Optional deep-link filter, e.g. /exceptions?type=conflict from the dashboard.
+  // Read from window on mount to avoid a static-prerender bail-out on useSearchParams.
+  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify'
+  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify']
+  const [typeFilter, setTypeFilter] = useState<ExceptionType | null>(null)
+
+  useEffect(() => {
+    const rawType = new URLSearchParams(window.location.search).get('type')
+    if (validTypes.includes(rawType as ExceptionType)) {
+      setTypeFilter(rawType as ExceptionType)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const typeLabels: Record<ExceptionType, string> = {
+    conflict: tExc('conflict'),
+    duplicate: tExc('duplicate'),
+    not_found: tExc('notFound'),
+    to_verify: tExc('toCheck'),
+  }
 
   const [exceptions, setExceptions] = useState<Exception[]>([])
   const [loading, setLoading] = useState(true)
@@ -106,6 +128,10 @@ export default function ExceptionsPage() {
     }
   }
 
+  const filteredExceptions = typeFilter
+    ? exceptions.filter((e) => e.type === typeFilter)
+    : exceptions
+
   return (
     <AppLayout
       eventId={eventId}
@@ -117,8 +143,37 @@ export default function ExceptionsPage() {
         <div>
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">{t('exceptions')}</h1>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-            {loading ? '\u2026' : `${exceptions.length} exceptions en attente de traitement`}
+            {loading ? '\u2026' : `${filteredExceptions.length} exceptions en attente de traitement`}
           </p>
+        </div>
+
+        {/* Type filter (deep-linkable from the dashboard) */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setTypeFilter(null)}
+            className={
+              'rounded-full px-3 py-1 text-xs font-semibold transition-colors ' +
+              (typeFilter === null
+                ? 'bg-[var(--color-accent)] text-white'
+                : 'border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-subtle)]')
+            }
+          >
+            {tExc('filterAll')}
+          </button>
+          {validTypes.map((vt) => (
+            <button
+              key={vt}
+              onClick={() => setTypeFilter(vt)}
+              className={
+                'rounded-full px-3 py-1 text-xs font-semibold transition-colors ' +
+                (typeFilter === vt
+                  ? 'bg-[var(--color-accent)] text-white'
+                  : 'border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-subtle)]')
+              }
+            >
+              {typeLabels[vt]}
+            </button>
+          ))}
         </div>
 
         {successMessage && (
@@ -142,7 +197,7 @@ export default function ExceptionsPage() {
               <Card className="p-8 border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white flex items-center justify-center">
                 <Loader2 className="h-8 w-8 animate-spin text-[var(--color-accent)]" />
               </Card>
-            ) : exceptions.length === 0 ? (
+            ) : filteredExceptions.length === 0 ? (
               <Card className="p-8 text-center border-[var(--color-border)] shadow-[var(--shadow-card)] flex flex-col items-center justify-center space-y-3 bg-white">
                 <div className="h-12 w-12 rounded-full bg-[var(--color-success-light)] flex items-center justify-center">
                   <CheckCircle2 className="h-6 w-6 text-[var(--color-success)]" />
@@ -151,7 +206,7 @@ export default function ExceptionsPage() {
                 <p className="text-xs text-[var(--color-text-secondary)]">Aucune anomalie ou conflit de données n&apos;est en attente.</p>
               </Card>
             ) : (
-              exceptions.map((exc) => (
+              filteredExceptions.map((exc) => (
                 <Card
                   key={exc.id}
                   className="p-5 border-[var(--color-border)] shadow-[var(--shadow-card)] hover:border-slate-300 transition-all bg-white flex items-start gap-4"

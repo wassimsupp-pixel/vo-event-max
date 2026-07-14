@@ -65,7 +65,8 @@
     "keepValue": "Conserver cette valeur",
     "sourceA": "Source A",
     "sourceB": "Source B",
-    "resolved": "Résolu"
+    "resolved": "Résolu",
+    "filterAll": "Toutes"
   },
   "actions": {
     "import": "Importer",

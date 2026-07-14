@@ -65,7 +65,8 @@
     "keepValue": "Deze waarde behouden",
     "sourceA": "Bron A",
     "sourceB": "Bron B",
-    "resolved": "Opgelost"
+    "resolved": "Opgelost",
+    "filterAll": "Alle"
   },
   "actions": {
     "import": "Importeren",

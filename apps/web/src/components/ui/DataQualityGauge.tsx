@@ -8,6 +8,8 @@ interface DataQualityGaugeProps {
   label?: string
   size?: number
   className?: string
+  /** When provided, the gauge becomes clickable and calls this on click. */
+  onClick?: () => void
 }
 
 export function DataQualityGauge({
@@ -15,6 +17,7 @@ export function DataQualityGauge({
   label = 'Qualité globale',
   size = 140,
   className,
+  onClick,
 }: DataQualityGaugeProps) {
   const clampedPct = Math.min(100, Math.max(0, percentage))
 
@@ -40,7 +43,17 @@ export function DataQualityGauge({
         : '#D9534F'
 
   return (
-    <div className={cn('flex flex-col items-center', className)}>
+    <div
+      className={cn(
+        'flex flex-col items-center',
+        onClick && 'cursor-pointer rounded-lg transition-colors hover:bg-[var(--color-bg-subtle)]',
+        className
+      )}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick() } } : undefined}
+    >
       <div style={{ width: size, height: size }} className="relative">
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
