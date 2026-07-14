@@ -236,7 +236,7 @@ export default function MasterListPage() {
             <div>
               <h4 className="text-xs font-semibold text-[var(--color-text-primary)]">Incomplet</h4>
               <p className="text-[10px] text-[var(--color-text-secondary)] mt-0.5">
-                Certaines informations de voyage ou d'hébergement manquent à l'appel.
+                Certaines informations de voyage ou d&apos;hébergement manquent à l&apos;appel.
               </p>
             </div>
           </div>

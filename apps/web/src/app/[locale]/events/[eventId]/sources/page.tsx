@@ -417,7 +417,7 @@ export default function SourcesPage() {
                 className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white"
                 onClick={handleConfirmMapping}
               >
-                Confirmer le mapping & Lancer l'analyse <ArrowRight className="ml-2 h-4 w-4" />
+                Confirmer le mapping & Lancer l&apos;analyse <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
           </Card>
@@ -517,7 +517,7 @@ export default function SourcesPage() {
                           <th className="pb-3">Fichier</th>
                           <th className="pb-3">Type de source</th>
                           <th className="pb-3">Nombre de lignes</th>
-                          <th className="pb-3">Date d'import</th>
+                          <th className="pb-3">Date d&apos;import</th>
                           <th className="pb-3">Statut</th>
                           <th className="pb-3 text-right">Actions</th>
                         </tr>
@@ -582,11 +582,11 @@ export default function SourcesPage() {
                   </p>
                   <div className="flex gap-2.5 items-start">
                     <CheckCircle2 className="h-4 w-4 text-[var(--color-success)] shrink-0 mt-0.5" />
-                    <span>L'outil essaie de deviner automatiquement les correspondances d'en-têtes.</span>
+                    <span>L&apos;outil essaie de deviner automatiquement les correspondances d&apos;en-têtes.</span>
                   </div>
                   <div className="flex gap-2.5 items-start">
                     <AlertTriangle className="h-4 w-4 text-[var(--color-warning)] shrink-0 mt-0.5" />
-                    <span><strong>Validation Humaine Obligatoire :</strong> Vous devez confirmer et valider chaque mapping avant qu'il ne soit traité par le moteur de consolidation.</span>
+                    <span><strong>Validation Humaine Obligatoire :</strong> Vous devez confirmer et valider chaque mapping avant qu&apos;il ne soit traité par le moteur de consolidation.</span>
                   </div>
                 </div>
               </Card>

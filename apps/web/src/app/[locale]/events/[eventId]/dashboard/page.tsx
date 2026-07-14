@@ -326,7 +326,7 @@ export default function DashboardPage() {
                     Aucun participant trouvé
                   </p>
                   <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
-                    Importez des fichiers dans l'onglet Sources pour commencer.
+                    Importez des fichiers dans l&apos;onglet Sources pour commencer.
                   </p>
                 </div>
               )}

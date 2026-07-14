@@ -27,7 +27,7 @@ function SkeletonRow() {
     <tr className="border-b border-[var(--color-border)] animate-pulse">
       {[...Array(8)].map((_, i) => (
         <td key={i} className="px-4 py-3">
-          <div className="h-4 rounded bg-gray-100" style={{ width: `${60 + Math.random() * 40}%` }} />
+          <div className="h-4 rounded bg-gray-100" style={{ width: `${60 + ((i * 17) % 40)}%` }} />
         </td>
       ))}
     </tr>
