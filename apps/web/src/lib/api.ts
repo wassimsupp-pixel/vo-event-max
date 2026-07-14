@@ -164,6 +164,18 @@ export interface EmailProposal {
   participant_name?: string
 }
 
+export type MailProvider = 'gmail' | 'outlook'
+
+export interface MailProviderStatus {
+  provider: MailProvider
+  configured: boolean
+  connected: boolean
+}
+
+export interface MailStatus {
+  providers: MailProviderStatus[]
+}
+
 import { createClient } from './supabase'
 
 const supabase = createClient()
@@ -683,6 +695,26 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       })
+    },
+  },
+
+  mail: {
+    async status(eventId: string): Promise<MailStatus> {
+      return request<MailStatus>(`/api/events/${eventId}/mail/status`)
+    },
+    async authorize(eventId: string, provider: MailProvider, locale: string): Promise<{ authorization_url: string }> {
+      return request<{ authorization_url: string }>(
+        `/api/events/${eventId}/mail/authorize${qs({ provider, locale })}`
+      )
+    },
+    async sync(eventId: string, provider: MailProvider): Promise<{ synced: number; provider: string }> {
+      return request<{ synced: number; provider: string }>(
+        `/api/events/${eventId}/mail/sync${qs({ provider })}`,
+        { method: 'POST' }
+      )
+    },
+    async disconnect(eventId: string, provider: MailProvider): Promise<void> {
+      await request(`/api/events/${eventId}/mail/disconnect${qs({ provider })}`, { method: 'POST' })
     },
   },
 }

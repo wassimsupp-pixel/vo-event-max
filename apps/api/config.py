@@ -37,3 +37,26 @@ ALLOWED_EXTENSIONS: set[str] = {".xlsx", ".xls", ".csv"}
 # Pagination defaults
 DEFAULT_PAGE_SIZE: int = 50
 MAX_PAGE_SIZE: int = 200
+
+# ------------------------------------------------------------------
+# Mail connection (OAuth) — Email Agent inbox sync
+# ------------------------------------------------------------------
+# OAuth *app* credentials, provisioned by the operator (see
+# docs/mail-connection-setup.md). Leave a provider's client id/secret empty to
+# disable it. Never commit real secrets — these are read from env vars only.
+GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
+
+MICROSOFT_CLIENT_ID: str = os.getenv("MICROSOFT_CLIENT_ID", "")
+MICROSOFT_CLIENT_SECRET: str = os.getenv("MICROSOFT_CLIENT_SECRET", "")
+# "common" allows both personal and work/school accounts; set a tenant id to
+# restrict to one organisation.
+MICROSOFT_TENANT_ID: str = os.getenv("MICROSOFT_TENANT_ID", "common")
+
+# Redirect URI registered in the OAuth app; must point at this API's
+# /api/mail/oauth/callback route (e.g. https://<api-host>/api/mail/oauth/callback).
+MAIL_OAUTH_REDIRECT_URI: str = os.getenv("MAIL_OAUTH_REDIRECT_URI", "")
+# Frontend base URL the callback bounces the user back to after consent.
+WEB_APP_URL: str = os.getenv("WEB_APP_URL", "http://localhost:3000")
+# How many of the most recent inbox messages to pull per manual sync.
+MAIL_SYNC_MAX_MESSAGES: int = int(os.getenv("MAIL_SYNC_MAX_MESSAGES", "20"))

@@ -284,7 +284,21 @@
     "successApply": "Update succesvol toegepast. Deelnemersprofiel bijgewerkt en vergrendeld.",
     "errorApply": "Fout bij toepassen van wijzigingen.",
     "successReject": "Voorstel afgewezen en gearchiveerd.",
-    "errorReject": "Fout bij afwijzen van voorstel."
+    "errorReject": "Fout bij afwijzen van voorstel.",
+    "mailConnectionTitle": "Mailboxverbinding",
+    "mailConnectionSubtitle": "Verbind een Gmail- of Outlook-mailbox om echte deelnemer-e-mails te importeren en te analyseren.",
+    "providerConnected": "Verbonden",
+    "providerNotConnected": "Niet verbonden",
+    "providerNotConfigured": "Niet geconfigureerd",
+    "connectButton": "Verbinden",
+    "syncButton": "Synchroniseren",
+    "syncingLabel": "Synchroniseren...",
+    "disconnectButton": "Verbinding verbreken",
+    "syncSuccess": "{count} e-mail(s) geïmporteerd en geanalyseerd.",
+    "syncError": "Synchroniseren van de mailbox mislukt.",
+    "connectSuccess": "Mailbox succesvol verbonden.",
+    "connectError": "Verbinden met de mailbox mislukt.",
+    "notConfiguredHint": "OAuth-configuratie ontbreekt aan de API-zijde (omgevingsvariabelen)."
   },
   "reports": {
     "title": "Rapporten & Statistieken",

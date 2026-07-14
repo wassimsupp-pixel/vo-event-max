@@ -284,7 +284,21 @@
     "successApply": "Update successfully applied. Participant profile updated and locked.",
     "errorApply": "Error applying changes.",
     "successReject": "Proposal rejected and archived.",
-    "errorReject": "Error rejecting proposal."
+    "errorReject": "Error rejecting proposal.",
+    "mailConnectionTitle": "Mailbox connection",
+    "mailConnectionSubtitle": "Connect a Gmail or Outlook mailbox to import and analyze real participant emails.",
+    "providerConnected": "Connected",
+    "providerNotConnected": "Not connected",
+    "providerNotConfigured": "Not configured",
+    "connectButton": "Connect",
+    "syncButton": "Sync",
+    "syncingLabel": "Syncing...",
+    "disconnectButton": "Disconnect",
+    "syncSuccess": "{count} email(s) imported and analyzed.",
+    "syncError": "Failed to sync the mailbox.",
+    "connectSuccess": "Mailbox connected successfully.",
+    "connectError": "Failed to connect the mailbox.",
+    "notConfiguredHint": "OAuth configuration missing on the API side (environment variables)."
   },
   "reports": {
     "title": "Reports & Statistics",

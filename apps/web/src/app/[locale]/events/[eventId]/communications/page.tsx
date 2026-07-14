@@ -18,11 +18,12 @@ import {
   AlertTriangle,
   User,
   ArrowRight,
+  RefreshCw,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { api, type EmailProposal } from '@/lib/api'
+import { api, type EmailProposal, type MailProvider, type MailStatus } from '@/lib/api'
 
 export default function CommunicationsPage() {
   const { locale, eventId } = useParams() as { locale: string; eventId: string }
@@ -44,6 +45,11 @@ export default function CommunicationsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
 
+  // Mailbox connection states
+  const [mailStatus, setMailStatus] = useState<MailStatus | null>(null)
+  const [mailSyncing, setMailSyncing] = useState<MailProvider | null>(null)
+  const [mailBanner, setMailBanner] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
   const loadProposals = async () => {
     try {
       setLoading(true)
@@ -56,10 +62,63 @@ export default function CommunicationsPage() {
     }
   }
 
+  const loadMailStatus = async () => {
+    try {
+      setMailStatus(await api.mail.status(eventId))
+    } catch {
+      // status is best-effort; leave whatever we had
+    }
+  }
+
   useEffect(() => {
-    if (eventId) loadProposals()
+    if (!eventId) return
+    loadProposals()
+    loadMailStatus()
+
+    // Handle the OAuth callback redirect flags, then clean them from the URL.
+    const sp = new URLSearchParams(window.location.search)
+    if (sp.get('mail_connected')) {
+      setMailBanner({ type: 'success', text: t('connectSuccess') })
+      window.history.replaceState({}, '', window.location.pathname)
+    } else if (sp.get('mail_error')) {
+      setMailBanner({ type: 'error', text: t('connectError') })
+      window.history.replaceState({}, '', window.location.pathname)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId])
+
+  const handleConnectMailbox = async (provider: MailProvider) => {
+    setMailBanner(null)
+    try {
+      const { authorization_url } = await api.mail.authorize(eventId, provider, locale)
+      window.location.assign(authorization_url)
+    } catch {
+      setMailBanner({ type: 'error', text: t('connectError') })
+    }
+  }
+
+  const handleSyncMailbox = async (provider: MailProvider) => {
+    setMailSyncing(provider)
+    setMailBanner(null)
+    try {
+      const res = await api.mail.sync(eventId, provider)
+      setMailBanner({ type: 'success', text: t('syncSuccess', { count: res.synced }) })
+      await loadProposals()
+    } catch {
+      setMailBanner({ type: 'error', text: t('syncError') })
+    } finally {
+      setMailSyncing(null)
+    }
+  }
+
+  const handleDisconnectMailbox = async (provider: MailProvider) => {
+    try {
+      await api.mail.disconnect(eventId, provider)
+      await loadMailStatus()
+    } catch {
+      // ignore — disconnect is best-effort
+    }
+  }
 
   const handleSimulateEmail = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -150,6 +209,99 @@ export default function CommunicationsPage() {
         <div className="grid grid-cols-12 gap-6">
           {/* Left: Email Simulation Form & Inbox */}
           <div className="col-span-12 lg:col-span-4 space-y-6">
+            {/* Mailbox connection (OAuth) */}
+            <Card className="p-5 border-[var(--color-border)] shadow-sm bg-white space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-[var(--color-text-primary)] flex items-center gap-1.5">
+                  <Mail className="h-4 w-4 text-[var(--color-accent)]" /> {t('mailConnectionTitle')}
+                </h3>
+                <p className="text-[11px] text-[var(--color-text-secondary)] mt-1">{t('mailConnectionSubtitle')}</p>
+              </div>
+
+              {mailBanner && (
+                <div
+                  className={`flex items-center gap-2 p-2.5 rounded-lg text-xs font-medium ${
+                    mailBanner.type === 'success'
+                      ? 'bg-[var(--color-success-light)] text-[var(--color-success)]'
+                      : 'bg-[var(--color-danger-light)] text-[var(--color-danger)]'
+                  }`}
+                >
+                  {mailBanner.type === 'success'
+                    ? <CheckCircle2 className="h-4 w-4 shrink-0" />
+                    : <AlertTriangle className="h-4 w-4 shrink-0" />}
+                  <span>{mailBanner.text}</span>
+                </div>
+              )}
+
+              <div className="space-y-2.5">
+                {(mailStatus?.providers ?? []).map((p) => (
+                  <div
+                    key={p.provider}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-100 p-2.5"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xs font-semibold capitalize text-[var(--color-text-primary)]">{p.provider}</span>
+                      <Badge
+                        className={`text-[9px] border-0 ${
+                          !p.configured
+                            ? 'bg-slate-100 text-slate-500'
+                            : p.connected
+                            ? 'bg-emerald-50 text-emerald-700'
+                            : 'bg-amber-50 text-amber-700'
+                        }`}
+                      >
+                        {!p.configured
+                          ? t('providerNotConfigured')
+                          : p.connected
+                          ? t('providerConnected')
+                          : t('providerNotConnected')}
+                      </Badge>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {!p.configured ? (
+                        <span className="text-[10px] text-[var(--color-text-secondary)]" title={t('notConfiguredHint')}>
+                          &mdash;
+                        </span>
+                      ) : p.connected ? (
+                        <>
+                          <Button
+                            size="sm"
+                            onClick={() => handleSyncMailbox(p.provider)}
+                            disabled={mailSyncing === p.provider}
+                            className="bg-[var(--color-accent)] text-white text-[11px] h-7 px-2"
+                          >
+                            {mailSyncing === p.provider
+                              ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
+                              : <RefreshCw className="h-3 w-3 mr-1" />}
+                            {mailSyncing === p.provider ? t('syncingLabel') : t('syncButton')}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDisconnectMailbox(p.provider)}
+                            className="text-[11px] h-7 px-2 border-[var(--color-border)]"
+                          >
+                            {t('disconnectButton')}
+                          </Button>
+                        </>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => handleConnectMailbox(p.provider)}
+                          className="bg-[var(--color-accent)] text-white text-[11px] h-7 px-2.5"
+                        >
+                          {t('connectButton')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {mailStatus && mailStatus.providers.every((p) => !p.configured) && (
+                  <p className="text-[10px] text-[var(--color-text-secondary)] italic">{t('notConfiguredHint')}</p>
+                )}
+              </div>
+            </Card>
+
             {/* Simulation Block */}
             <Card className="p-5 border-[var(--color-border)] shadow-sm bg-white space-y-4">
               <h3 className="text-sm font-bold text-[var(--color-text-primary)] flex items-center gap-1.5">

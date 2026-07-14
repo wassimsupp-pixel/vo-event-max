@@ -284,7 +284,21 @@
     "successApply": "Mise à jour appliquée avec succès. Le profil du participant a été mis à jour et verrouillé.",
     "errorApply": "Erreur lors de l'application.",
     "successReject": "Proposition rejetée et classée.",
-    "errorReject": "Erreur lors du rejet."
+    "errorReject": "Erreur lors du rejet.",
+    "mailConnectionTitle": "Connexion boîte mail",
+    "mailConnectionSubtitle": "Connectez une boîte Gmail ou Outlook pour importer et analyser les emails réels des participants.",
+    "providerConnected": "Connecté",
+    "providerNotConnected": "Non connecté",
+    "providerNotConfigured": "Non configuré",
+    "connectButton": "Connecter",
+    "syncButton": "Synchroniser",
+    "syncingLabel": "Synchronisation...",
+    "disconnectButton": "Déconnecter",
+    "syncSuccess": "{count} email(s) importé(s) et analysé(s).",
+    "syncError": "Échec de la synchronisation de la boîte mail.",
+    "connectSuccess": "Boîte mail connectée avec succès.",
+    "connectError": "Échec de la connexion à la boîte mail.",
+    "notConfiguredHint": "Configuration OAuth manquante côté API (variables d'environnement)."
   },
   "reports": {
     "title": "Rapports & Statistiques",
