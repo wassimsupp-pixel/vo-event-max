@@ -27,6 +27,8 @@ export default function ExceptionsPage() {
   useEffect(() => {
     const rawType = new URLSearchParams(window.location.search).get('type')
     if (validTypes.includes(rawType as ExceptionType)) {
+      // Reading a URL query param once on mount is a legitimate one-off sync.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setTypeFilter(rawType as ExceptionType)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
