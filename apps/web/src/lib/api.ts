@@ -493,6 +493,9 @@ export const api = {
         }),
       })
     },
+    async delete(eventId: string): Promise<void> {
+      await request(`/api/events/${eventId}`, { method: 'DELETE' })
+    },
   },
   exports: {
     async create(eventId: string, runId?: string): Promise<Export> {
@@ -695,6 +698,9 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(payload),
       })
+    },
+    async delete(projectId: string): Promise<void> {
+      await request(`/api/projects/${projectId}`, { method: 'DELETE' })
     },
   },
 

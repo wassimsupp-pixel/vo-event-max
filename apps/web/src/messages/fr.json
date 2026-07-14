@@ -24,7 +24,12 @@
     "loading": "Chargement...",
     "noProjects": "Aucun projet trouvé.",
     "noEventsInProject": "Aucun événement dans ce projet.",
-    "createNew": "Créer un nouveau projet / événement"
+    "createNew": "Créer un nouveau projet / événement",
+    "deleteEvent": "Supprimer l'événement",
+    "deleteProject": "Supprimer le projet",
+    "confirmDeleteEvent": "Supprimer l'événement « {name} » et toutes ses données ? Cette action est irréversible.",
+    "confirmDeleteProject": "Supprimer le projet « {name} » et TOUS ses événements ? Cette action est irréversible.",
+    "deleteError": "Échec de la suppression."
   },
   "branding": {
     "poweredBy": "Powered by"

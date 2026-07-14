@@ -24,7 +24,12 @@
     "loading": "Loading...",
     "noProjects": "No project found.",
     "noEventsInProject": "No event in this project.",
-    "createNew": "Create a new project / event"
+    "createNew": "Create a new project / event",
+    "deleteEvent": "Delete event",
+    "deleteProject": "Delete project",
+    "confirmDeleteEvent": "Delete the event \"{name}\" and all its data? This action is irreversible.",
+    "confirmDeleteProject": "Delete the project \"{name}\" and ALL its events? This action is irreversible.",
+    "deleteError": "Deletion failed."
   },
   "branding": {
     "poweredBy": "Powered by"

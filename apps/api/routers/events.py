@@ -17,6 +17,7 @@ from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, require_role, verify_event_access
 from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse, ProjectCreate, ProjectResponse
+from services import deletion_service
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,74 @@ async def update_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
     return EventResponse(**result.data[0])
+
+
+@router.delete(
+    "/events/{event_id}",
+    response_model=MessageResponse,
+    summary="Delete an event and all its data",
+)
+async def delete_event(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> MessageResponse:
+    """
+    Permanently delete an event and every row that depends on it (participants,
+    files, flights, hotels, transfers, activities, exceptions, runs, …).
+
+    Only ``admin`` and ``pm`` roles may delete. Access is checked against the
+    caller's organisation first.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+    try:
+        deletion_service.delete_event(supabase, event_id)
+    except Exception as exc:
+        logger.error("Failed to delete event %s: %s", event_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete event.",
+        ) from exc
+    return MessageResponse(message="Event deleted successfully.")
+
+
+@router.delete(
+    "/projects/{project_id}",
+    response_model=MessageResponse,
+    summary="Delete a project and all its events",
+)
+async def delete_project(
+    project_id: str,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> MessageResponse:
+    """
+    Permanently delete a project together with every event under it and all
+    their data. Only ``admin`` and ``pm`` roles may delete.
+    """
+    org_id: str = current_user["org_id"]
+    proj_check = (
+        supabase.table("projects")
+        .select("id")
+        .eq("id", project_id)
+        .eq("org_id", org_id)
+        .single()
+        .execute()
+    )
+    if not proj_check.data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found or access denied.",
+        )
+    try:
+        deletion_service.delete_project(supabase, project_id)
+    except Exception as exc:
+        logger.error("Failed to delete project %s: %s", project_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete project.",
+        ) from exc
+    return MessageResponse(message="Project deleted successfully.")
 
 
 @router.get(

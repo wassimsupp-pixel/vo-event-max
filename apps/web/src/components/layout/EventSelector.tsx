@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw } from 'lucide-react'
+import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useRouter, useParams } from 'next/navigation'
@@ -84,6 +84,45 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
   const handleSwitch = (eventId: string) => {
     router.push(`/${locale}/events/${eventId}/dashboard`)
     setOpen(false)
+  }
+
+  // After deleting the current event/project, move the user to a remaining
+  // event (or refresh so the "event not found" state resolves).
+  const navigateAfterDeletion = (remaining: Event[]) => {
+    setOpen(false)
+    if (remaining.length > 0) {
+      router.push(`/${locale}/events/${remaining[0].id}/dashboard`)
+    } else {
+      router.refresh()
+    }
+  }
+
+  const handleDeleteEvent = async (event: Event, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!window.confirm(t('confirmDeleteEvent', { name: event.name }))) return
+    try {
+      await api.events.delete(event.id)
+      const remaining = events.filter((x) => x.id !== event.id)
+      setEvents(remaining)
+      if (event.id === currentEventId) navigateAfterDeletion(remaining)
+    } catch {
+      alert(t('deleteError'))
+    }
+  }
+
+  const handleDeleteProject = async (project: Project, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (!window.confirm(t('confirmDeleteProject', { name: project.name }))) return
+    try {
+      await api.projects.delete(project.id)
+      const deletedIds = new Set(events.filter((ev) => ev.project_id === project.id).map((ev) => ev.id))
+      const remaining = events.filter((ev) => ev.project_id !== project.id)
+      setProjects((prev) => prev.filter((p) => p.id !== project.id))
+      setEvents(remaining)
+      if (deletedIds.has(currentEventId)) navigateAfterDeletion(remaining)
+    } catch {
+      alert(t('deleteError'))
+    }
   }
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -222,9 +261,17 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                       return (
                         <div key={project.id} className="space-y-1">
                           {/* Project Header */}
-                          <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-xs font-semibold text-[var(--color-text-primary)]">
-                            <Briefcase className="h-3.5 w-3.5 text-[var(--color-accent)]" />
-                            <span className="truncate">{project.client_name} — {project.name}</span>
+                          <div className="group/proj flex items-center gap-1.5 px-2 py-1 rounded bg-slate-50 border border-slate-100 text-xs font-semibold text-[var(--color-text-primary)]">
+                            <Briefcase className="h-3.5 w-3.5 text-[var(--color-accent)] flex-shrink-0" />
+                            <span className="truncate flex-1">{project.client_name} — {project.name}</span>
+                            <button
+                              onClick={(e) => handleDeleteProject(project, e)}
+                              title={t('deleteProject')}
+                              aria-label={t('deleteProject')}
+                              className="flex-shrink-0 rounded p-1 text-[var(--color-text-secondary)] opacity-0 group-hover/proj:opacity-100 hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-all"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
                           </div>
 
                           {/* Events under this project */}
@@ -235,22 +282,31 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                               </p>
                             ) : (
                               projectEvents.map((event) => (
-                                <button
-                                  key={event.id}
-                                  onClick={() => handleSwitch(event.id)}
-                                  className={cn(
-                                    'flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left transition-colors',
-                                    'hover:bg-[var(--color-bg-subtle)]',
-                                    event.id === currentEventId && 'bg-[var(--color-accent-light)] font-semibold text-[var(--color-accent)]'
-                                  )}
-                                >
-                                  <span className="truncate text-xs text-[var(--color-text-primary)]">
-                                    {event.name}
-                                  </span>
-                                  {event.id === currentEventId && (
-                                    <Check className="h-3.5 w-3.5 text-[var(--color-accent)] flex-shrink-0" />
-                                  )}
-                                </button>
+                                <div key={event.id} className="group/evt flex items-center gap-0.5">
+                                  <button
+                                    onClick={() => handleSwitch(event.id)}
+                                    className={cn(
+                                      'flex min-w-0 flex-1 items-center justify-between rounded-md px-3 py-1.5 text-left transition-colors',
+                                      'hover:bg-[var(--color-bg-subtle)]',
+                                      event.id === currentEventId && 'bg-[var(--color-accent-light)] font-semibold text-[var(--color-accent)]'
+                                    )}
+                                  >
+                                    <span className="truncate text-xs text-[var(--color-text-primary)]">
+                                      {event.name}
+                                    </span>
+                                    {event.id === currentEventId && (
+                                      <Check className="h-3.5 w-3.5 text-[var(--color-accent)] flex-shrink-0" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={(e) => handleDeleteEvent(event, e)}
+                                    title={t('deleteEvent')}
+                                    aria-label={t('deleteEvent')}
+                                    className="flex-shrink-0 rounded-md p-1.5 text-[var(--color-text-secondary)] opacity-0 group-hover/evt:opacity-100 hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-all"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                </div>
                               ))
                             )}
                           </div>

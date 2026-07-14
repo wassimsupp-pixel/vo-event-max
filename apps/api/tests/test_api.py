@@ -977,6 +977,61 @@ class TestParticipantLookup:
         assert response.status_code == 404
 
 
+# ---------------------------------------------------------------------------
+# Event / Project deletion
+# ---------------------------------------------------------------------------
+
+class TestEventProjectDeletion:
+    EVENT_ID = "00000000-0000-0000-0000-000000000001"
+    PROJECT_ID = "00000000-0000-0000-0000-000000000002"
+
+    @patch("routers.events.verify_event_access")
+    @patch("routers.events.deletion_service.delete_event")
+    def test_delete_event_success(self, mock_delete, mock_verify):
+        """DELETE /api/events/{id} deletes cascade and returns success (admin)."""
+        client = _admin_client()
+        response = client.delete(f"/api/events/{self.EVENT_ID}")
+        assert response.status_code == 200, response.text
+        assert response.json()["message"] == "Event deleted successfully."
+        mock_delete.assert_called_once()
+
+    def test_delete_event_forbidden_for_viewer(self):
+        """A viewer must not be able to delete an event (403)."""
+        client = _viewer_client()
+        response = client.delete(f"/api/events/{self.EVENT_ID}")
+        assert response.status_code == 403
+
+    @patch("routers.events.deletion_service.delete_project")
+    def test_delete_project_success(self, mock_delete):
+        """DELETE /api/projects/{id} deletes the project after org check (admin)."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        # Project ownership check: table.select.eq.eq.single.execute.data truthy
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.single.return_value.execute.return_value.data = {"id": self.PROJECT_ID}
+
+        response = client.delete(f"/api/projects/{self.PROJECT_ID}")
+        assert response.status_code == 200, response.text
+        assert response.json()["message"] == "Project deleted successfully."
+        mock_delete.assert_called_once()
+
+    def test_delete_project_not_found(self):
+        """DELETE /api/projects/{id} returns 404 when the project is not in the org."""
+        client = _admin_client()
+        mock_supabase = _mock_supabase()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.single.return_value.execute.return_value.data = None
+
+        response = client.delete(f"/api/projects/{self.PROJECT_ID}")
+        assert response.status_code == 404
+
+    def test_delete_project_forbidden_for_viewer(self):
+        """A viewer must not be able to delete a project (403)."""
+        client = _viewer_client()
+        response = client.delete(f"/api/projects/{self.PROJECT_ID}")
+        assert response.status_code == 403
+
+
 
 
 

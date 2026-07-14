@@ -24,7 +24,12 @@
     "loading": "Laden...",
     "noProjects": "Geen project gevonden.",
     "noEventsInProject": "Geen evenement in dit project.",
-    "createNew": "Nieuw project / evenement aanmaken"
+    "createNew": "Nieuw project / evenement aanmaken",
+    "deleteEvent": "Evenement verwijderen",
+    "deleteProject": "Project verwijderen",
+    "confirmDeleteEvent": "Het evenement \"{name}\" en alle bijbehorende gegevens verwijderen? Deze actie is onomkeerbaar.",
+    "confirmDeleteProject": "Het project \"{name}\" en ALLE bijbehorende evenementen verwijderen? Deze actie is onomkeerbaar.",
+    "deleteError": "Verwijderen mislukt."
   },
   "branding": {
     "poweredBy": "Powered by"
