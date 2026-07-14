@@ -100,18 +100,24 @@ export function Sidebar({ eventId, locale }: SidebarProps) {
   // 2. Fetch exceptions count in real-time
   useEffect(() => {
     async function loadExceptionCount() {
-      if (!eventId || eventId === 'global' || eventId === '00000000-0000-0000-0000-000000000003') {
+      if (!eventId || eventId === 'global') {
         setExceptionCount(0)
         return
       }
       try {
         const supabase = createClient()
+        const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
         const { count, error } = await supabase
           .from('exceptions')
           .select('*', { count: 'exact', head: true })
           .eq('event_id', eventId)
           .eq('resolved', false)
-        
+
+        if (process.env.NODE_ENV !== 'production') {
+          const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+          console.debug(`[sidebar] exception count query → ${Math.round(now - startedAt)}ms`)
+        }
+
         if (error) {
           console.warn('Failed to fetch exception count:', error)
           return
@@ -124,9 +130,10 @@ export function Sidebar({ eventId, locale }: SidebarProps) {
       }
     }
     loadExceptionCount()
-    
-    // Poll count every 5 seconds to keep it synced
-    const timer = setInterval(loadExceptionCount, 5000)
+
+    // Poll to keep the badge synced. 30s (was 5s) to cut idle DB load on every
+    // page; can be replaced by a Supabase Realtime subscription later (P1.6).
+    const timer = setInterval(loadExceptionCount, 30_000)
     return () => clearInterval(timer)
   }, [eventId])
 

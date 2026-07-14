@@ -261,10 +261,18 @@ async function request<T>(
   }
 
   const { headers: _, ...restOptions } = options
+  const method = (options.method ?? 'GET').toUpperCase()
+
+  // Per-endpoint timing to profile slow calls (dev only — see feedback P1.6).
+  const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now()
   const res = await fetch(`${BASE_URL}${path}`, {
     headers,
     ...restOptions,
   })
+  if (process.env.NODE_ENV !== 'production') {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    console.debug(`[api] ${method} ${path} → ${res.status} in ${Math.round(now - startedAt)}ms`)
+  }
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: res.statusText }))
