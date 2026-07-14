@@ -26,6 +26,9 @@
     "noEventsInProject": "Geen evenement in dit project.",
     "createNew": "Nieuw project / evenement aanmaken"
   },
+  "branding": {
+    "poweredBy": "Powered by"
+  },
   "status": {
     "complete": "Volledig",
     "incomplete": "Onvolledig",

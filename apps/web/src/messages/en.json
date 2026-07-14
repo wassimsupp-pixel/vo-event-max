@@ -26,6 +26,9 @@
     "noEventsInProject": "No event in this project.",
     "createNew": "Create a new project / event"
   },
+  "branding": {
+    "poweredBy": "Powered by"
+  },
   "status": {
     "complete": "Complete",
     "incomplete": "Incomplete",

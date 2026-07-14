@@ -103,16 +103,25 @@ export default function LoginPage() {
         >
           {/* Header */}
           <div className="px-8 pb-4 pt-8 text-center">
-            <div className="mb-4 flex flex-col items-center justify-center select-none text-[var(--color-text-primary)]">
-              <div className="w-[145px] h-[100px]">
-                <svg className="w-full h-full" viewBox="0 0 160 110">
-                  <text x="0" y="42" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="48" letter-spacing="-2px" fill="currentColor">VO</text>
-                  <line x1="0" y1="54" x2="70" y2="54" stroke="currentColor" stroke-width="7" />
-                  <text x="0" y="80" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">communication</text>
-                  <text x="0" y="100" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">group</text>
-                </svg>
+            <div className="mb-4 flex flex-col items-center justify-center select-none">
+              {/*
+                TODO(P2.1): replace this wordmark with the official Event MAX logo
+                (same asset as Sidebar.tsx):
+                  <Image src="/event-max-logo.svg" alt="Event MAX" width={180} height={52} priority />
+              */}
+              <div className="flex items-baseline gap-1.5 text-[34px] font-black leading-none tracking-tight">
+                <span className="text-[var(--color-text-primary)]">Event</span>
+                <span className="text-[var(--color-accent)]">MAX</span>
               </div>
-              <span className="mt-1 text-[10px] font-bold uppercase tracking-[4px] text-[var(--color-accent)]">Event Max</span>
+              <div className="mt-3 flex items-center gap-2 text-[var(--color-text-secondary)]">
+                <div className="h-[24px] w-[34px] flex-shrink-0" aria-hidden>
+                  <svg className="h-full w-full" viewBox="0 0 60 40">
+                    <text x="0" y="27" fontFamily="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" fontWeight="900" fontSize="30" letterSpacing="-1.5" fill="currentColor">VO</text>
+                    <line x1="1" y1="34" x2="44" y2="34" stroke="currentColor" strokeWidth="4" />
+                  </svg>
+                </div>
+                <span className="text-[10px] font-medium">Powered by VO Communication Group</span>
+              </div>
             </div>
             <h1 className="text-xl font-bold text-[var(--color-text-primary)]">
               {isSignUp ? 'Créer un compte' : 'Connexion'}

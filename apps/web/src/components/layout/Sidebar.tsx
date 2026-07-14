@@ -62,6 +62,7 @@ interface SidebarProps {
 
 export function Sidebar({ eventId, locale }: SidebarProps) {
   const t = useTranslations('nav')
+  const tBrand = useTranslations('branding')
   const pathname = usePathname()
   const router = useRouter()
 
@@ -136,17 +137,18 @@ export function Sidebar({ eventId, locale }: SidebarProps) {
       className="fixed left-0 top-0 z-40 flex h-screen w-[240px] flex-col bg-[var(--color-surface)]"
       style={{ boxShadow: 'var(--shadow-sidebar)' }}
     >
-      {/* Logo */}
-      <div className="flex flex-col items-start justify-center border-b border-[var(--color-border)] px-6 py-5 select-none text-[var(--color-text-primary)]">
-        <div className="w-[125px] h-[86px]">
-          <svg className="w-full h-full" viewBox="0 0 160 110">
-            <text x="0" y="42" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="900" font-size="48" letter-spacing="-2px" fill="currentColor">VO</text>
-            <line x1="0" y1="54" x2="70" y2="54" stroke="currentColor" stroke-width="7" />
-            <text x="0" y="80" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">communication</text>
-            <text x="0" y="100" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-weight="800" font-size="18" letter-spacing="-0.5px" fill="currentColor">group</text>
-          </svg>
+      {/* Logo — Event MAX (primary brand) */}
+      <div className="flex items-center border-b border-[var(--color-border)] px-6 py-6 select-none">
+        {/*
+          TODO(P2.1): replace this wordmark placeholder with the official Event MAX logo.
+          Drop the asset in apps/web/public/ (e.g. event-max-logo.svg) and swap this block for:
+            <Image src="/event-max-logo.svg" alt="Event MAX" width={150} height={44} priority />
+          (add `import Image from 'next/image'` at the top).
+        */}
+        <div className="flex items-baseline gap-1.5 text-[26px] font-black leading-none tracking-tight">
+          <span className="text-[var(--color-text-primary)]">Event</span>
+          <span className="text-[var(--color-accent)]">MAX</span>
         </div>
-        <span className="mt-2 text-[9px] font-bold uppercase tracking-[3px] text-[var(--color-accent)]">Event Max</span>
       </div>
 
       {/* Navigation */}
@@ -239,6 +241,22 @@ export function Sidebar({ eventId, locale }: SidebarProps) {
             </p>
             <p className="truncate text-xs text-[var(--color-text-secondary)]">{userRole}</p>
           </div>
+        </div>
+      </div>
+
+      {/* Powered by VO Communication Group (white-label attribution) */}
+      <div className="flex-shrink-0 border-t border-[var(--color-border)] px-4 py-3 flex items-center gap-2.5 select-none">
+        <div className="h-[34px] w-[46px] flex-shrink-0 text-[var(--color-text-secondary)]" aria-hidden>
+          <svg className="h-full w-full" viewBox="0 0 60 40">
+            <text x="0" y="27" fontFamily="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" fontWeight="900" fontSize="30" letterSpacing="-1.5" fill="currentColor">VO</text>
+            <line x1="1" y1="34" x2="44" y2="34" stroke="currentColor" strokeWidth="4" />
+          </svg>
+        </div>
+        <div className="min-w-0 leading-tight">
+          <span className="block text-[10px] text-[var(--color-text-secondary)]">{tBrand('poweredBy')}</span>
+          <span className="block truncate text-[11px] font-semibold text-[var(--color-text-primary)]">
+            VO Communication Group
+          </span>
         </div>
       </div>
     </aside>
