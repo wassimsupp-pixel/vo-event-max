@@ -14,6 +14,18 @@
     "settings": "Paramètres",
     "logout": "Déconnexion"
   },
+  "eventSelector": {
+    "loadingEvent": "Chargement de l'événement...",
+    "loadError": "Erreur de chargement",
+    "loadErrorDetail": "Impossible de charger les projets et événements.",
+    "retry": "Réessayer",
+    "eventNotFound": "Événement introuvable",
+    "projectsAndEvents": "Projets & Événements",
+    "loading": "Chargement...",
+    "noProjects": "Aucun projet trouvé.",
+    "noEventsInProject": "Aucun événement dans ce projet.",
+    "createNew": "Créer un nouveau projet / événement"
+  },
   "status": {
     "complete": "Complet",
     "incomplete": "Incomplet",

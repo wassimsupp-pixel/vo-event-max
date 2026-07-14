@@ -14,6 +14,18 @@
     "settings": "Settings",
     "logout": "Log Out"
   },
+  "eventSelector": {
+    "loadingEvent": "Loading event...",
+    "loadError": "Loading error",
+    "loadErrorDetail": "Unable to load projects and events.",
+    "retry": "Retry",
+    "eventNotFound": "Event not found",
+    "projectsAndEvents": "Projects & Events",
+    "loading": "Loading...",
+    "noProjects": "No project found.",
+    "noEventsInProject": "No event in this project.",
+    "createNew": "Create a new project / event"
+  },
   "status": {
     "complete": "Complete",
     "incomplete": "Incomplete",

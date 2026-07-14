@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase } from 'lucide-react'
+import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { useRouter, useParams } from 'next/navigation'
@@ -31,6 +31,7 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
   const [events, setEvents] = useState<Event[]>([])
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
 
   // Creation state
   const [isCreating, setIsCreating] = useState(false)
@@ -44,47 +45,41 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
   const router = useRouter()
   const params = useParams()
   const locale = (params.locale as string) || 'fr'
+  const t = useTranslations('eventSelector')
 
-  // Load events and projects
-  useEffect(() => {
-    async function loadData() {
-      try {
-        const [eventsData, projectsData] = await Promise.all([
-          api.events.list(),
-          api.projects.list(),
-        ])
-        setEvents(eventsData)
-        setProjects(projectsData)
-        if (projectsData.length > 0) {
-          setSelectedProjectId(projectsData[0].id)
-        }
-      } catch (err) {
-        console.error('Failed to load events/projects:', err)
-        // Fallbacks
-        const fallbackProj = { id: '00000000-0000-0000-0000-000000000002', name: 'Barcelona Summit', client_name: 'LivaNova' }
-        setProjects([fallbackProj])
-        setEvents([
-          {
-            id: '00000000-0000-0000-0000-000000000003',
-            project_id: '00000000-0000-0000-0000-000000000002',
-            name: 'LivaNova — Barcelona Summit 2025',
-            location_city: 'Barcelone',
-            location_country: 'Espagne',
-            start_date: '2025-11-10',
-          },
-        ])
-        setSelectedProjectId(fallbackProj.id)
-      } finally {
-        setLoading(false)
+  // Load events and projects. Extracted so the "retry" action can re-invoke it.
+  const loadData = useCallback(async () => {
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const [eventsData, projectsData] = await Promise.all([
+        api.events.list(),
+        api.projects.list(),
+      ])
+      setEvents(eventsData)
+      setProjects(projectsData)
+      if (projectsData.length > 0) {
+        setSelectedProjectId(projectsData[0].id)
       }
+    } catch (err) {
+      // No silent fake-data fallback: surface the failure so the real error is visible
+      // and the user isn't misled into thinking the wrong event is loaded.
+      console.error('Failed to load events/projects:', err)
+      setEvents([])
+      setProjects([])
+      setLoadError(true)
+    } finally {
+      setLoading(false)
     }
-    loadData()
   }, [])
 
-  const currentEvent = events.find((e) => e.id === currentEventId) ?? {
-    id: currentEventId,
-    name: 'Chargement de l\'événement...',
-  }
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  // Validate the URL-provided currentEventId against the real event list.
+  // Undefined while loading, when the load failed, or when the id is unknown.
+  const currentEvent = events.find((e) => e.id === currentEventId)
 
   const handleSwitch = (eventId: string) => {
     router.push(`/${locale}/events/${eventId}/dashboard`)
@@ -141,14 +136,38 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
       <button
         onClick={() => setOpen(!open)}
         className={cn(
-          'flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-white px-3 py-2',
+          'flex items-center gap-2 rounded-lg border bg-white px-3 py-2',
           'text-sm font-medium text-[var(--color-text-primary)] transition-all',
-          'hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-light)]',
-          open && 'border-[var(--color-accent)] bg-[var(--color-accent-light)]'
+          loadError
+            ? 'border-[var(--color-danger)] hover:bg-[var(--color-danger-light)]'
+            : 'border-[var(--color-border)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-light)]',
+          open && !loadError && 'border-[var(--color-accent)] bg-[var(--color-accent-light)]',
+          open && loadError && 'bg-[var(--color-danger-light)]'
         )}
       >
-        <Calendar className="h-4 w-4 text-[var(--color-accent)]" />
-        <span className="max-w-[220px] truncate">{currentEvent.name}</span>
+        {loading ? (
+          // Skeleton while the current event is being resolved
+          <>
+            <Calendar className="h-4 w-4 text-[var(--color-text-secondary)]" />
+            <span className="h-4 w-[160px] animate-pulse rounded bg-[var(--color-border)]" aria-hidden />
+            <span className="sr-only">{t('loadingEvent')}</span>
+          </>
+        ) : loadError ? (
+          <>
+            <AlertTriangle className="h-4 w-4 text-[var(--color-danger)]" />
+            <span className="max-w-[220px] truncate text-[var(--color-danger)]">{t('loadError')}</span>
+          </>
+        ) : currentEvent ? (
+          <>
+            <Calendar className="h-4 w-4 text-[var(--color-accent)]" />
+            <span className="max-w-[220px] truncate">{currentEvent.name}</span>
+          </>
+        ) : (
+          <>
+            <AlertTriangle className="h-4 w-4 text-[var(--color-warning)]" />
+            <span className="max-w-[220px] truncate text-[var(--color-warning)]">{t('eventNotFound')}</span>
+          </>
+        )}
         <ChevronDown
           className={cn(
             'h-4 w-4 text-[var(--color-text-secondary)] transition-transform',
@@ -171,7 +190,7 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
               <>
                 <div className="border-b border-[var(--color-border)] px-3 py-2 bg-slate-50 flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
-                    Projets & Événements
+                    {t('projectsAndEvents')}
                   </span>
                 </div>
 
@@ -179,11 +198,23 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                   {loading ? (
                     <div className="flex items-center justify-center py-6 text-xs text-[var(--color-text-secondary)]">
                       <Loader2 className="mr-1.5 h-4 w-4 animate-spin text-[var(--color-accent)]" />
-                      Chargement...
+                      {t('loading')}
+                    </div>
+                  ) : loadError ? (
+                    <div className="flex flex-col items-center gap-2.5 py-5 px-3 text-center">
+                      <AlertTriangle className="h-6 w-6 text-[var(--color-danger)]" />
+                      <p className="text-xs font-medium text-[var(--color-danger)]">{t('loadErrorDetail')}</p>
+                      <button
+                        onClick={() => loadData()}
+                        className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-primary)] hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-light)] transition-colors"
+                      >
+                        <RotateCw className="h-3.5 w-3.5" />
+                        {t('retry')}
+                      </button>
                     </div>
                   ) : projects.length === 0 ? (
                     <div className="text-center py-4 text-xs text-[var(--color-text-secondary)]">
-                      Aucun projet trouvé.
+                      {t('noProjects')}
                     </div>
                   ) : (
                     projects.map((project) => {
@@ -200,7 +231,7 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                           <div className="pl-2 space-y-0.5">
                             {projectEvents.length === 0 ? (
                               <p className="text-[11px] text-[var(--color-text-secondary)] italic px-3 py-1">
-                                Aucun événement dans ce projet.
+                                {t('noEventsInProject')}
                               </p>
                             ) : (
                               projectEvents.map((event) => (
@@ -236,7 +267,7 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                     className="flex w-full items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-bold text-[var(--color-accent)] hover:bg-[var(--color-accent-light)] transition-colors"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Créer un nouveau projet / événement
+                    {t('createNew')}
                   </button>
                 </div>
               </>
