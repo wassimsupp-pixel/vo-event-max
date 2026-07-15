@@ -18,10 +18,13 @@ Deletion order for an event
    ``transfers``, ``change_log``).
 3. ``consolidation_runs`` (referenced by exceptions/exports, now gone).
 4. ``activities`` and ``hotels`` (their junction rows are gone).
-5. ``participants`` (all references to them are gone; they in turn reference
-   ``source_records`` so must be removed before it).
-6. Storage objects, then ``source_records`` and ``uploaded_files``.
-7. The ``events`` row itself.
+5. Break the circular FK between ``participants`` and ``source_records``: null
+   ``participants.registration_source_id`` / ``fcm_source_id`` so source_records
+   can go first.
+6. ``source_records`` (participant links nulled, exceptions gone).
+7. ``participants``.
+8. Storage objects, then ``uploaded_files``.
+9. The ``events`` row itself.
 """
 
 from __future__ import annotations
@@ -94,16 +97,26 @@ def delete_event(supabase: Client, event_id: str) -> None:
     supabase.table("activities").delete().eq("event_id", eid).execute()
     supabase.table("hotels").delete().eq("event_id", eid).execute()
 
-    # 5. Participants (all references to them are gone). They reference
-    #    source_records, so they must be deleted before it.
+    # 5. Break the circular FK between participants and source_records:
+    #    participants reference source_records (registration_source_id /
+    #    fcm_source_id) AND source_records reference participants
+    #    (participant_id). Null the participant→source links (nullable columns)
+    #    so source_records can be deleted before participants.
+    supabase.table("participants").update(
+        {"registration_source_id": None, "fcm_source_id": None}
+    ).eq("event_id", eid).execute()
+
+    # 6. Source records (now unreferenced: participant links nulled, exceptions gone)
+    supabase.table("source_records").delete().eq("event_id", eid).execute()
+
+    # 7. Participants (the source_records that referenced them are gone)
     supabase.table("participants").delete().eq("event_id", eid).execute()
 
-    # 6. Storage objects, then source_records and uploaded_files
+    # 8. Storage objects, then uploaded_files
     _remove_event_storage(supabase, eid)
-    supabase.table("source_records").delete().eq("event_id", eid).execute()
     supabase.table("uploaded_files").delete().eq("event_id", eid).execute()
 
-    # 7. The event itself
+    # 9. The event itself
     supabase.table("events").delete().eq("id", eid).execute()
 
     logger.info("Deleted event %s and all dependent data", eid)
