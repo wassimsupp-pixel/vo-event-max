@@ -7,9 +7,17 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2 } from 'lucide-react'
+import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2, Plane, Hotel, Bus, Sparkles, Database } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { Participant } from '@/lib/api'
+
+interface ConsolidatedView {
+  flights: any[]
+  transfers: any[]
+  hotel_nights: any[]
+  activities: any[]
+  source_records: any[]
+}
 
 const EDITABLE_FIELDS = ['first_name', 'last_name', 'email', 'company', 'phone', 'nationality', 'dietary_requirements']
 
@@ -28,6 +36,7 @@ export default function ParticipantDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [lockedFields, setLockedFields] = useState<Record<string, boolean>>({})
   const [isSaved, setIsSaved] = useState(false)
+  const [consolidated, setConsolidated] = useState<ConsolidatedView | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -42,6 +51,12 @@ export default function ParticipantDetailPage() {
         setError('Impossible de charger le participant.')
       } finally {
         setLoading(false)
+      }
+      // Consolidated view is best-effort — don't block the profile if it fails
+      try {
+        setConsolidated(await api.participants.getConsolidated(participantId))
+      } catch {
+        /* ignore */
       }
     }
     if (participantId) load()
@@ -265,6 +280,121 @@ export default function ParticipantDetailPage() {
             </Card>
           </div>
         </div>
+
+        {/* Consolidated operational master-list view (§6) */}
+        {consolidated && (
+          <Card className="p-6 border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white space-y-6">
+            <div className="flex items-center gap-2 border-b pb-4">
+              <Database className="h-5 w-5 text-[var(--color-accent)]" />
+              <h3 className="font-semibold text-sm text-[var(--color-text-primary)]">Vue consolidée (master list)</h3>
+            </div>
+
+            {/* Summary tiles */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { icon: <Plane className="h-4 w-4" />, label: 'Vols', count: consolidated.flights.length },
+                { icon: <Hotel className="h-4 w-4" />, label: 'Nuitées', count: consolidated.hotel_nights.length },
+                { icon: <Bus className="h-4 w-4" />, label: 'Transferts', count: consolidated.transfers.length },
+                { icon: <Sparkles className="h-4 w-4" />, label: 'Activités', count: consolidated.activities.length },
+              ].map((s) => (
+                <div key={s.label} className="rounded-lg border border-[var(--color-border)] bg-slate-50 p-3">
+                  <div className="flex items-center gap-1.5 text-[var(--color-text-secondary)]">
+                    {s.icon}
+                    <span className="text-xs font-medium">{s.label}</span>
+                  </div>
+                  <div className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">{s.count}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Flights */}
+            {consolidated.flights.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Vols</h4>
+                {consolidated.flights.map((f) => (
+                  <div key={f.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
+                    <span className="font-mono font-semibold">{f.flight_number || '—'}</span>
+                    <span>{f.departure_airport} → {f.arrival_airport}</span>
+                    {f.departure_time && <span className="text-[var(--color-text-secondary)]">{new Date(f.departure_time).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>}
+                    {f.status && <span className="text-[var(--color-text-secondary)]">{f.status}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Hotel nights */}
+            {consolidated.hotel_nights.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Hôtels &amp; nuitées</h4>
+                {consolidated.hotel_nights.map((h) => (
+                  <div key={h.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
+                    <span className="font-semibold">{h.hotels?.name || 'Hôtel'}</span>
+                    {h.night_date && <span>{new Date(h.night_date).toLocaleDateString('fr-FR', { dateStyle: 'medium' })}</span>}
+                    {h.room_type && <span className="text-[var(--color-text-secondary)]">{h.room_type}</span>}
+                    {h.status && <span className="text-[var(--color-text-secondary)]">{h.status}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Transfers */}
+            {consolidated.transfers.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Transferts</h4>
+                {consolidated.transfers.map((tr) => (
+                  <div key={tr.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
+                    <span className="font-semibold">{tr.pickup_location || '—'} → {tr.dropoff_location || '—'}</span>
+                    {tr.pickup_time && <span className="text-[var(--color-text-secondary)]">{new Date(tr.pickup_time).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>}
+                    {tr.transfer_type && <span className="text-[var(--color-text-secondary)]">{tr.transfer_type}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Activities */}
+            {consolidated.activities.length > 0 && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Activités</h4>
+                <div className="flex flex-wrap gap-2">
+                  {consolidated.activities.map((a) => (
+                    <Badge key={a.id} className="bg-[var(--color-accent-light)] text-[var(--color-accent)] border-0">
+                      {a.activities?.name || 'Activité'}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Raw source rows (admin/pm only, provided by the API) */}
+            {consolidated.source_records.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+                  Données sources complètes ({consolidated.source_records.length})
+                </h4>
+                {consolidated.source_records.map((sr) => {
+                  const data: Record<string, any> = sr.normalized_data || sr.raw_data || {}
+                  const entries = Object.entries(data).filter(([, v]) => v !== null && v !== '' && v !== undefined)
+                  return (
+                    <div key={sr.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                      <div className="mb-2 text-[11px] font-semibold text-[var(--color-accent)]">
+                        {sr.uploaded_files?.source_type || 'source'}
+                        {sr.uploaded_files?.original_filename ? ` — ${sr.uploaded_files.original_filename}` : ''}
+                      </div>
+                      <div className="grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2 lg:grid-cols-3">
+                        {entries.map(([k, v]) => (
+                          <div key={k} className="flex flex-col">
+                            <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-secondary)]">{k.replace(/_/g, ' ')}</span>
+                            <span className="text-xs text-[var(--color-text-primary)] break-words">{String(v)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </Card>
+        )}
       </div>
     </AppLayout>
   )

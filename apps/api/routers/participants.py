@@ -241,6 +241,75 @@ async def get_participant(
 
 
 # ---------------------------------------------------------------------------
+# GET /api/participants/{participant_id}/consolidated
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/participants/{participant_id}/consolidated",
+    summary="Full consolidated master-list view for one participant",
+)
+async def get_participant_consolidated(
+    participant_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    Return everything merged for a participant: their flights, transfers, hotel
+    nights, activities, and the raw source rows they were consolidated from.
+
+    This is the "operational master list" for a single attendee (feedback §6).
+    Raw source rows (which can contain dietary/allergy data) are only included
+    for admin/pm roles (RGPD).
+    """
+    part = (
+        supabase.table("participants")
+        .select("id, event_id")
+        .eq("id", participant_id)
+        .single()
+        .execute()
+    )
+    if not part.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found.")
+    await verify_event_access(part.data["event_id"], current_user, supabase)
+
+    role: str = current_user.get("role", "viewer")
+    pid = participant_id
+
+    def _safe(fn) -> list[dict[str, Any]]:
+        try:
+            return fn().data or []
+        except Exception as exc:  # a missing table/column shouldn't 500 the whole view
+            logger.warning("Consolidated view sub-query failed for %s: %s", pid, exc)
+            return []
+
+    flights = _safe(lambda: supabase.table("flights").select("*").eq("participant_id", pid).execute())
+    transfers = _safe(lambda: supabase.table("transfers").select("*").eq("participant_id", pid).execute())
+    hotel_nights = _safe(
+        lambda: supabase.table("hotel_nights").select("*, hotels(name, city)").eq("participant_id", pid).execute()
+    )
+    activities = _safe(
+        lambda: supabase.table("participant_activities").select("*, activities(name)").eq("participant_id", pid).execute()
+    )
+
+    source_records: list[dict[str, Any]] = []
+    if role in ("admin", "pm"):
+        source_records = _safe(
+            lambda: supabase.table("source_records")
+            .select("id, file_id, normalized_data, raw_data, uploaded_files(source_type, original_filename)")
+            .eq("participant_id", pid)
+            .execute()
+        )
+
+    return {
+        "flights": flights,
+        "transfers": transfers,
+        "hotel_nights": hotel_nights,
+        "activities": activities,
+        "source_records": source_records,
+    }
+
+
+# ---------------------------------------------------------------------------
 # PATCH /api/participants/{participant_id}
 # ---------------------------------------------------------------------------
 

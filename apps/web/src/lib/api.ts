@@ -463,6 +463,16 @@ export const api = {
       return mapParticipant(p)
     },
 
+    async getConsolidated(participantId: string): Promise<{
+      flights: any[]
+      transfers: any[]
+      hotel_nights: any[]
+      activities: any[]
+      source_records: any[]
+    }> {
+      return request(`/api/participants/${participantId}/consolidated`)
+    },
+
     async update(participantId: string, update: ParticipantUpdate): Promise<Participant> {
       const p = await request<any>(`/api/participants/${participantId}`, {
         method: 'PATCH',
