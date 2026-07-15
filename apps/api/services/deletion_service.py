@@ -146,6 +146,35 @@ def delete_event(supabase: Client, event_id: str) -> None:
     logger.info("Deleted event %s and all dependent data", eid)
 
 
+def _null_participant_source_refs_for(supabase: Client, source_ids: list[str]) -> None:
+    """Null participants.registration_source_id / fcm_source_id pointing at *source_ids*."""
+    for i in range(0, len(source_ids), 100):
+        chunk = source_ids[i : i + 100]
+        supabase.table("participants").update({"registration_source_id": None}).in_("registration_source_id", chunk).execute()
+        supabase.table("participants").update({"fcm_source_id": None}).in_("fcm_source_id", chunk).execute()
+
+
+def delete_file_cascade(supabase: Client, file_id: str) -> None:
+    """
+    Delete an uploaded file and its source_records robustly, handling the same
+    pitfalls as event deletion: PostgREST's 1000-row cap (paginate ids), the
+    circular participants<->source_records FK (null the participant links first),
+    exceptions referencing the records, and statement timeouts (chunk deletes).
+    """
+    fid = str(file_id)
+    source_ids = _ids(supabase, "source_records", "file_id", fid)
+    logger.info("Deleting file %s with %d source_records", fid, len(source_ids))
+
+    # 1. Break participant -> source_records references
+    _null_participant_source_refs_for(supabase, source_ids)
+    # 2. Exceptions referencing these source records
+    _delete_in(supabase, "exceptions", "source_record_id", source_ids, chunk_size=500)
+    # 3. Source records themselves (chunked by id to stay under the statement timeout)
+    _delete_in(supabase, "source_records", "id", source_ids, chunk_size=100)
+    # 4. The uploaded_files row
+    supabase.table("uploaded_files").delete().eq("id", fid).execute()
+
+
 def delete_project(supabase: Client, project_id: str) -> None:
     """Delete a project and every event (with all their data) under it."""
     pid = str(project_id)
