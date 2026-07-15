@@ -20,16 +20,34 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-# Canonical target field names that the rest of the system expects
+# Canonical target field names that the rest of the system expects.
+# Extended to mirror the client LivaNova master file (feedback: mapping must be
+# modeled on the reference master list).
 CANONICAL_FIELDS = {
     "id", "first_name", "last_name", "email", "company", "phone",
     "nationality", "dietary_requirements",
+    # Profile (from the master file)
+    "attendee_category", "job_title", "region", "function", "language",
+    "badge_name", "country",
+    # ID / travel document
+    "date_of_birth", "passport_number", "passport_expiry",
+    # Dietary detail (distinct from dietary_requirements)
+    "food_allergy_info",
+    # Flights
     "departure_date", "return_date", "flight_number",
     "departure_airport", "arrival_airport", "departure_time", "arrival_time",
+    "arrival_date", "departure_city", "departure_country",
+    "arrival_city", "arrival_country", "traveler_name", "flight_domestic_intl",
     "pnr_code", "airline", "baggage_info",
+    # Hotels
     "hotel_name", "check_in_date", "check_out_date", "room_type",
+    "early_checkin", "late_checkout",
+    # Transfers
     "transfer_type", "pickup_location", "dropoff_location", "pickup_time", "vehicle_type",
+    # Activities
     "activity_name",
+    # Logistics flags
+    "fast_track", "extra_meetings", "headphones_translation",
 }
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -230,7 +248,7 @@ SYNONYMS: dict[str, list[str]] = {
     "departure_date": ["departuredate", "datedepart", "outbounddate", "flightdepdate"],
     "return_date": ["returndate", "dateretour", "inbounddate", "flightretdate"],
     "flight_number": ["flightnumber", "numvol", "novol", "flightno", "numdevol", "flightcode"],
-    "departure_airport": ["departureairport", "aeroportdepart", "depapt", "depairp", "origairport"],
+    "departure_airport": ["departureairport", "aeroportdepart", "depapt", "depairp", "origairport", "airportofdeparture"],
     "arrival_airport": ["arrivalairport", "aeroportarrivee", "arrapt", "arrairp", "destairport"],
     "departure_time": ["departuretime", "heuredepart", "flightdeptime", "deptime", "datedepart"],
     "arrival_time": ["arrivaltime", "heurearrivee", "flightarrtime", "arrtime", "datearrivee", "retdate"],
@@ -239,7 +257,7 @@ SYNONYMS: dict[str, list[str]] = {
     "baggage_info": ["baggageinfo", "baggage", "luggage", "infosbagages", "bags"],
     
     # Hotels
-    "hotel_name": ["hotelname", "hotel", "nomhotel", "hebergement", "nomdebergement"],
+    "hotel_name": ["hotelname", "hotel", "nomhotel", "hebergement", "nomdebergement", "villahotel", "villa", "hotelvilla"],
     "check_in_date": ["checkindate", "checkin", "datecheckin", "dateentree", "entree", "arrivalhotel", "hotelarr"],
     "check_out_date": ["checkoutdate", "checkout", "datecheckout", "datesortie", "sortie", "departurehotel", "hoteldep"],
     "room_type": ["roomtype", "room", "chambre", "typechambre", "roomcategory"],
@@ -253,6 +271,41 @@ SYNONYMS: dict[str, list[str]] = {
     
     # Activities
     "activity_name": ["activityname", "activity", "activite", "nomactivite", "excursion", "loisir", "programme"],
+
+    # Profile (LivaNova master file)
+    "attendee_category": ["attendeecategory", "category", "categorie", "typeparticipant", "participanttype", "attendeetype"],
+    "job_title": ["jobtitle", "title", "titre", "poste", "position", "fonctionposte"],
+    "region": ["region", "zone", "area", "geo", "geographie"],
+    "function": ["function", "fonction", "role", "department", "departement", "pleasespecifyyourfunction"],
+    "language": ["language", "langue", "lang", "preferredlanguage", "languepreferee"],
+    "badge_name": ["nameonbadge", "badgename", "nombadge", "nomsurbadge", "badge", "nomsurlebadge"],
+    "country": ["country", "countryofresidence", "paysresidence", "paysderesidence"],
+
+    # ID / travel document
+    "date_of_birth": ["dateofbirth", "datedenaissance", "birthdate", "dob", "naissance"],
+    "passport_number": ["passportnumber", "passport", "numeropasseport", "passeport", "nopasseport", "passportno"],
+    "passport_expiry": ["expirydateofpassport", "passportexpiry", "expirationpasseport", "passeportvalidite", "validuntil", "expirydate", "dateexpirationpasseport"],
+
+    # Dietary detail
+    "food_allergy_info": ["foodallergyinformation", "foodallergyinfo", "foodallergy", "allergyinformation", "allergies", "allergie", "allergieinfo", "foodrestrictions"],
+
+    # Flights (extra)
+    "arrival_date": ["arrivaldate", "datearrivee", "dad", "arrivaldate2", "arrdate", "arrivaldatedad"],
+    "departure_city": ["departurecity", "villedepart", "citydeparture", "depcity"],
+    "departure_country": ["departurecountry", "paysdepart", "depcountry"],
+    "arrival_city": ["arrivalcity", "villearrivee", "arrcity", "destinationcity"],
+    "arrival_country": ["arrivalcountry", "paysarrivee", "country2", "arrcountry", "destinationcountry"],
+    "traveler_name": ["traveler", "traveller", "nomvoyageur", "passengername", "nomsurbillet"],
+    "flight_domestic_intl": ["dominternational", "domintl", "domesticinternational", "domesticintl", "domestic", "international"],
+
+    # Hotels (extra)
+    "early_checkin": ["earlycheckin", "earlycheckintime", "earlycheckintimeguaranteed", "checkinanticipe"],
+    "late_checkout": ["latecheckout", "latecheckouttime", "latecheckouttimeguaranteed", "checkouttardif"],
+
+    # Logistics flags
+    "fast_track": ["fasttrack", "fasttrackarrivals", "fasttrackarrival", "coupefile"],
+    "extra_meetings": ["extrameetings", "extrameeting", "reunionssupplementaires", "meetings"],
+    "headphones_translation": ["headphonestranslation", "headphones", "casquetraduction", "traduction", "casque"],
 }
 
 
@@ -331,7 +384,8 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         elif is_date:
             date_fields = {
                 "check_in_date", "check_out_date", "departure_date", "return_date",
-                "departure_time", "arrival_time", "pickup_time"
+                "departure_time", "arrival_time", "pickup_time",
+                "arrival_date", "date_of_birth", "passport_expiry",
             }
             for f in field_scores:
                 if f in date_fields:

@@ -125,6 +125,30 @@ const CANONICAL_FIELD_LABELS: Record<string, string> = {
   pickup_time: 'Heure de Prise en charge',
   vehicle_type: 'Type de Véhicule',
   activity_name: 'Nom de l\'Activité',
+  // Master-file aligned fields
+  attendee_category: 'Catégorie participant',
+  job_title: 'Fonction / Poste (Job Title)',
+  region: 'Région',
+  function: 'Fonction',
+  language: 'Langue',
+  badge_name: 'Nom sur badge',
+  country: 'Pays',
+  date_of_birth: 'Date de naissance',
+  passport_number: 'Numéro de passeport',
+  passport_expiry: 'Expiration passeport',
+  food_allergy_info: 'Allergies / Restrictions alimentaires',
+  arrival_date: 'Date Arrivée Vol',
+  departure_city: 'Ville de départ',
+  departure_country: 'Pays de départ',
+  arrival_city: 'Ville d\'arrivée',
+  arrival_country: 'Pays d\'arrivée',
+  traveler_name: 'Nom voyageur (billet)',
+  flight_domestic_intl: 'Domestique / International',
+  early_checkin: 'Check-in anticipé',
+  late_checkout: 'Check-out tardif',
+  fast_track: 'Fast Track',
+  extra_meetings: 'Réunions supplémentaires',
+  headphones_translation: 'Casque traduction',
 }
 
 export default function SourcesPage() {
@@ -194,7 +218,11 @@ export default function SourcesPage() {
     const suggestion = uploadResponse?.mapping_suggestions?.[col]
     const suggestedField = suggestion?.suggested_field || null
     const alternatives = suggestion?.alternatives || []
-    const currentTypeFields = (MAPPING_FIELDS_BY_TYPE[uploadingType || 'registration'] || []).map(f => f.field)
+    // Offer every canonical field (the master file is rich and may be imported
+    // under any source type); prioritise the current type's fields first.
+    const typeFields = (MAPPING_FIELDS_BY_TYPE[uploadingType || 'registration'] || []).map(f => f.field)
+    const allFields = Object.keys(CANONICAL_FIELD_LABELS)
+    const currentTypeFields = [...typeFields, ...allFields.filter(f => !typeFields.includes(f))]
 
     const validSuggestedField = currentTypeFields.includes(suggestedField || '') ? suggestedField : null
     const validAlternatives = alternatives.filter(f => currentTypeFields.includes(f))
