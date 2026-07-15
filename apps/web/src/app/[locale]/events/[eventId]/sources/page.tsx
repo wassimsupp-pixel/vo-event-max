@@ -279,6 +279,29 @@ export default function SourcesPage() {
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Importez et configurez vos fichiers sources</p>
         </div>
 
+        {/* Prominent call-to-action for the import step (§8) */}
+        {!isMappingMode && (
+          <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-[var(--color-accent)]/30 bg-[var(--color-accent-light)] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <Upload className="h-5 w-5 flex-shrink-0 text-[var(--color-accent)]" />
+              <div>
+                <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                  Importez vos fichiers sources ({new Set(importedFiles.map((f) => f.source_type)).size}/{SOURCE_TYPES.length})
+                </p>
+                <p className="text-xs text-[var(--color-text-secondary)]">
+                  Ajoutez les exports (inscriptions, vols, hôtels, transferts, activités), puis lancez la consolidation.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => document.getElementById('import-zone')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="inline-flex items-center gap-2 self-start rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-[var(--color-accent)]/90 sm:self-auto"
+            >
+              <Upload className="h-4 w-4" /> Importer un fichier
+            </button>
+          </div>
+        )}
+
         {isMappingMode && uploadResponse ? (
           <Card className="p-6 border-[var(--color-border)] shadow-[var(--shadow-card)] space-y-6">
             <div className="flex items-center justify-between border-b pb-4">
@@ -424,7 +447,7 @@ export default function SourcesPage() {
         ) : (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             {/* Import options */}
-            <div className="col-span-12 lg:col-span-2 space-y-6">
+            <div id="import-zone" className="col-span-12 lg:col-span-2 space-y-6 scroll-mt-24">
               <Card className="p-6 border-[var(--color-border)] shadow-[var(--shadow-card)]">
                 <h3 className="text-base font-semibold text-[var(--color-text-primary)] mb-4">
                   Importer une nouvelle source de données

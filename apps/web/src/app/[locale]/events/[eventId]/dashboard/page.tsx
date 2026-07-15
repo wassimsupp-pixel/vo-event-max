@@ -292,7 +292,19 @@ export default function DashboardPage() {
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
                   {t('breakdown')}
                 </h3>
-                <DistributionChart data={distributionData} />
+                <DistributionChart
+                  data={distributionData}
+                  onItemClick={(name) => {
+                    const routes: Record<string, string> = {
+                      'Vols': 'flights',
+                      'Hôtels': 'hotels',
+                      'Transferts': 'transfers',
+                      'Activités': 'activities',
+                      'Comms': 'communications',
+                    }
+                    const seg = routes[name]
+                    if (seg) router.push(`/${locale}/events/${eventId}/${seg}`)
+                  }} />
               </div>
             </div>
 

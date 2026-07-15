@@ -12,9 +12,11 @@ const defaultData = [
 
 interface DistributionChartProps {
   data?: Array<{ name: string; value: number; color: string }>
+  /** When provided, each legend row becomes clickable and calls this with the item name. */
+  onItemClick?: (name: string) => void
 }
 
-export function DistributionChart({ data: customData }: DistributionChartProps) {
+export function DistributionChart({ data: customData, onItemClick }: DistributionChartProps) {
   const activeData = customData || defaultData
 
   return (
@@ -52,17 +54,26 @@ export function DistributionChart({ data: customData }: DistributionChartProps) 
       {/* Legend */}
       <ul className="mt-2 grid grid-cols-1 gap-1">
         {activeData.map((item) => (
-          <li key={item.name} className="flex items-center justify-between text-xs">
-            <div className="flex items-center gap-1.5">
-              <span
-                className="h-2 w-2 flex-shrink-0 rounded-full"
-                style={{ background: item.color }}
-              />
-              <span className="text-[var(--color-text-secondary)]">{item.name}</span>
-            </div>
-            <span className="font-semibold tabular-nums text-[var(--color-text-primary)]">
-              {item.value}%
-            </span>
+          <li key={item.name}>
+            <button
+              type="button"
+              onClick={onItemClick ? () => onItemClick(item.name) : undefined}
+              className={
+                'flex w-full items-center justify-between rounded px-1.5 py-0.5 text-xs transition-colors ' +
+                (onItemClick ? 'cursor-pointer hover:bg-[var(--color-bg-subtle)]' : 'cursor-default')
+              }
+            >
+              <span className="flex items-center gap-1.5">
+                <span
+                  className="h-2 w-2 flex-shrink-0 rounded-full"
+                  style={{ background: item.color }}
+                />
+                <span className="text-[var(--color-text-secondary)]">{item.name}</span>
+              </span>
+              <span className="font-semibold tabular-nums text-[var(--color-text-primary)]">
+                {item.value}%
+              </span>
+            </button>
           </li>
         ))}
       </ul>
