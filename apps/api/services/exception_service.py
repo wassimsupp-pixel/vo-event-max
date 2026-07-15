@@ -11,7 +11,9 @@ Detectable exception types:
   INVALID_FORMAT          — unparseable date or invalid email format
   MISSING_REQUIRED_FIELD  — first_name, last_name, or email missing after normalisation
   DATA_CONFLICT           — conflicting values between registration and FCM sources
-  FLIGHT_WITHOUT_HOTEL    — participant has a flight but no hotel assigned
+  PARTICIPANT_NO_HOTEL    — participant has no hotel information
+  PARTICIPANT_NO_TRANSFER — participant has no transfer information
+  PARTICIPANT_NO_DIETARY  — participant has no dietary-requirements information
   MISSING_CONTACT         — participant has neither an email nor a phone number
 """
 
@@ -97,7 +99,14 @@ def detect_all(
     _detect_data_conflicts(event_id, run_id, supabase, exceptions_to_insert)
     _detect_possible_duplicates(event_id, run_id, supabase, exceptions_to_insert)
     _detect_name_mismatches_between_sources(event_id, run_id, supabase, exceptions_to_insert)
-    _detect_flight_without_hotel(event_id, run_id, supabase, exceptions_to_insert)
+    # Per-participant "missing info in the master list" alerts (feedback §14)
+    _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
+                            flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
+                            label="hotel", severity="warning")
+    _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
+                            flag="has_transfer", exception_type="PARTICIPANT_NO_TRANSFER",
+                            label="transfer", severity="info")
+    _detect_missing_dietary(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
 
     total = len(exceptions_to_insert)
@@ -602,24 +611,32 @@ def _detect_name_mismatches_between_sources(event_id: str, run_id: str, supabase
     return count
 
 
-def _detect_flight_without_hotel(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+def _detect_missing_service(
+    event_id: str,
+    run_id: str,
+    supabase: Client,
+    exceptions_list: list[dict],
+    *,
+    flag: str,
+    exception_type: str,
+    label: str,
+    severity: str = "warning",
+) -> int:
     """
-    FLIGHT_WITHOUT_HOTEL — participant has a flight but no hotel assigned.
-
-    A logistics gap for a residential event: someone is flying in but has no
-    accommodation booked.
+    Generic per-participant "missing info" detector for a boolean service flag
+    (``has_hotel``, ``has_transfer`` …). Flags every participant where the flag
+    is False — i.e. that master-list line is missing this information.
     """
     try:
         result = (
             supabase.table("participants")
             .select("id, first_name, last_name, email")
             .eq("event_id", event_id)
-            .eq("has_flight", True)
-            .eq("has_hotel", False)
+            .eq(flag, False)
             .execute()
         )
     except Exception as exc:
-        logger.error("FLIGHT_WITHOUT_HOTEL query failed: %s", exc)
+        logger.error("%s query failed: %s", exception_type, exc)
         return 0
 
     count = 0
@@ -629,16 +646,55 @@ def _detect_flight_without_hotel(event_id: str, run_id: str, supabase: Client, e
             supabase=supabase,
             run_id=run_id,
             event_id=event_id,
-            exception_type="FLIGHT_WITHOUT_HOTEL",
-            severity="warning",
-            message=f"Participant '{name}' has a flight but no hotel assigned.",
+            exception_type=exception_type,
+            severity=severity,
+            message=f"Participant '{name}' has no {label} information.",
             participant_id=p["id"],
-            context_data={"participant_name": name, "email": p.get("email")},
+            context_data={"participant_name": name, "email": p.get("email"), "missing": label},
             exceptions_list=exceptions_list,
         )
         count += 1
 
-    logger.debug("FLIGHT_WITHOUT_HOTEL: %d exceptions", count)
+    logger.debug("%s: %d exceptions", exception_type, count)
+    return count
+
+
+def _detect_missing_dietary(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    PARTICIPANT_NO_DIETARY — participant has no dietary-requirements information
+    recorded in the master list.
+    """
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, dietary_requirements")
+            .eq("event_id", event_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("PARTICIPANT_NO_DIETARY query failed: %s", exc)
+        return 0
+
+    count = 0
+    for p in result.data or []:
+        val = (p.get("dietary_requirements") or "").strip()
+        if val:
+            continue
+        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+        _insert_exception(
+            supabase=supabase,
+            run_id=run_id,
+            event_id=event_id,
+            exception_type="PARTICIPANT_NO_DIETARY",
+            severity="info",
+            message=f"Participant '{name}' has no dietary-requirements information.",
+            participant_id=p["id"],
+            context_data={"participant_name": name, "email": p.get("email"), "missing": "dietary_requirements"},
+            exceptions_list=exceptions_list,
+        )
+        count += 1
+
+    logger.debug("PARTICIPANT_NO_DIETARY: %d exceptions", count)
     return count
 
 
