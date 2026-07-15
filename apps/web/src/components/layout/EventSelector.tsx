@@ -33,6 +33,11 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
 
+  // Deletion (inline confirmation) state
+  const [pendingDelete, setPendingDelete] = useState<{ kind: 'event' | 'project'; id: string; name: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+
   // Creation state
   const [isCreating, setIsCreating] = useState(false)
   const [creationMode, setCreationMode] = useState<'existing' | 'new'>('existing')
@@ -97,31 +102,33 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
     }
   }
 
-  const handleDeleteEvent = async (event: Event, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!window.confirm(t('confirmDeleteEvent', { name: event.name }))) return
+  // Inline confirmation flow (no native window.confirm, real error surfaced).
+  const performDelete = async () => {
+    if (!pendingDelete) return
+    setDeleting(true)
+    setActionError(null)
     try {
-      await api.events.delete(event.id)
-      const remaining = events.filter((x) => x.id !== event.id)
-      setEvents(remaining)
-      if (event.id === currentEventId) navigateAfterDeletion(remaining)
-    } catch {
-      alert(t('deleteError'))
-    }
-  }
-
-  const handleDeleteProject = async (project: Project, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!window.confirm(t('confirmDeleteProject', { name: project.name }))) return
-    try {
-      await api.projects.delete(project.id)
-      const deletedIds = new Set(events.filter((ev) => ev.project_id === project.id).map((ev) => ev.id))
-      const remaining = events.filter((ev) => ev.project_id !== project.id)
-      setProjects((prev) => prev.filter((p) => p.id !== project.id))
-      setEvents(remaining)
-      if (deletedIds.has(currentEventId)) navigateAfterDeletion(remaining)
-    } catch {
-      alert(t('deleteError'))
+      if (pendingDelete.kind === 'event') {
+        await api.events.delete(pendingDelete.id)
+        const remaining = events.filter((x) => x.id !== pendingDelete.id)
+        setEvents(remaining)
+        if (pendingDelete.id === currentEventId) navigateAfterDeletion(remaining)
+      } else {
+        await api.projects.delete(pendingDelete.id)
+        const deletedIds = new Set(
+          events.filter((ev) => ev.project_id === pendingDelete.id).map((ev) => ev.id)
+        )
+        const remaining = events.filter((ev) => ev.project_id !== pendingDelete.id)
+        setProjects((prev) => prev.filter((p) => p.id !== pendingDelete.id))
+        setEvents(remaining)
+        if (deletedIds.has(currentEventId)) navigateAfterDeletion(remaining)
+      }
+      setPendingDelete(null)
+    } catch (err) {
+      console.error('Delete failed:', err)
+      setActionError(err instanceof Error ? err.message : t('deleteError'))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -227,6 +234,37 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
           >
             {!isCreating ? (
               <>
+                {pendingDelete && (
+                  <div className="border-b border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] p-3 space-y-2">
+                    <p className="text-xs font-medium text-[var(--color-text-primary)]">
+                      {pendingDelete.kind === 'event'
+                        ? t('confirmDeleteEvent', { name: pendingDelete.name })
+                        : t('confirmDeleteProject', { name: pendingDelete.name })}
+                    </p>
+                    {actionError && (
+                      <p className="text-xs font-semibold text-[var(--color-danger)] break-words">{actionError}</p>
+                    )}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => { setPendingDelete(null); setActionError(null) }}
+                        disabled={deleting}
+                        className="rounded px-2.5 py-1 text-xs font-semibold text-[var(--color-text-secondary)] hover:bg-white/70 transition-colors disabled:opacity-50"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="button"
+                        onClick={performDelete}
+                        disabled={deleting}
+                        className="flex items-center gap-1 rounded bg-[var(--color-danger)] px-3 py-1 text-xs font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60"
+                      >
+                        {deleting && <Loader2 className="h-3 w-3 animate-spin" />}
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="border-b border-[var(--color-border)] px-3 py-2 bg-slate-50 flex items-center justify-between">
                   <span className="text-xs font-bold uppercase tracking-wider text-[var(--color-text-secondary)]">
                     {t('projectsAndEvents')}
@@ -265,10 +303,11 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                             <Briefcase className="h-3.5 w-3.5 text-[var(--color-accent)] flex-shrink-0" />
                             <span className="truncate flex-1">{project.client_name} — {project.name}</span>
                             <button
-                              onClick={(e) => handleDeleteProject(project, e)}
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); setActionError(null); setPendingDelete({ kind: 'project', id: project.id, name: project.name }) }}
                               title={t('deleteProject')}
                               aria-label={t('deleteProject')}
-                              className="flex-shrink-0 rounded p-1 text-[var(--color-text-secondary)] opacity-0 group-hover/proj:opacity-100 hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-all"
+                              className="flex-shrink-0 rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-colors"
                             >
                               <Trash2 className="h-3 w-3" />
                             </button>
@@ -299,10 +338,11 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                                     )}
                                   </button>
                                   <button
-                                    onClick={(e) => handleDeleteEvent(event, e)}
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); setActionError(null); setPendingDelete({ kind: 'event', id: event.id, name: event.name }) }}
                                     title={t('deleteEvent')}
                                     aria-label={t('deleteEvent')}
-                                    className="flex-shrink-0 rounded-md p-1.5 text-[var(--color-text-secondary)] opacity-0 group-hover/evt:opacity-100 hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-all"
+                                    className="flex-shrink-0 rounded-md p-1.5 text-[var(--color-text-secondary)] hover:bg-[var(--color-danger-light)] hover:text-[var(--color-danger)] transition-colors"
                                   >
                                     <Trash2 className="h-3.5 w-3.5" />
                                   </button>

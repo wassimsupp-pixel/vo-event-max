@@ -27,7 +27,7 @@
     "createNew": "Créer un nouveau projet / événement",
     "deleteEvent": "Supprimer l'événement",
     "deleteProject": "Supprimer le projet",
-    "confirmDeleteEvent": "Supprimer l'événement « {name} » et toutes ses données ? Cette action est irréversible.",
+    "confirmDeleteEvent": "Supprimer cet événement « {name} » et toutes ses données ? Cette action est irréversible.",
     "confirmDeleteProject": "Supprimer le projet « {name} » et TOUS ses événements ? Cette action est irréversible.",
     "deleteError": "Échec de la suppression."
   },
