@@ -46,6 +46,9 @@ export interface ParticipantListParams {
   search?: string
   status?: ParticipantStatus
   confidence?: ConfidenceLevel
+  has_flight?: boolean
+  has_hotel?: boolean
+  has_transfer?: boolean
 }
 
 export interface PaginatedParticipants {
@@ -294,7 +297,7 @@ async function request<T>(
   return res.json()
 }
 
-function qs(params: Record<string, string | number | undefined>): string {
+function qs(params: Record<string, string | number | boolean | undefined>): string {
   const q = Object.entries(params)
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`)
@@ -430,6 +433,9 @@ export const api = {
         search: params?.search,
         status: params?.status,
         confidence: params?.confidence,
+        has_flight: params?.has_flight,
+        has_hotel: params?.has_hotel,
+        has_transfer: params?.has_transfer,
       })
       const resp = await request<{
         items: any[]

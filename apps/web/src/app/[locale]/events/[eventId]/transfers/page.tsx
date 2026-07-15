@@ -73,11 +73,16 @@ export default function TransfersPage() {
     }
   }
 
-  const filteredTransfers = transfers.filter(t => 
+  const filteredTransfers = transfers.filter(t =>
     (t.participant_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     t.pickup_location.toLowerCase().includes(searchTerm.toLowerCase()) ||
     t.dropoff_location.toLowerCase().includes(searchTerm.toLowerCase())
   )
+
+  // Clicking a KPI scrolls to the detailed list of concerned participants (§12)
+  const scrollToDetailList = () => {
+    document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <AppLayout eventId={eventId} locale={locale}>
@@ -109,18 +114,21 @@ export default function TransfersPage() {
             value={transfers.length}
             icon={<Truck className="h-5 w-5" />}
             accentColor="var(--color-accent)"
+            onClick={scrollToDetailList}
           />
           <KPICard
             label={t('kpiGrouped')}
             value={new Set(transfers.map(t => t.pickup_time)).size}
             icon={<Compass className="h-5 w-5" />}
             accentColor="var(--color-success)"
+            onClick={scrollToDetailList}
           />
           <KPICard
             label={t('kpiShuttles')}
             value={transfers.length > 0 ? (transfers.length / new Set(transfers.map(t => t.pickup_time)).size).toFixed(1) : 0}
             icon={<Users className="h-5 w-5" />}
             accentColor="var(--color-cta)"
+            onClick={scrollToDetailList}
           />
         </div>
 
@@ -188,7 +196,7 @@ export default function TransfersPage() {
         </div>
 
         {/* Search */}
-        <div className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm">
+        <div id="detail-list" className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm scroll-mt-24">
           <Search className="h-4 w-4 text-[var(--color-text-secondary)]" />
           <input
             type="text"

@@ -160,18 +160,21 @@ export default function ActivitiesPage() {
             value={activities.length}
             icon={<Compass className="h-5 w-5" />}
             accentColor="var(--color-accent)"
+            onClick={() => document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
           <KPICard
             label={t('kpiRegistered')}
             value={activities.reduce((acc, a) => acc + a.registrations_count, 0)}
             icon={<Users className="h-5 w-5" />}
             accentColor="var(--color-success)"
+            onClick={() => document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
           <KPICard
             label={t('kpiCapacity')}
             value={activities.reduce((acc, a) => acc + (a.capacity || 0), 0)}
             icon={<Calendar className="h-5 w-5" />}
             accentColor="var(--color-cta)"
+            onClick={() => document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
         </div>
 
@@ -253,7 +256,7 @@ export default function ActivitiesPage() {
           </div>
 
           {/* Activities List */}
-          <div className="rounded-[var(--radius-card)] border bg-white shadow-sm overflow-hidden lg:col-span-2">
+          <div id="detail-list" className="rounded-[var(--radius-card)] border bg-white shadow-sm overflow-hidden lg:col-span-2 scroll-mt-24">
             <div className="p-6 border-b">
               <h2 className="text-lg font-bold text-[var(--color-text-primary)]">{t('activitiesListTitle')}</h2>
             </div>

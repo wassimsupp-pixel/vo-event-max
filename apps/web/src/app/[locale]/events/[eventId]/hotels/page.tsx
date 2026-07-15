@@ -117,10 +117,15 @@ export default function HotelsPage() {
     }
   }
 
-  const filteredRooming = roomingList.filter(r => 
+  const filteredRooming = roomingList.filter(r =>
     (r.participant_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (r.hotel_name || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
+
+  // Clicking a KPI scrolls to the detailed list of concerned participants (§11)
+  const scrollToDetailList = () => {
+    document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   return (
     <AppLayout eventId={eventId} locale={locale}>
@@ -145,18 +150,21 @@ export default function HotelsPage() {
             value={hotels.length}
             icon={<Hotel className="h-5 w-5" />}
             accentColor="var(--color-accent)"
+            onClick={scrollToDetailList}
           />
           <KPICard
             label={t('kpiNights')}
             value={roomingList.length}
             icon={<Bed className="h-5 w-5" />}
             accentColor="var(--color-success)"
+            onClick={scrollToDetailList}
           />
           <KPICard
             label={t('kpiParticipants')}
             value={new Set(roomingList.map(r => r.participant_id)).size}
             icon={<Calendar className="h-5 w-5" />}
             accentColor="var(--color-cta)"
+            onClick={scrollToDetailList}
           />
         </div>
 
@@ -283,7 +291,7 @@ export default function HotelsPage() {
         </div>
 
         {/* Rooming list table */}
-        <div className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm">
+        <div id="detail-list" className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm scroll-mt-24">
           <Search className="h-4 w-4 text-[var(--color-text-secondary)]" />
           <input
             type="text"

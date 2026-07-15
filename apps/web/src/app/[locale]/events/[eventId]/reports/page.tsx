@@ -86,24 +86,28 @@ export default function ReportsPage() {
               value={summary.total_registered}
               icon={<Users className="h-5 w-5" />}
               accentColor="var(--color-accent)"
+              href={`/${locale}/events/${eventId}/master-list`}
             />
             <KPICard
               label={t('kpiNoFlight')}
               value={summary.missing_flight}
               icon={<Plane className="h-5 w-5" />}
               accentColor="var(--color-danger)"
+              href={`/${locale}/events/${eventId}/master-list?missing=flight`}
             />
             <KPICard
               label={t('kpiNoHotel')}
               value={summary.missing_hotel}
               icon={<Hotel className="h-5 w-5" />}
               accentColor="var(--color-warning)"
+              href={`/${locale}/events/${eventId}/master-list?missing=hotel`}
             />
             <KPICard
               label={t('kpiNoTransfer')}
               value={summary.missing_transfer}
               icon={<Truck className="h-5 w-5" />}
               accentColor="var(--color-cta)"
+              href={`/${locale}/events/${eventId}/master-list?missing=transfer`}
             />
           </div>
         )}

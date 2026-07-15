@@ -31,6 +31,7 @@ export default function FlightsPage() {
   const [extracting, setExtracting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'cancelled'>('all')
 
   const fetchFlights = async () => {
     try {
@@ -63,11 +64,15 @@ export default function FlightsPage() {
     }
   }
 
-  const filteredFlights = flights.filter(f => 
-    (f.participant_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-    f.flight_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (f.pnr_code || '').toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const filteredFlights = flights.filter(f => {
+    const q = searchTerm.toLowerCase()
+    const matchesSearch =
+      (f.participant_name || '').toLowerCase().includes(q) ||
+      f.flight_number.toLowerCase().includes(q) ||
+      (f.pnr_code || '').toLowerCase().includes(q)
+    const matchesStatus = statusFilter === 'all' ? true : f.status === statusFilter
+    return matchesSearch && matchesStatus
+  })
 
   const missingFlightsCount = flights.filter(f => f.status === 'cancelled').length
 
@@ -113,6 +118,8 @@ export default function FlightsPage() {
             value={flights.length}
             icon={<Plane className="h-5 w-5" />}
             accentColor="var(--color-accent)"
+            onClick={() => setStatusFilter('all')}
+            active={statusFilter === 'all'}
           />
           <KPICard
             label={t('kpiAirports')}
@@ -125,6 +132,8 @@ export default function FlightsPage() {
             value={missingFlightsCount}
             icon={<AlertCircle className="h-5 w-5" />}
             accentColor="var(--color-danger)"
+            onClick={() => setStatusFilter('cancelled')}
+            active={statusFilter === 'cancelled'}
           />
         </div>
 

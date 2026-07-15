@@ -13,6 +13,10 @@ interface KPICardProps {
   className?: string
   /** When provided, the whole card becomes a link to this route. */
   href?: string
+  /** When provided (and no href), the card becomes a clickable filter button. */
+  onClick?: () => void
+  /** Highlight the card as the currently-active filter. */
+  active?: boolean
 }
 
 export function KPICard({
@@ -24,6 +28,8 @@ export function KPICard({
   accentColor = 'var(--color-accent)',
   className,
   href,
+  onClick,
+  active,
 }: KPICardProps) {
   const DeltaIcon =
     deltaPositive === true
@@ -39,12 +45,15 @@ export function KPICard({
         ? 'text-[var(--color-danger)]'
         : 'text-[var(--color-text-secondary)]'
 
+  const interactive = !!href || !!onClick
+
   const content = (
     <div
       className={cn(
         'relative h-full overflow-hidden rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5',
         'shadow-[var(--shadow-card)] transition-all hover:shadow-md',
-        href && 'cursor-pointer hover:border-[var(--color-accent)]',
+        interactive && 'cursor-pointer hover:border-[var(--color-accent)]',
+        active && 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]',
         className
       )}
       style={{ borderLeft: `3px solid ${accentColor}` }}
@@ -84,6 +93,14 @@ export function KPICard({
       <Link href={href} className="block h-full">
         {content}
       </Link>
+    )
+  }
+
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className="block h-full w-full text-left">
+        {content}
+      </button>
     )
   }
 

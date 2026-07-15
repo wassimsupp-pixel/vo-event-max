@@ -79,6 +79,7 @@ async def list_participants(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by completeness_status: complete | incomplete | conflict"),
     has_flight: Optional[bool] = Query(None, description="Filter by flight status."),
     has_hotel: Optional[bool] = Query(None, description="Filter by hotel status."),
+    has_transfer: Optional[bool] = Query(None, description="Filter by transfer status."),
     search: Optional[str] = Query(None, description="Substring search on first_name, last_name, email, company, phone."),
     current_user: dict[str, Any] = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client),
@@ -111,6 +112,8 @@ async def list_participants(
         q = q.eq("has_flight", has_flight)
     if has_hotel is not None:
         q = q.eq("has_hotel", has_hotel)
+    if has_transfer is not None:
+        q = q.eq("has_transfer", has_transfer)
     if search:
         # Multi-column case-insensitive search: name, email, company and phone
         # (feedback §9 — search must not be limited to the email address).

@@ -23,6 +23,8 @@ export default function MasterListPage() {
 
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
+  // Drill-down from the Reports page: /master-list?missing=flight|hotel|transfer
+  const [missingFilter, setMissingFilter] = useState<'flight' | 'hotel' | 'transfer' | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -44,7 +46,13 @@ export default function MasterListPage() {
   // Also reset page when filter changes
   useEffect(() => {
     setPage(1)
-  }, [statusFilter])
+  }, [statusFilter, missingFilter])
+
+  // Read the ?missing= drill-down param once on mount
+  useEffect(() => {
+    const m = new URLSearchParams(window.location.search).get('missing')
+    if (m === 'flight' || m === 'hotel' || m === 'transfer') setMissingFilter(m)
+  }, [])
 
   const fetchParticipants = useCallback(async () => {
     setLoading(true)
@@ -55,6 +63,9 @@ export default function MasterListPage() {
         page_size: PER_PAGE,
         search: debouncedSearch || undefined,
         status: (statusFilter as ParticipantStatus) ?? undefined,
+        has_flight: missingFilter === 'flight' ? false : undefined,
+        has_hotel: missingFilter === 'hotel' ? false : undefined,
+        has_transfer: missingFilter === 'transfer' ? false : undefined,
       })
       setParticipants(result.items)
       setTotal(result.total)
@@ -65,7 +76,7 @@ export default function MasterListPage() {
     } finally {
       setLoading(false)
     }
-  }, [eventId, page, debouncedSearch, statusFilter])
+  }, [eventId, page, debouncedSearch, statusFilter, missingFilter])
 
   useEffect(() => {
     fetchParticipants()
@@ -176,6 +187,21 @@ export default function MasterListPage() {
             </Button>
           </div>
         </Card>
+
+        {/* Active drill-down filter banner */}
+        {missingFilter && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-light)] px-4 py-2.5 text-sm">
+            <span className="font-medium text-[var(--color-text-primary)]">
+              Filtre : participants {missingFilter === 'flight' ? 'sans vol' : missingFilter === 'hotel' ? 'sans hôtel' : 'sans transfert'} ({total})
+            </span>
+            <button
+              onClick={() => { setMissingFilter(null); window.history.replaceState({}, '', window.location.pathname) }}
+              className="text-xs font-semibold text-[var(--color-accent)] hover:underline"
+            >
+              Réinitialiser
+            </button>
+          </div>
+        )}
 
         {/* Error State */}
         {error && (
