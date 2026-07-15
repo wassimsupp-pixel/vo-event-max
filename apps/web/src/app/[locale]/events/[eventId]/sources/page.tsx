@@ -164,6 +164,8 @@ export default function SourcesPage() {
   const [isMappingMode, setIsMappingMode] = useState(false)
   const [uploadResponse, setUploadResponse] = useState<FileUploadResponse | null>(null)
   const [mapping, setMapping] = useState<Record<string, string>>({})
+  // Columns the user chose to map to a custom (non-predefined) field
+  const [customFields, setCustomFields] = useState<Record<string, boolean>>({})
 
   // Real file list state
   const [importedFiles, setImportedFiles] = useState<UploadedFile[]>([])
@@ -370,19 +372,22 @@ export default function SourcesPage() {
                             </span>
                           )}
                         </div>
-                        <div className="col-span-7">
+                        <div className="col-span-7 space-y-1.5">
                           <select
                             className="w-full text-xs rounded-md border border-[var(--color-border)] bg-white p-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
-                            value={mapping[col] || ''}
+                            value={customFields[col] ? '__custom__' : (mapping[col] || '')}
                             onChange={(e) => {
                               const val = e.target.value
+                              if (val === '__custom__') {
+                                setCustomFields(prev => ({ ...prev, [col]: true }))
+                                setMapping(prev => { const next = { ...prev }; delete next[col]; return next })
+                                return
+                              }
+                              setCustomFields(prev => ({ ...prev, [col]: false }))
                               setMapping(prev => {
                                 const next = { ...prev }
-                                if (val) {
-                                  next[col] = val
-                                } else {
-                                  delete next[col]
-                                }
+                                if (val) next[col] = val
+                                else delete next[col]
                                 return next
                               })
                             }}
@@ -411,7 +416,26 @@ export default function SourcesPage() {
                                 </option>
                               ))}
                             </optgroup>
+                            <option value="__custom__">➕ Champ personnalisé…</option>
                           </select>
+                          {customFields[col] && (
+                            <input
+                              type="text"
+                              autoFocus
+                              placeholder="Nom du champ personnalisé (ex. Numéro de commande)"
+                              value={mapping[col] || ''}
+                              onChange={(e) => {
+                                const v = e.target.value
+                                setMapping(prev => {
+                                  const next = { ...prev }
+                                  if (v.trim()) next[col] = v
+                                  else delete next[col]
+                                  return next
+                                })
+                              }}
+                              className="w-full text-xs rounded-md border border-[var(--color-accent)] bg-white p-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                            />
+                          )}
                         </div>
                       </div>
                     )

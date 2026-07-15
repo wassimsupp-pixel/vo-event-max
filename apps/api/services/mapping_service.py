@@ -71,7 +71,11 @@ def apply_mapping(raw_row: dict[str, Any], mapping: dict[str, str]) -> dict[str,
     """
     result: dict[str, Any] = {}
     for source_col, target_field in mapping.items():
-        if target_field in CANONICAL_FIELDS and source_col in raw_row:
+        # Accept canonical fields AND user-defined custom fields (any non-empty
+        # target). Custom fields are captured in source_records.normalized_data
+        # and shown on the participant fiche; they never become participant
+        # columns (the consolidation merge whitelists real columns).
+        if target_field and source_col in raw_row:
             result[target_field] = raw_row[source_col]
     return result
 
