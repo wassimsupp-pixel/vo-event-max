@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
+import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export default function LoginPage() {
@@ -84,7 +85,18 @@ export default function LoginPage() {
             }
           }
           
-          router.push(`/${userLang}/events/00000000-0000-0000-0000-000000000003/dashboard`)
+          // Redirect to the user's first real event (the previously hardcoded
+          // demo event no longer exists, which caused a broken page after login).
+          let target = `/${userLang}`
+          try {
+            const events = await api.events.list()
+            if (Array.isArray(events) && events.length > 0) {
+              target = `/${userLang}/events/${events[0].id}/dashboard`
+            }
+          } catch (evErr) {
+            console.warn('Failed to load events after login:', evErr)
+          }
+          router.push(target)
           router.refresh()
         }
       } catch {
