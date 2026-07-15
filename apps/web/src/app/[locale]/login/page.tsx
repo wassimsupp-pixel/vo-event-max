@@ -6,6 +6,7 @@ import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from 'lucide-rea
 import { createClient } from '@/lib/supabase'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { EventMaxLogo } from '@/components/ui/EventMaxLogo'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -116,15 +117,7 @@ export default function LoginPage() {
           {/* Header */}
           <div className="px-8 pb-4 pt-8 text-center">
             <div className="mb-4 flex flex-col items-center justify-center select-none">
-              {/*
-                TODO(P2.1): replace this wordmark with the official Event MAX logo
-                (same asset as Sidebar.tsx):
-                  <Image src="/event-max-logo.svg" alt="Event MAX" width={180} height={52} priority />
-              */}
-              <div className="flex items-baseline gap-1.5 text-[34px] font-black leading-none tracking-tight">
-                <span className="text-[var(--color-text-primary)]">Event</span>
-                <span className="text-[var(--color-accent)]">MAX</span>
-              </div>
+              <EventMaxLogo className="h-12 w-auto text-[var(--color-text-primary)]" />
               <div className="mt-3 flex items-center gap-2 text-[var(--color-text-secondary)]">
                 <div className="h-[24px] w-[34px] flex-shrink-0" aria-hidden>
                   <svg className="h-full w-full" viewBox="0 0 60 40">

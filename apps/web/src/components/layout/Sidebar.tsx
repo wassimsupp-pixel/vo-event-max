@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { createClient } from '@/lib/supabase'
+import { EventMaxLogo } from '@/components/ui/EventMaxLogo'
 
 interface NavItem {
   key: string
@@ -145,17 +146,8 @@ export function Sidebar({ eventId, locale }: SidebarProps) {
       style={{ boxShadow: 'var(--shadow-sidebar)' }}
     >
       {/* Logo — Event MAX (primary brand) */}
-      <div className="flex items-center border-b border-[var(--color-border)] px-6 py-6 select-none">
-        {/*
-          TODO(P2.1): replace this wordmark placeholder with the official Event MAX logo.
-          Drop the asset in apps/web/public/ (e.g. event-max-logo.svg) and swap this block for:
-            <Image src="/event-max-logo.svg" alt="Event MAX" width={150} height={44} priority />
-          (add `import Image from 'next/image'` at the top).
-        */}
-        <div className="flex items-baseline gap-1.5 text-[26px] font-black leading-none tracking-tight">
-          <span className="text-[var(--color-text-primary)]">Event</span>
-          <span className="text-[var(--color-accent)]">MAX</span>
-        </div>
+      <div className="flex items-center border-b border-[var(--color-border)] px-6 py-6 select-none text-[var(--color-text-primary)]">
+        <EventMaxLogo className="h-9 w-auto" />
       </div>
 
       {/* Navigation */}
