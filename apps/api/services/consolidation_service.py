@@ -266,6 +266,18 @@ def merge_participant_fields(
     return merged
 
 
+# Columns that actually exist on the participants table. normalized_data can
+# carry many extra master-file fields (attendee_category, passport_number, …)
+# which live in source_records — writing them to participants would fail with
+# "column does not exist", so updates are filtered to this whitelist.
+_PARTICIPANT_WRITABLE_FIELDS = {
+    "first_name", "last_name", "email", "company", "phone", "nationality",
+    "dietary_requirements", "completeness_status",
+    "has_flight", "has_hotel", "has_transfer", "has_activities",
+    "verification_note", "registration_source_id", "fcm_source_id",
+}
+
+
 # ---------------------------------------------------------------------------
 # Duplicate email detector
 # ---------------------------------------------------------------------------
@@ -452,9 +464,10 @@ async def run_consolidation(
                 merged = merge_participant_fields(existing, nd, locked)
                 merged["has_flight"] = existing.get("has_flight", False)
                 merged["registration_source_id"] = reg.source_record_id
-                for key in ["id", "created_at", "updated_at", "locked_fields", "event_id"]:
-                    merged.pop(key, None)
-                supabase.table("participants").update(merged).eq("id", existing["id"]).execute()
+                # Only write real participant columns — extra master-file fields
+                # stay in source_records (and show on the consolidated fiche).
+                update_payload = {k: v for k, v in merged.items() if k in _PARTICIPANT_WRITABLE_FIELDS}
+                supabase.table("participants").update(update_payload).eq("id", existing["id"]).execute()
                 participant_id = existing["id"]
                 stats["participants_updated"] += 1
             else:

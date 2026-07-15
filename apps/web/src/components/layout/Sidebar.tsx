@@ -37,7 +37,7 @@ function getNavItems(eventId: string, locale: string, userRole: string, exceptio
     { key: 'dashboard', href: `${base}/dashboard`, icon: LayoutDashboard },
     { key: 'masterList', href: `${base}/master-list`, icon: ListChecks },
     { key: 'sources', href: `${base}/sources`, icon: Database },
-    { key: 'participants', href: `/${locale}/participants`, icon: Users },
+    { key: 'participants', href: `${base}/participants`, icon: Users },
     { key: 'flights', href: `${base}/flights`, icon: Plane },
     { key: 'hotels', href: `${base}/hotels`, icon: Hotel },
     { key: 'activities', href: `${base}/activities`, icon: Sparkles },
