@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, require_role, verify_event_access
-from services import confirmation_service
+from services import confirmation_service, campaign_service
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,46 @@ class CommunicationUpdate(BaseModel):
     subject: Optional[str] = None
     body: Optional[str] = None
     status: Optional[str] = None
+
+
+class CampaignRequest(BaseModel):
+    mode: str = "template"          # 'template' (placeholders) or 'ai'
+    subject: str = ""
+    body: str = ""
+    instructions: str = ""          # used in 'ai' mode
+    send: bool = False              # False = generate/store only; True = deliver
+
+
+@router.post("/events/{event_id}/campaigns/preview")
+async def preview_campaign(
+    event_id: str,
+    payload: CampaignRequest,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """Preview a few personalized examples + recipient count (no send, no persist)."""
+    await verify_event_access(event_id, current_user, supabase)
+    return campaign_service.preview(
+        supabase, event_id, payload.mode, payload.subject, payload.body, payload.instructions
+    )
+
+
+@router.post("/events/{event_id}/campaigns/send")
+async def send_campaign(
+    event_id: str,
+    payload: CampaignRequest,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    Generate a personalized email per participant, store each in communications,
+    and (if payload.send) deliver via the connected mailbox.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+    return await campaign_service.run_campaign(
+        supabase, event_id, payload.mode, payload.subject, payload.body,
+        payload.instructions, payload.send, current_user["id"],
+    )
 
 
 @router.post("/events/{event_id}/participants/{participant_id}/confirmation/generate")

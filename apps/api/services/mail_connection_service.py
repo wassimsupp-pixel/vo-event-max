@@ -48,9 +48,9 @@ GMAIL = "gmail"
 OUTLOOK = "outlook"
 SUPPORTED_PROVIDERS = (GMAIL, OUTLOOK)
 
-# OAuth scopes: read-only mailbox access + offline access for a refresh token.
-_GMAIL_SCOPES = "https://www.googleapis.com/auth/gmail.readonly"
-_OUTLOOK_SCOPES = "offline_access Mail.Read"
+# OAuth scopes: read inbox + send, plus offline access for a refresh token.
+_GMAIL_SCOPES = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
+_OUTLOOK_SCOPES = "offline_access Mail.Read Mail.Send"
 
 # ---------------------------------------------------------------------------
 # In-memory token store  (see module warning)
@@ -332,6 +332,51 @@ async def sync_inbox(provider: str, event_id: UUID, supabase: Client) -> dict[st
             logger.warning("Failed to analyze message from %s: %s", msg.get("sender"), exc)
 
     return {"synced": synced, "provider": provider}
+
+
+def connected_provider(event_id: UUID) -> Optional[str]:
+    """Return a connected provider for this event, or None."""
+    for p in SUPPORTED_PROVIDERS:
+        if (str(event_id), p) in _token_store:
+            return p
+    return None
+
+
+def send_email(provider: str, event_id: UUID, to: str, subject: str, body: str) -> None:
+    """
+    Send a plain-text email via the connected mailbox (sync HTTP — call from a
+    thread in async contexts). Requires the send scope (reconnect if added later).
+    """
+    from email.message import EmailMessage
+
+    access_token = _access_token(str(event_id), provider)
+    if provider == GMAIL:
+        msg = EmailMessage()
+        msg["To"] = to
+        msg["Subject"] = subject
+        msg.set_content(body)
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+        resp = httpx.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"raw": raw},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+    else:  # OUTLOOK
+        resp = httpx.post(
+            "https://graph.microsoft.com/v1.0/me/sendMail",
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={
+                "message": {
+                    "subject": subject,
+                    "body": {"contentType": "Text", "content": body},
+                    "toRecipients": [{"emailAddress": {"address": to}}],
+                }
+            },
+            timeout=30.0,
+        )
+        resp.raise_for_status()
 
 
 def disconnect(event_id: UUID, provider: str) -> None:

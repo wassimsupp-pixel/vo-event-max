@@ -686,6 +686,19 @@ export const api = {
     },
   },
 
+  campaigns: {
+    async preview(eventId: string, payload: { mode: string; subject: string; body: string; instructions: string }): Promise<{
+      recipient_count: number; without_email: number; samples: { to: string; name: string; subject: string; body: string }[]
+    }> {
+      return request(`/api/events/${eventId}/campaigns/preview`, { method: 'POST', body: JSON.stringify(payload) })
+    },
+    async send(eventId: string, payload: { mode: string; subject: string; body: string; instructions: string; send: boolean }): Promise<{
+      generated: number; sent: number; skipped_no_email: number; errors: number; provider: string | null; delivered: boolean
+    }> {
+      return request(`/api/events/${eventId}/campaigns/send`, { method: 'POST', body: JSON.stringify(payload) })
+    },
+  },
+
   globalParticipants: {
     async getHistory(email: string): Promise<any[]> {
       return request<any[]>(`/api/global-participants/history?email=${encodeURIComponent(email)}`)

@@ -48,6 +48,16 @@ export default function CommunicationsPage() {
   // Confirmation tracking table (§13)
   const [comms, setComms] = useState<any[]>([])
 
+  // Bulk personalized campaign
+  const [campaignMode, setCampaignMode] = useState<'template' | 'ai'>('template')
+  const [campaignSubject, setCampaignSubject] = useState('Information — {event_name}')
+  const [campaignBody, setCampaignBody] = useState('Bonjour {first_name},\n\n\n\nCordialement,\nL’équipe organisation')
+  const [campaignInstructions, setCampaignInstructions] = useState('')
+  const [campaignPreview, setCampaignPreview] = useState<any | null>(null)
+  const [campaignResult, setCampaignResult] = useState<any | null>(null)
+  const [campaignBusy, setCampaignBusy] = useState<'preview' | 'send' | null>(null)
+  const [campaignError, setCampaignError] = useState<string | null>(null)
+
   // Mailbox connection states
   const [mailStatus, setMailStatus] = useState<MailStatus | null>(null)
   const [mailSyncing, setMailSyncing] = useState<MailProvider | null>(null)
@@ -78,6 +88,45 @@ export default function CommunicationsPage() {
       setComms(await api.communications.list(eventId))
     } catch {
       /* best-effort */
+    }
+  }
+
+  const campaignPayload = () => ({
+    mode: campaignMode,
+    subject: campaignSubject,
+    body: campaignBody,
+    instructions: campaignInstructions,
+  })
+
+  const handlePreviewCampaign = async () => {
+    setCampaignBusy('preview')
+    setCampaignError(null)
+    setCampaignResult(null)
+    try {
+      setCampaignPreview(await api.campaigns.preview(eventId, campaignPayload()))
+    } catch (err) {
+      setCampaignError(err instanceof Error ? err.message : 'Erreur lors de la prévisualisation.')
+    } finally {
+      setCampaignBusy(null)
+    }
+  }
+
+  const handleSendCampaign = async () => {
+    const n = campaignPreview?.recipient_count
+    const msg = n
+      ? `Envoyer un e-mail personnalisé à ${n} participant(s) ? Cette action est irréversible.`
+      : 'Envoyer un e-mail personnalisé à tous les participants ? Cette action est irréversible.'
+    if (!window.confirm(msg)) return
+    setCampaignBusy('send')
+    setCampaignError(null)
+    try {
+      const res = await api.campaigns.send(eventId, { ...campaignPayload(), send: true })
+      setCampaignResult(res)
+      await loadComms()
+    } catch (err) {
+      setCampaignError(err instanceof Error ? err.message : 'Erreur lors de l’envoi.')
+    } finally {
+      setCampaignBusy(null)
     }
   }
 
@@ -217,6 +266,124 @@ export default function CommunicationsPage() {
             <span>{actionError}</span>
           </div>
         )}
+
+        {/* Bulk personalized email campaign */}
+        <Card className="p-5 border-[var(--color-border)] shadow-sm bg-white space-y-4">
+          <div className="flex items-center gap-2 border-b pb-3">
+            <Send className="h-4.5 w-4.5 text-[var(--color-accent)]" />
+            <h3 className="text-sm font-bold text-[var(--color-text-primary)]">Campagne e-mail — envoi personnalisé à tous les participants</h3>
+          </div>
+
+          {!mailStatus?.providers?.some((p) => p.connected) && (
+            <div className="flex items-center gap-2 rounded-lg bg-[var(--color-warning-light)] px-3 py-2 text-xs text-[var(--color-text-primary)]">
+              <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-warning)]" />
+              <span>Aucune boîte mail connectée : tu peux générer les e-mails (statut « prêt ») mais pas les envoyer. Connecte Gmail/Outlook ci-dessous pour l’envoi réel.</span>
+            </div>
+          )}
+
+          <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs">
+            <button
+              onClick={() => setCampaignMode('template')}
+              className={`rounded px-3 py-1 font-medium transition-colors ${campaignMode === 'template' ? 'bg-white shadow-sm text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
+            >
+              Écrire un modèle
+            </button>
+            <button
+              onClick={() => setCampaignMode('ai')}
+              className={`rounded px-3 py-1 font-medium transition-colors ${campaignMode === 'ai' ? 'bg-white shadow-sm text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
+            >
+              Générer par IA
+            </button>
+          </div>
+
+          {campaignMode === 'template' ? (
+            <div className="space-y-3">
+              <input
+                type="text"
+                value={campaignSubject}
+                onChange={(e) => setCampaignSubject(e.target.value)}
+                placeholder="Objet (variables autorisées, ex. {event_name})"
+                className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+              />
+              <textarea
+                value={campaignBody}
+                onChange={(e) => setCampaignBody(e.target.value)}
+                rows={7}
+                placeholder="Message… utilise des variables comme {first_name}"
+                className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 whitespace-pre-wrap focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+              />
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] font-semibold text-[var(--color-text-secondary)]">Variables :</span>
+                {['first_name', 'last_name', 'full_name', 'email', 'company', 'region', 'country', 'attendee_category', 'job_title', 'event_name'].map((ph) => (
+                  <button
+                    key={ph}
+                    onClick={() => setCampaignBody((b) => `${b}{${ph}}`)}
+                    className="rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent-light)]"
+                  >
+                    {`{${ph}}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <textarea
+                value={campaignInstructions}
+                onChange={(e) => setCampaignInstructions(e.target.value)}
+                rows={4}
+                placeholder="Décris le message à générer, ex. : Invite chaque participant au dîner de gala, ton chaleureux, mentionne sa région."
+                className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+              />
+              <p className="text-[10px] text-[var(--color-text-secondary)]">L’IA (Gemini) rédige un e-mail adapté à chaque participant à partir de ses données — sans rien inventer.</p>
+            </div>
+          )}
+
+          {campaignError && (
+            <div className="flex items-center gap-2 rounded-lg bg-[var(--color-danger-light)] px-3 py-2 text-xs text-[var(--color-danger)]">
+              <AlertTriangle className="h-4 w-4 shrink-0" /><span>{campaignError}</span>
+            </div>
+          )}
+
+          {campaignResult && (
+            <div className="flex items-center gap-2 rounded-lg bg-[var(--color-success-light)] px-3 py-2 text-xs font-medium text-[var(--color-success)]">
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              <span>
+                {campaignResult.generated} e-mail(s) générés{campaignResult.delivered ? `, ${campaignResult.sent} envoyés via ${campaignResult.provider}` : ' (stockés, non envoyés)'}
+                {campaignResult.errors ? `, ${campaignResult.errors} échec(s)` : ''}
+                {campaignResult.skipped_no_email ? `, ${campaignResult.skipped_no_email} sans email ignorés` : ''}.
+              </span>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={handlePreviewCampaign} disabled={campaignBusy !== null} className="flex items-center gap-2">
+              {campaignBusy === 'preview' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              Prévisualiser
+            </Button>
+            <Button onClick={handleSendCampaign} disabled={campaignBusy !== null} className="bg-[var(--color-accent)] text-white flex items-center gap-2">
+              {campaignBusy === 'send' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+              Envoyer à tous les participants
+            </Button>
+            {campaignPreview && (
+              <span className="text-xs text-[var(--color-text-secondary)]">
+                {campaignPreview.recipient_count} destinataire(s){campaignPreview.without_email ? ` · ${campaignPreview.without_email} sans email` : ''}
+              </span>
+            )}
+          </div>
+
+          {campaignPreview?.samples?.length > 0 && (
+            <div className="space-y-2 border-t pt-3">
+              <p className="text-[11px] font-semibold text-[var(--color-text-secondary)]">Aperçu personnalisé ({campaignPreview.samples.length} exemples)</p>
+              {campaignPreview.samples.map((s: any, i: number) => (
+                <div key={i} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                  <div className="text-[11px] font-semibold text-[var(--color-text-primary)]">{s.name} &lt;{s.to}&gt;</div>
+                  <div className="text-[11px] text-[var(--color-accent)] mt-0.5">{s.subject}</div>
+                  <div className="text-xs text-[var(--color-text-secondary)] mt-1 whitespace-pre-wrap">{s.body}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
 
         <div className="grid grid-cols-12 gap-6">
           {/* Left: Email Simulation Form & Inbox */}
