@@ -45,6 +45,9 @@ export default function CommunicationsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [actionSuccess, setActionSuccess] = useState<string | null>(null)
 
+  // Confirmation tracking table (§13)
+  const [comms, setComms] = useState<any[]>([])
+
   // Mailbox connection states
   const [mailStatus, setMailStatus] = useState<MailStatus | null>(null)
   const [mailSyncing, setMailSyncing] = useState<MailProvider | null>(null)
@@ -70,10 +73,19 @@ export default function CommunicationsPage() {
     }
   }
 
+  const loadComms = async () => {
+    try {
+      setComms(await api.communications.list(eventId))
+    } catch {
+      /* best-effort */
+    }
+  }
+
   useEffect(() => {
     if (!eventId) return
     loadProposals()
     loadMailStatus()
+    loadComms()
 
     // Handle the OAuth callback redirect flags, then clean them from the URL.
     const sp = new URLSearchParams(window.location.search)
@@ -486,6 +498,52 @@ export default function CommunicationsPage() {
             )}
           </div>
         </div>
+
+        {/* Confirmation tracking table (§13) */}
+        <Card className="p-5 border-[var(--color-border)] shadow-sm bg-white space-y-4">
+          <div className="flex items-center gap-2 border-b pb-3">
+            <FileText className="h-4.5 w-4.5 text-[var(--color-accent)]" />
+            <h3 className="text-sm font-bold text-[var(--color-text-primary)]">Suivi des confirmations</h3>
+          </div>
+          {comms.length === 0 ? (
+            <p className="text-xs text-[var(--color-text-secondary)] py-4 text-center">
+              Aucune confirmation générée. Générez-en une depuis la fiche d’un participant.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm border-collapse min-w-[600px]">
+                <thead>
+                  <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] text-xs">
+                    <th className="p-3">Participant</th>
+                    <th className="p-3">Type</th>
+                    <th className="p-3">Statut</th>
+                    <th className="p-3">Générée le</th>
+                    <th className="p-3">Envoyée le</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {comms.map((c) => {
+                    const statusStyle =
+                      c.status === 'sent' ? 'bg-emerald-50 text-emerald-700'
+                        : c.status === 'ready' ? 'bg-amber-50 text-amber-700'
+                        : c.status === 'outdated' ? 'bg-rose-50 text-rose-700'
+                        : 'bg-slate-100 text-slate-600'
+                    const fmt = (d: string | null) => d ? new Date(d).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', { dateStyle: 'short', timeStyle: 'short' }) : '—'
+                    return (
+                      <tr key={c.id} className="text-xs">
+                        <td className="p-3 font-semibold text-[var(--color-text-primary)]">{c.participant_name || '—'}</td>
+                        <td className="p-3 capitalize text-[var(--color-text-secondary)]">{c.type}</td>
+                        <td className="p-3"><span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${statusStyle}`}>{c.status}</span></td>
+                        <td className="p-3 text-[var(--color-text-secondary)]">{fmt(c.generated_at || c.created_at)}</td>
+                        <td className="p-3 text-[var(--color-text-secondary)]">{fmt(c.sent_at)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
       </div>
     </AppLayout>
   )

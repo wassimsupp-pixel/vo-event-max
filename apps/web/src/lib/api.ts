@@ -705,6 +705,29 @@ export const api = {
     },
   },
 
+  communications: {
+    async generateConfirmation(eventId: string, participantId: string): Promise<{
+      communication: any | null
+      persisted: boolean
+      subject: string
+      body: string
+      facts: Record<string, any>
+      missing: string[]
+      source: string
+    }> {
+      return request(`/api/events/${eventId}/participants/${participantId}/confirmation/generate`, { method: 'POST' })
+    },
+    async list(eventId: string): Promise<any[]> {
+      return request<any[]>(`/api/events/${eventId}/communications`)
+    },
+    async update(id: string, payload: { subject?: string; body?: string; status?: string }): Promise<any> {
+      return request(`/api/communications/${id}`, { method: 'PATCH', body: JSON.stringify(payload) })
+    },
+    async send(id: string): Promise<any> {
+      return request(`/api/communications/${id}/send`, { method: 'POST' })
+    },
+  },
+
   projects: {
     async list(): Promise<any[]> {
       return request<any[]>('/api/projects')

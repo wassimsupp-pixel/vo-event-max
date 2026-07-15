@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2, Plane, Hotel, Bus, Sparkles, Database } from 'lucide-react'
+import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2, Plane, Hotel, Bus, Sparkles, Database, Mail, Send, AlertTriangle } from 'lucide-react'
 import { api } from '@/lib/api'
 import type { Participant } from '@/lib/api'
 
@@ -37,6 +37,13 @@ export default function ParticipantDetailPage() {
   const [lockedFields, setLockedFields] = useState<Record<string, boolean>>({})
   const [isSaved, setIsSaved] = useState(false)
   const [consolidated, setConsolidated] = useState<ConsolidatedView | null>(null)
+
+  // Individual confirmation (§13 + Lettre individuelle)
+  const [confirmation, setConfirmation] = useState<{
+    subject: string; body: string; missing: string[]; source: string; commId: string | null; persisted: boolean
+  } | null>(null)
+  const [genConfirm, setGenConfirm] = useState(false)
+  const [confirmMsg, setConfirmMsg] = useState<string | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -75,6 +82,48 @@ export default function ParticipantDetailPage() {
     } catch {
       // Revert on failure
       setLockedFields(prev => ({ ...prev, [field]: isLocked }))
+    }
+  }
+
+  const handleGenerateConfirmation = async () => {
+    setGenConfirm(true)
+    setConfirmMsg(null)
+    try {
+      const r = await api.communications.generateConfirmation(eventId, participantId)
+      setConfirmation({
+        subject: r.subject,
+        body: r.body,
+        missing: r.missing,
+        source: r.source,
+        commId: r.communication?.id ?? null,
+        persisted: r.persisted,
+      })
+      if (!r.persisted) setConfirmMsg('Aperçu généré. Exécutez la migration communications pour activer le suivi et l’envoi.')
+    } catch {
+      setConfirmMsg('Erreur lors de la génération de la confirmation.')
+    } finally {
+      setGenConfirm(false)
+    }
+  }
+
+  const handleSaveConfirmation = async () => {
+    if (!confirmation?.commId) return
+    try {
+      await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body, status: 'ready' })
+      setConfirmMsg('Confirmation enregistrée (prête à envoyer).')
+    } catch {
+      setConfirmMsg('Erreur lors de l’enregistrement.')
+    }
+  }
+
+  const handleSendConfirmation = async () => {
+    if (!confirmation?.commId) return
+    try {
+      await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body })
+      await api.communications.send(confirmation.commId)
+      setConfirmMsg('Confirmation marquée comme envoyée.')
+    } catch {
+      setConfirmMsg('Erreur lors de l’envoi.')
     }
   }
 
@@ -395,6 +444,101 @@ export default function ParticipantDetailPage() {
             )}
           </Card>
         )}
+
+        {/* Individual confirmation (§13 + Lettre individuelle) */}
+        <Card className="p-6 border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white space-y-5">
+          <div className="flex items-center justify-between border-b pb-4">
+            <div className="flex items-center gap-2">
+              <Mail className="h-5 w-5 text-[var(--color-accent)]" />
+              <h3 className="font-semibold text-sm text-[var(--color-text-primary)]">Confirmation individuelle du participant</h3>
+            </div>
+            {confirmation && (
+              <Badge variant="outline" className="text-[10px] border-[var(--color-border)] text-[var(--color-text-secondary)]">
+                {confirmation.source === 'gemini' ? 'Généré par IA' : 'Modèle'}
+              </Badge>
+            )}
+          </div>
+
+          {confirmMsg && (
+            <div className="flex items-center gap-2 rounded-lg bg-[var(--color-accent-light)] px-3 py-2 text-xs font-medium text-[var(--color-text-primary)]">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
+              <span>{confirmMsg}</span>
+            </div>
+          )}
+
+          {!confirmation ? (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-xs text-[var(--color-text-secondary)]">
+                Génère un e-mail de confirmation personnalisé à partir des données consolidées du participant.
+                Le contenu n’utilise que les informations disponibles et validées — rien n’est inventé.
+              </p>
+              <Button
+                onClick={handleGenerateConfirmation}
+                disabled={genConfirm}
+                className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white flex items-center gap-2"
+              >
+                {genConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                Générer la confirmation
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {confirmation.missing.length > 0 && (
+                <div className="flex items-start gap-2 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-light)] px-3 py-2 text-xs">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-[var(--color-warning)]" />
+                  <span className="text-[var(--color-text-primary)]">
+                    Informations manquantes (non inventées) :{' '}
+                    {confirmation.missing.map((m) => (m === 'flights' ? 'vols' : m === 'hotel_nights' ? 'hôtel' : m === 'transfers' ? 'transferts' : m)).join(', ')}.
+                  </span>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[var(--color-text-secondary)]">Objet</label>
+                <input
+                  type="text"
+                  value={confirmation.subject}
+                  onChange={(e) => setConfirmation((c) => c && { ...c, subject: e.target.value })}
+                  className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-[var(--color-text-secondary)]">Message</label>
+                <textarea
+                  value={confirmation.body}
+                  onChange={(e) => setConfirmation((c) => c && { ...c, body: e.target.value })}
+                  rows={14}
+                  className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white px-3 py-2 font-mono text-[var(--color-text-primary)] whitespace-pre-wrap focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                />
+              </div>
+
+              <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
+                <Button variant="outline" onClick={handleGenerateConfirmation} disabled={genConfirm} className="flex items-center gap-2">
+                  {genConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  Régénérer
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleSaveConfirmation}
+                  disabled={!confirmation.commId}
+                  className="flex items-center gap-2"
+                  title={confirmation.commId ? '' : 'Migration communications requise'}
+                >
+                  <Save className="h-4 w-4" /> Enregistrer
+                </Button>
+                <Button
+                  onClick={handleSendConfirmation}
+                  disabled={!confirmation.commId}
+                  className="bg-[var(--color-success)] hover:bg-emerald-600 text-white flex items-center gap-2"
+                  title={confirmation.commId ? '' : 'Migration communications requise'}
+                >
+                  <Send className="h-4 w-4" /> Marquer comme envoyé
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
       </div>
     </AppLayout>
   )
