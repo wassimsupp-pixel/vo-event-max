@@ -218,7 +218,7 @@ export default function ActivitiesPage() {
                   Détecter depuis une affiche / poster (IA)
                   <input
                     type="file"
-                    accept="image/png,image/jpeg,image/webp"
+                    accept="image/*,application/pdf"
                     className="hidden"
                     disabled={posterAnalyzing}
                     onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePosterUpload(f); e.target.value = '' }}

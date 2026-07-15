@@ -38,7 +38,9 @@ import config
 
 logger = logging.getLogger(__name__)
 
-_CHUNK = 1000
+# Keep `IN (...)` id-lists small: PostgREST rejects over-long request URLs
+# (a 1000-UUID list ≈ 37 KB → 400 "Bad Request"). 100 keeps URLs well under limits.
+_CHUNK = 100
 
 
 def _ids(supabase: Client, table: str, filter_col: str, filter_val: str) -> list[str]:
@@ -168,7 +170,7 @@ def delete_file_cascade(supabase: Client, file_id: str) -> None:
     # 1. Break participant -> source_records references
     _null_participant_source_refs_for(supabase, source_ids)
     # 2. Exceptions referencing these source records
-    _delete_in(supabase, "exceptions", "source_record_id", source_ids, chunk_size=500)
+    _delete_in(supabase, "exceptions", "source_record_id", source_ids, chunk_size=100)
     # 3. Source records themselves (chunked by id to stay under the statement timeout)
     _delete_in(supabase, "source_records", "id", source_ids, chunk_size=100)
     # 4. The uploaded_files row

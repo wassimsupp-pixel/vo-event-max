@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_POSTER_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
 _POSTER_MAX_BYTES = 10 * 1024 * 1024
 
 
@@ -44,12 +43,13 @@ async def analyze_poster(
     activity — nothing is persisted here.
     """
     await verify_event_access(event_id, current_user, supabase)
-    if file.content_type not in _POSTER_MIME:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Image PNG/JPG/WEBP requise.")
+    ct = (file.content_type or "").lower()
+    if not (ct.startswith("image/") or ct == "application/pdf"):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Fichier image ou PDF requis.")
     content = await file.read()
     if len(content) > _POSTER_MAX_BYTES:
-        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Image trop volumineuse (max 10 Mo).")
-    return poster_service.analyze_poster(content, file.content_type)
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Fichier trop volumineux (max 10 Mo).")
+    return poster_service.analyze_poster(content, ct)
 
 
 @router.get(

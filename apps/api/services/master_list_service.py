@@ -51,34 +51,52 @@ def _first_non_empty(values: list[Any]) -> Optional[Any]:
     return None
 
 
+def _paginate(supabase: Client, table: str, select: str, event_id: str, extra_not_null: Optional[str] = None) -> list[dict[str, Any]]:
+    """Fetch all rows of *table* for an event (PostgREST caps at 1000 → paginate)."""
+    out: list[dict[str, Any]] = []
+    offset = 0
+    page = 1000
+    while True:
+        q = supabase.table(table).select(select).eq("event_id", event_id)
+        if extra_not_null:
+            q = q.not_.is_(extra_not_null, "null")
+        res = q.range(offset, offset + page - 1).execute()
+        data = res.data or []
+        out.extend(data)
+        if len(data) < page:
+            break
+        offset += page
+    return out
+
+
 def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
     """
     Return one enriched row per participant: core fields + the rich master-file
     fields merged from all of their source records (first non-empty wins).
+
+    Uses two separate queries (participants, source_records) and merges in Python
+    — avoids the ambiguous PostgREST embed (participants and source_records have
+    foreign keys in both directions).
     """
     try:
-        res = (
-            supabase.table("participants")
-            .select("*, source_records(normalized_data)")
-            .eq("event_id", event_id)
-            .order("last_name")
-            .order("first_name")
-            .execute()
-        )
+        participants = _paginate(supabase, "participants", ", ".join(CORE_FIELDS), event_id)
+        source_rows = _paginate(supabase, "source_records", "participant_id, normalized_data", event_id, extra_not_null="participant_id")
     except Exception as exc:
         logger.error("Failed to build master rows for %s: %s", event_id, exc)
         return []
 
-    rows: list[dict[str, Any]] = []
-    for p in res.data or []:
-        row: dict[str, Any] = {k: p.get(k) for k in CORE_FIELDS}
+    by_participant: dict[str, list[dict[str, Any]]] = {}
+    for sr in source_rows:
+        pid = sr.get("participant_id")
+        if pid:
+            by_participant.setdefault(pid, []).append(sr.get("normalized_data") or {})
 
-        # Merge rich fields from the participant's source records
-        source_rows = p.get("source_records") or []
+    rows: list[dict[str, Any]] = []
+    for p in participants:
+        row: dict[str, Any] = {k: p.get(k) for k in CORE_FIELDS}
+        nds = by_participant.get(p["id"], [])
         for field in RICH_FIELDS:
-            candidates = [sr.get("normalized_data", {}).get(field) for sr in source_rows if sr.get("normalized_data")]
-            # dietary lives on the participant already, keep it; others from sources
-            row[field] = _first_non_empty(candidates)
+            row[field] = _first_non_empty([nd.get(field) for nd in nds])
         rows.append(row)
     return rows
 
