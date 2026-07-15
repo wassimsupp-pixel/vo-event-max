@@ -11,6 +11,8 @@ Detectable exception types:
   INVALID_FORMAT          — unparseable date or invalid email format
   MISSING_REQUIRED_FIELD  — first_name, last_name, or email missing after normalisation
   DATA_CONFLICT           — conflicting values between registration and FCM sources
+  FLIGHT_WITHOUT_HOTEL    — participant has a flight but no hotel assigned
+  MISSING_CONTACT         — participant has neither an email nor a phone number
 """
 
 from __future__ import annotations
@@ -95,6 +97,8 @@ def detect_all(
     _detect_data_conflicts(event_id, run_id, supabase, exceptions_to_insert)
     _detect_possible_duplicates(event_id, run_id, supabase, exceptions_to_insert)
     _detect_name_mismatches_between_sources(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_flight_without_hotel(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
 
     total = len(exceptions_to_insert)
     
@@ -595,5 +599,82 @@ def _detect_name_mismatches_between_sources(event_id: str, run_id: str, supabase
                 )
                 count += 1
 
+    return count
+
+
+def _detect_flight_without_hotel(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    FLIGHT_WITHOUT_HOTEL — participant has a flight but no hotel assigned.
+
+    A logistics gap for a residential event: someone is flying in but has no
+    accommodation booked.
+    """
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email")
+            .eq("event_id", event_id)
+            .eq("has_flight", True)
+            .eq("has_hotel", False)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("FLIGHT_WITHOUT_HOTEL query failed: %s", exc)
+        return 0
+
+    count = 0
+    for p in result.data or []:
+        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+        _insert_exception(
+            supabase=supabase,
+            run_id=run_id,
+            event_id=event_id,
+            exception_type="FLIGHT_WITHOUT_HOTEL",
+            severity="warning",
+            message=f"Participant '{name}' has a flight but no hotel assigned.",
+            participant_id=p["id"],
+            context_data={"participant_name": name, "email": p.get("email")},
+            exceptions_list=exceptions_list,
+        )
+        count += 1
+
+    logger.debug("FLIGHT_WITHOUT_HOTEL: %d exceptions", count)
+    return count
+
+
+def _detect_missing_contact(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    MISSING_CONTACT — participant has neither an email nor a phone number, so
+    they cannot be reached for confirmations.
+    """
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, phone")
+            .eq("event_id", event_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("MISSING_CONTACT query failed: %s", exc)
+        return 0
+
+    count = 0
+    for p in result.data or []:
+        if not p.get("email") and not p.get("phone"):
+            name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+            _insert_exception(
+                supabase=supabase,
+                run_id=run_id,
+                event_id=event_id,
+                exception_type="MISSING_CONTACT",
+                severity="warning",
+                message=f"Participant '{name}' has no email and no phone number.",
+                participant_id=p["id"],
+                context_data={"participant_name": name},
+                exceptions_list=exceptions_list,
+            )
+            count += 1
+
+    logger.debug("MISSING_CONTACT: %d exceptions", count)
     return count
 
