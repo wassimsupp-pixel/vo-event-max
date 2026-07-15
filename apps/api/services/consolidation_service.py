@@ -645,6 +645,21 @@ def _update_completeness_statuses(event_id: str, supabase: Client) -> None:
     - ``incomplete``: otherwise
     """
     try:
+        # Participants with an unresolved data conflict get status 'conflict'.
+        conflict_ids: set[str] = set()
+        try:
+            conf = (
+                supabase.table("exceptions")
+                .select("participant_id")
+                .eq("event_id", event_id)
+                .eq("exception_type", "DATA_CONFLICT")
+                .eq("resolved", False)
+                .execute()
+            )
+            conflict_ids = {r["participant_id"] for r in (conf.data or []) if r.get("participant_id")}
+        except Exception as exc:
+            logger.warning("Failed to load conflict exceptions for completeness: %s", exc)
+
         participants = (
             supabase.table("participants")
             .select("id, first_name, last_name, email, has_flight")
@@ -652,7 +667,9 @@ def _update_completeness_statuses(event_id: str, supabase: Client) -> None:
             .execute()
         )
         for p in participants.data or []:
-            if p.get("first_name") and p.get("last_name") and p.get("email") and p.get("has_flight"):
+            if p["id"] in conflict_ids:
+                status_val = "conflict"
+            elif p.get("first_name") and p.get("last_name") and p.get("email") and p.get("has_flight"):
                 status_val = "complete"
             else:
                 status_val = "incomplete"

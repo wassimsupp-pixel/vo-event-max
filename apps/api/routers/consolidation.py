@@ -13,7 +13,7 @@ import logging
 import uuid
 from typing import Any
 
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from supabase import Client
 
@@ -290,7 +290,7 @@ async def resolve_exception(
         supabase.table("exceptions").update({
             "resolved": True,
             "resolved_by": current_user["id"],
-            "resolved_at": datetime.now().isoformat(),
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", exception_id).execute()
     except Exception as exc:
         logger.error("Failed to update exception: %s", exc)
@@ -321,7 +321,7 @@ async def resolve_exception(
                 payload = {
                     field_name: body.resolution,
                     "locked_fields": locked_fields,
-                    "updated_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 supabase.table("participants").update(payload).eq("id", participant_id).execute()
             except Exception as exc:

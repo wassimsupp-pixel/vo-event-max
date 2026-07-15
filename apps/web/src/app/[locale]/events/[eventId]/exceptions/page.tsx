@@ -10,6 +10,26 @@ import { Badge } from '@/components/ui/badge'
 import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles, Loader2 } from 'lucide-react'
 import { api, type Exception } from '@/lib/api'
 
+const EXC_TYPE_LABELS: Record<string, string> = {
+  conflict: 'Conflit de données',
+  DATA_CONFLICT: 'Conflit de données',
+  duplicate: 'Doublon possible',
+  POSSIBLE_DUPLICATE: 'Doublon possible',
+  DUPLICATE_EMAIL: 'Email en double',
+  not_found: 'Participant non retrouvé',
+  to_verify: 'À vérifier',
+  PARTICIPANT_NO_FLIGHT: 'Pas de vol',
+  PARTICIPANT_NO_HOTEL: 'Pas d’hôtel',
+  PARTICIPANT_NO_TRANSFER: 'Pas de transfert',
+  PARTICIPANT_NO_DIETARY: 'Pas d’info régime',
+  MISSING_CONTACT: 'Aucun contact (email/tél.)',
+  MISSING_REQUIRED_FIELD: 'Champ requis manquant',
+  INVALID_FORMAT: 'Format invalide',
+  DATE_INCOHERENCE: 'Incohérence de dates',
+  FLIGHT_NO_PARTICIPANT: 'Vol sans participant',
+}
+const excTypeLabel = (t: string) => EXC_TYPE_LABELS[t] || t
+
 export default function ExceptionsPage() {
   const params = useParams()
   const locale = params.locale as string
@@ -220,8 +240,8 @@ export default function ExceptionsPage() {
                         {exc.participant_name ?? '\u2014'}
                       </h3>
                       {getSeverityBadge(exc.severity)}
-                      <Badge variant="outline" className="text-[10px] uppercase border-slate-200">
-                        {exc.type}
+                      <Badge variant="outline" className="text-[10px] border-slate-200">
+                        {excTypeLabel(exc.type)}
                       </Badge>
                     </div>
 

@@ -91,7 +91,18 @@ def detect_all(
     """
     exceptions_to_insert: list[dict] = []
 
-    _detect_participant_no_flight(event_id, run_id, supabase, exceptions_to_insert)
+    # Which source types were imported for this event? "Missing X" alerts only
+    # make sense once the X source file exists — otherwise every participant is
+    # flagged as missing X, which is pure noise (feedback §14).
+    imported_types: set[str] = set()
+    try:
+        files = supabase.table("uploaded_files").select("source_type").eq("event_id", event_id).execute()
+        imported_types = {f["source_type"] for f in (files.data or []) if f.get("source_type")}
+    except Exception as exc:
+        logger.warning("Could not load imported source types: %s", exc)
+
+    if "fcm" in imported_types:
+        _detect_participant_no_flight(event_id, run_id, supabase, exceptions_to_insert)
     _detect_flight_no_participant(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_required_fields(event_id, run_id, supabase, exceptions_to_insert)
     _detect_invalid_formats(event_id, run_id, supabase, exceptions_to_insert)
@@ -99,13 +110,16 @@ def detect_all(
     _detect_data_conflicts(event_id, run_id, supabase, exceptions_to_insert)
     _detect_possible_duplicates(event_id, run_id, supabase, exceptions_to_insert)
     _detect_name_mismatches_between_sources(event_id, run_id, supabase, exceptions_to_insert)
-    # Per-participant "missing info in the master list" alerts (feedback §14)
-    _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
-                            flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
-                            label="hotel", severity="warning")
-    _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
-                            flag="has_transfer", exception_type="PARTICIPANT_NO_TRANSFER",
-                            label="transfer", severity="info")
+    # Per-participant "missing info in the master list" alerts (feedback §14),
+    # gated on the relevant source file having been imported.
+    if "hotel" in imported_types:
+        _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
+                                flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
+                                label="hotel", severity="warning")
+    if "transfer" in imported_types:
+        _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
+                                flag="has_transfer", exception_type="PARTICIPANT_NO_TRANSFER",
+                                label="transfer", severity="info")
     _detect_missing_dietary(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
 

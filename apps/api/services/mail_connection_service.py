@@ -28,6 +28,7 @@ Design
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -304,13 +305,15 @@ async def sync_inbox(provider: str, event_id: UUID, supabase: Client) -> dict[st
     if provider not in SUPPORTED_PROVIDERS:
         raise MailConfigError(f"Unknown mail provider: {provider!r}")
 
-    access_token = _access_token(str(event_id), provider)
     limit = config.MAIL_SYNC_MAX_MESSAGES
 
+    # The token refresh + message fetch use a synchronous HTTP client; run them
+    # in a thread so they don't block the event loop.
+    access_token = await asyncio.to_thread(_access_token, str(event_id), provider)
     if provider == GMAIL:
-        raw_messages = _fetch_gmail_messages(access_token, limit)
+        raw_messages = await asyncio.to_thread(_fetch_gmail_messages, access_token, limit)
     else:
-        raw_messages = _fetch_outlook_messages(access_token, limit)
+        raw_messages = await asyncio.to_thread(_fetch_outlook_messages, access_token, limit)
 
     agent = EmailAgentService(supabase)
     synced = 0

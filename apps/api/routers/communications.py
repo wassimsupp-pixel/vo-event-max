@@ -119,7 +119,7 @@ async def update_communication(
     supabase: Client = Depends(get_supabase_client),
 ) -> dict[str, Any]:
     """Edit a communication's subject/body/status."""
-    existing = supabase.table("communications").select("event_id").eq("id", communication_id).single().execute()
+    existing = supabase.table("communications").select("event_id").eq("id", communication_id).maybe_single().execute()
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication not found.")
     await verify_event_access(existing.data["event_id"], current_user, supabase)
@@ -143,7 +143,7 @@ async def send_communication(
     Mark a communication as sent. (Actual delivery via the connected mailbox is
     a follow-up; this records the validated send and its timestamp.)
     """
-    existing = supabase.table("communications").select("event_id").eq("id", communication_id).single().execute()
+    existing = supabase.table("communications").select("event_id").eq("id", communication_id).maybe_single().execute()
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication not found.")
     await verify_event_access(existing.data["event_id"], current_user, supabase)

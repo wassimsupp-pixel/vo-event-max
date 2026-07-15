@@ -45,10 +45,10 @@ def _gather(supabase: Client, participant_id: str) -> dict[str, Any]:
         supabase.table("participants")
         .select("id, event_id, first_name, last_name, email, company, dietary_requirements")
         .eq("id", participant_id)
-        .single()
+        .maybe_single()
         .execute()
     )
-    participant = part_res.data or {}
+    participant = (part_res.data if part_res else None) or {}
     event = {}
     if participant.get("event_id"):
         ev = safe(lambda: supabase.table("events").select("name, location_city, location_country, start_date, end_date").eq("id", participant["event_id"]).execute())

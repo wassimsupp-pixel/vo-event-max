@@ -143,7 +143,7 @@ def clean_nans(val: Any) -> Any:
         try:
             if math.isnan(float(val)):
                 return None
-        except:
+        except (ValueError, TypeError):
             pass
     return val
 
