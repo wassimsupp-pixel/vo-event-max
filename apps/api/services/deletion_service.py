@@ -47,10 +47,10 @@ def _ids(supabase: Client, table: str, filter_col: str, filter_val: str) -> list
     return [row["id"] for row in (res.data or [])]
 
 
-def _delete_in(supabase: Client, table: str, col: str, ids: list[str]) -> None:
+def _delete_in(supabase: Client, table: str, col: str, ids: list[str], chunk_size: int = _CHUNK) -> None:
     """Delete rows of *table* where *col* is in *ids* (chunked, no-op if empty)."""
-    for i in range(0, len(ids), _CHUNK):
-        chunk = ids[i : i + _CHUNK]
+    for i in range(0, len(ids), chunk_size):
+        chunk = ids[i : i + chunk_size]
         supabase.table(table).delete().in_(col, chunk).execute()
 
 
@@ -106,11 +106,16 @@ def delete_event(supabase: Client, event_id: str) -> None:
         {"registration_source_id": None, "fcm_source_id": None}
     ).eq("event_id", eid).execute()
 
-    # 6. Source records (now unreferenced: participant links nulled, exceptions gone)
-    supabase.table("source_records").delete().eq("event_id", eid).execute()
+    # 6/7. Delete source_records and participants in small id-batches. Both tables
+    #      are targets of foreign keys, so Postgres re-checks referencing columns
+    #      per deleted row — a single bulk DELETE can exceed the DB statement
+    #      timeout on large events. Chunking keeps each statement short.
+    source_record_ids = _ids(supabase, "source_records", "event_id", eid)
+    logger.info("Deleting %d source_records for event %s", len(source_record_ids), eid)
+    _delete_in(supabase, "source_records", "id", source_record_ids, chunk_size=100)
 
-    # 7. Participants (the source_records that referenced them are gone)
-    supabase.table("participants").delete().eq("event_id", eid).execute()
+    logger.info("Deleting %d participants for event %s", len(participant_ids), eid)
+    _delete_in(supabase, "participants", "id", participant_ids, chunk_size=100)
 
     # 8. Storage objects, then uploaded_files
     _remove_event_storage(supabase, eid)
