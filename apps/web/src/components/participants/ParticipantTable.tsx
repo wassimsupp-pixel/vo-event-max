@@ -25,7 +25,7 @@ function ServiceIcon({ active }: { active: boolean }) {
 function SkeletonRow() {
   return (
     <tr className="border-b border-[var(--color-border)] animate-pulse">
-      {[...Array(8)].map((_, i) => (
+      {[...Array(9)].map((_, i) => (
         <td key={i} className="px-4 py-3">
           <div className="h-4 rounded bg-gray-100" style={{ width: `${60 + ((i * 17) % 40)}%` }} />
         </td>
@@ -71,6 +71,9 @@ export function ParticipantTable({
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                 {t('email')}
               </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
+                {t('company')}
+              </th>
               <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
                 {t('flight')}
               </th>
@@ -111,6 +114,9 @@ export function ParticipantTable({
                     <td className="px-4 py-3 text-sm text-[var(--color-text-secondary)]">
                       {p.email}
                     </td>
+                    <td className="px-4 py-3 text-sm text-[var(--color-text-secondary)]">
+                      {p.company || '—'}
+                    </td>
                     <td className="px-4 py-3 text-center">
                       <ServiceIcon active={p.has_flight} />
                     </td>
@@ -132,7 +138,7 @@ export function ParticipantTable({
             {!loading && participants.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="py-12 text-center text-sm text-[var(--color-text-secondary)]"
                 >
                   Aucun participant trouvé

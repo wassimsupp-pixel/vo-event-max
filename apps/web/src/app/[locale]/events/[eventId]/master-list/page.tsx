@@ -131,7 +131,7 @@ export default function MasterListPage() {
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-[var(--color-text-secondary)]" />
             <input
               type="text"
-              placeholder="Rechercher par nom, email..."
+              placeholder="Rechercher par nom, email, société, téléphone..."
               className="w-full text-sm rounded-md border border-[var(--color-border)] bg-white pl-9 pr-4 py-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
               value={searchQuery}
               onChange={handleSearch}
@@ -187,7 +187,7 @@ export default function MasterListPage() {
 
         {/* Master Table */}
         <Card className="border-[var(--color-border)] shadow-[var(--shadow-card)] overflow-hidden">
-          <ParticipantTable participants={participants} loading={loading} />
+          <ParticipantTable participants={participants} loading={loading} eventId={eventId} locale={locale} />
 
           <div className="p-4 bg-slate-50 border-t border-[var(--color-border)] flex items-center justify-between text-xs text-[var(--color-text-secondary)]">
             <div>

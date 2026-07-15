@@ -79,7 +79,7 @@ async def list_participants(
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by completeness_status: complete | incomplete | conflict"),
     has_flight: Optional[bool] = Query(None, description="Filter by flight status."),
     has_hotel: Optional[bool] = Query(None, description="Filter by hotel status."),
-    search: Optional[str] = Query(None, description="Substring search on first_name, last_name, email."),
+    search: Optional[str] = Query(None, description="Substring search on first_name, last_name, email, company, phone."),
     current_user: dict[str, Any] = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client),
 ) -> ParticipantListResponse:
@@ -112,10 +112,12 @@ async def list_participants(
     if has_hotel is not None:
         q = q.eq("has_hotel", has_hotel)
     if search:
-        # Use Supabase's `or` filter for multi-column ilike
+        # Multi-column case-insensitive search: name, email, company and phone
+        # (feedback §9 — search must not be limited to the email address).
         pattern = f"%{search}%"
         q = q.or_(
-            f"first_name.ilike.{pattern},last_name.ilike.{pattern},email.ilike.{pattern}"
+            f"first_name.ilike.{pattern},last_name.ilike.{pattern},"
+            f"email.ilike.{pattern},company.ilike.{pattern},phone.ilike.{pattern}"
         )
 
     q = q.order("last_name").order("first_name").range(offset, offset + page_size - 1)
