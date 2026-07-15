@@ -13,10 +13,29 @@ from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, verify_event_access
 from models.schemas import ReportSummaryResponse, HotelNightsReportItem
+from services import master_list_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get(
+    "/events/{event_id}/reports/analysis",
+    summary="Data-quality analysis + recommendations over the master list",
+)
+async def get_report_analysis(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    Intelligent data-quality analysis (feedback §15): weighted quality score,
+    per-dimension breakdown, region/category distributions, missing-info counts,
+    and prioritized recommendations, computed from the consolidated master list.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+    return master_list_service.build_analysis(supabase, event_id)
 
 
 @router.get(

@@ -675,6 +675,15 @@ export const api = {
     async getHotelNights(eventId: string): Promise<any[]> {
       return request<any[]>(`/api/events/${eventId}/reports/hotel-nights`)
     },
+    async getAnalysis(eventId: string): Promise<any> {
+      return request<any>(`/api/events/${eventId}/reports/analysis`)
+    },
+  },
+
+  masterList: {
+    async get(eventId: string): Promise<{ items: any[]; total: number }> {
+      return request<{ items: any[]; total: number }>(`/api/events/${eventId}/master-list`)
+    },
   },
 
   globalParticipants: {

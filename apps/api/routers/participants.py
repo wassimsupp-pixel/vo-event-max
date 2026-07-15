@@ -28,10 +28,36 @@ from models.schemas import (
     ParticipantLookupItem,
 )
 from services.audit_service import log_change
+from services import master_list_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+@router.get(
+    "/events/{event_id}/master-list",
+    summary="Enriched master list: participants merged with rich source fields",
+)
+async def get_master_list(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    One consolidated row per participant, merging the participant record with the
+    rich master-file fields imported from the source files (attendee category,
+    job title, region, country, passport, food/allergy …) — feedback §6.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+    role: str = current_user.get("role", "viewer")
+    rows = master_list_service.build_master_rows(supabase, event_id)
+    # RGPD: dietary/allergy only for admin/pm
+    if role not in ("admin", "pm"):
+        for r in rows:
+            r.pop("dietary_requirements", None)
+            r.pop("food_allergy_info", None)
+    return {"items": rows, "total": len(rows)}
 
 # Fields that are always selected for the detail view
 PARTICIPANT_FULL_SELECT = (
