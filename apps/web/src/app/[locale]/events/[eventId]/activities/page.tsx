@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Compass, Users, Plus, Calendar, Search } from 'lucide-react'
+import { Compass, Users, Plus, Calendar, Search, Sparkles, Loader2, ImagePlus } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
 
 interface Activity {
@@ -45,7 +45,32 @@ export default function ActivitiesPage() {
   const [newCapacity, setNewCapacity] = useState(50)
   const [newDateTime, setNewDateTime] = useState('2025-11-12T14:00')
 
+  // Poster/flyer AI detection
+  const [posterAnalyzing, setPosterAnalyzing] = useState(false)
+  const [posterMsg, setPosterMsg] = useState<string | null>(null)
+
   const [registerPartId, setRegisterPartId] = useState('')
+
+  const handlePosterUpload = async (file: File) => {
+    setPosterAnalyzing(true)
+    setPosterMsg(null)
+    try {
+      const res = await api.posters.analyze(eventId, file)
+      if (res.error) { setPosterMsg(res.error); return }
+      const f = res.fields || {}
+      if (f.title) setNewName(String(f.title))
+      if (f.location) setNewLocation(String(f.location))
+      const cap = parseInt(String(f.capacity ?? '').replace(/\D/g, ''), 10)
+      if (!Number.isNaN(cap) && cap > 0) setNewCapacity(cap)
+      const parts = [f.description, f.date ? `Date : ${f.date}` : '', f.time ? `Horaire : ${f.time}` : '', f.other ? `Infos : ${f.other}` : ''].filter(Boolean)
+      if (parts.length) setNewDesc(parts.join('\n'))
+      setPosterMsg('Informations détectées et pré-remplies. Vérifie/ajuste avant de créer.')
+    } catch {
+      setPosterMsg('Échec de l’analyse de l’affiche.')
+    } finally {
+      setPosterAnalyzing(false)
+    }
+  }
 
   const fetchActivities = async () => {
     try {
@@ -186,6 +211,24 @@ export default function ActivitiesPage() {
               {t('createTitle')}
             </h2>
             <form onSubmit={handleCreateActivity} className="flex flex-col gap-4">
+              {/* AI poster/flyer detection */}
+              <div className="rounded-lg border border-dashed border-[var(--color-accent)]/40 bg-[var(--color-accent-light)]/30 p-3">
+                <label className={`flex items-center gap-2 text-xs font-semibold text-[var(--color-accent)] ${posterAnalyzing ? 'opacity-60' : 'cursor-pointer'}`}>
+                  {posterAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
+                  Détecter depuis une affiche / poster (IA)
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    className="hidden"
+                    disabled={posterAnalyzing}
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) handlePosterUpload(f); e.target.value = '' }}
+                  />
+                </label>
+                <p className="mt-1 flex items-center gap-1 text-[10px] text-[var(--color-text-secondary)]">
+                  <Sparkles className="h-3 w-3" /> {posterMsg || 'Dépose une affiche : l’IA détecte titre, lieu, horaires, capacité…'}
+                </p>
+              </div>
+
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
                   {t('activityName')}

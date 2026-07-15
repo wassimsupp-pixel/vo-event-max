@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from supabase import Client
 
-from dependencies import get_current_user, get_supabase_client, verify_event_access
+from dependencies import get_current_user, get_supabase_client, require_role, verify_event_access
 from models.schemas import (
     ActivityResponse,
     ActivityCreate,
@@ -18,10 +18,38 @@ from models.schemas import (
     MessageResponse,
 )
 from services.audit_service import log_change
+from services import poster_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_POSTER_MIME = {"image/png", "image/jpeg", "image/jpg", "image/webp"}
+_POSTER_MAX_BYTES = 10 * 1024 * 1024
+
+
+@router.post(
+    "/events/{event_id}/posters/analyze",
+    summary="Extract event info from a poster/flyer image via AI vision",
+)
+async def analyze_poster(
+    event_id: str,
+    file: UploadFile = File(...),
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    Upload an event poster/flyer image; Gemini Vision extracts the event info
+    (title, location, date, time, capacity, description). Used to pre-fill an
+    activity — nothing is persisted here.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+    if file.content_type not in _POSTER_MIME:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Image PNG/JPG/WEBP requise.")
+    content = await file.read()
+    if len(content) > _POSTER_MAX_BYTES:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Image trop volumineuse (max 10 Mo).")
+    return poster_service.analyze_poster(content, file.content_type)
 
 
 @router.get(

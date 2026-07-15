@@ -686,6 +686,14 @@ export const api = {
     },
   },
 
+  posters: {
+    async analyze(eventId: string, file: File): Promise<{ fields?: Record<string, any>; error?: string }> {
+      const form = new FormData()
+      form.append('file', file)
+      return request(`/api/events/${eventId}/posters/analyze`, { method: 'POST', body: form, headers: {} })
+    },
+  },
+
   campaigns: {
     async preview(eventId: string, payload: { mode: string; subject: string; body: string; instructions: string }): Promise<{
       recipient_count: number; without_email: number; samples: { to: string; name: string; subject: string; body: string }[]
