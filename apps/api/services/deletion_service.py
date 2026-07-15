@@ -42,9 +42,28 @@ _CHUNK = 1000
 
 
 def _ids(supabase: Client, table: str, filter_col: str, filter_val: str) -> list[str]:
-    """Return the ``id`` values of rows in *table* matching filter."""
-    res = supabase.table(table).select("id").eq(filter_col, filter_val).execute()
-    return [row["id"] for row in (res.data or [])]
+    """Return ALL ``id`` values of rows in *table* matching filter.
+
+    PostgREST caps a single response at ~1000 rows, so we must paginate — a
+    partial id list would leave rows behind and break FK-ordered deletes.
+    """
+    ids: list[str] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        res = (
+            supabase.table(table)
+            .select("id")
+            .eq(filter_col, filter_val)
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        data = res.data or []
+        ids.extend(row["id"] for row in data)
+        if len(data) < page_size:
+            break
+        offset += page_size
+    return ids
 
 
 def _delete_in(supabase: Client, table: str, col: str, ids: list[str], chunk_size: int = _CHUNK) -> None:
