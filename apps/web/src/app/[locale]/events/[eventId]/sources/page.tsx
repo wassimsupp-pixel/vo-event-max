@@ -351,7 +351,11 @@ export default function SourcesPage() {
     setUploading(true)
     setUploadError(null)
     try {
-      const response = await api.files.upload(eventId, selectedFile, uploadingType)
+      // 'masterfile' is a UI convenience (mixed-info file). It is stored as
+      // 'registration' — a valid DB source type that already creates participants;
+      // the domain extractor pulls flight/hotel/transfer/activity from every row.
+      const apiSourceType = uploadingType === 'masterfile' ? 'registration' : uploadingType
+      const response = await api.files.upload(eventId, selectedFile, apiSourceType)
       setUploadResponse(response)
 
       // Pre-fill initial mapping guess from backend suggestions (confidence >= 0.5)
