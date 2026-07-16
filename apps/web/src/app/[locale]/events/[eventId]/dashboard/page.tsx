@@ -5,7 +5,6 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { ConsolidationStepper } from '@/components/ui/ConsolidationStepper'
-import { DataQualityGauge } from '@/components/ui/DataQualityGauge'
 import { DataSourceCard } from '@/components/ui/DataSourceCard'
 import { ExceptionItem } from '@/components/ui/ExceptionItem'
 import { ParticipantTable } from '@/components/participants/ParticipantTable'
@@ -343,7 +342,7 @@ export default function DashboardPage() {
           {/* Left/main column — col-span-8 */}
           <div className="col-span-12 space-y-6 lg:col-span-8">
             {/* Visual blocks row */}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
               {/* Consolidation Stepper */}
               <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-white p-5 shadow-[var(--shadow-card)]">
                 <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
@@ -352,18 +351,6 @@ export default function DashboardPage() {
                 <ConsolidationStepper
                   steps={getStepperSteps()}
                   onStepClick={(i) => router.push(stepperRoutes[i])}
-                />
-              </div>
-
-              {/* Data Quality Gauge */}
-              <div className="flex flex-col items-center justify-center rounded-[var(--radius-card)] border border-[var(--color-border)] bg-white p-5 shadow-[var(--shadow-card)]">
-                <h3 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
-                  {t('dataQuality')}
-                </h3>
-                <DataQualityGauge
-                  percentage={totalParticipants > 0 ? completenessRate : 0}
-                  label="Qualité globale des données"
-                  onClick={() => router.push(`/${locale}/events/${eventId}/master-list`)}
                 />
               </div>
 
