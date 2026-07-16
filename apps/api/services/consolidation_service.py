@@ -871,13 +871,34 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     except Exception:
         pass
 
-    # 1. Flights Extraction (from fcm files)
+    # Fetch ALL participant-linked source records once (paginated — PostgREST caps
+    # at 1000). We extract from every record regardless of the file's source_type
+    # so a single combined "masterfile" (flights + hotel + activities in one sheet)
+    # is fully exploited, not just type-specific files. The per-domain field guards
+    # below simply skip records that don't carry the relevant columns.
+    all_records: list[dict] = []
     try:
-        fcm_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "fcm").execute()
-        if fcm_files.data:
-            file_ids = [f["id"] for f in fcm_files.data]
-            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
-            
+        _offset = 0
+        while True:
+            _res = (
+                supabase.table("source_records")
+                .select("participant_id, normalized_data, raw_data")
+                .eq("event_id", event_id)
+                .not_.is_("participant_id", "null")
+                .range(_offset, _offset + 999)
+                .execute()
+            )
+            _data = _res.data or []
+            all_records.extend(_data)
+            if len(_data) < 1000:
+                break
+            _offset += 1000
+    except Exception as exc:
+        logger.error("Failed to load source records for domain extraction: %s", exc)
+
+    # 1. Flights Extraction (any record exposing flight fields)
+    try:
+        if all_records:
             # Load existing flights to optimize queries (bulk upsert)
             existing_flights = supabase.table("flights").select("id, participant_id, flight_number").eq("event_id", event_id).execute()
             existing_flights_map = {
@@ -887,7 +908,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             flight_payloads = {}
             participants_has_flight = set()
 
-            for record in records.data:
+            for record in all_records:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
@@ -953,13 +974,9 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     except Exception as exc:
         logger.error("Failed to extract flights during consolidation: %s", exc)
 
-    # 2. Hotels Extraction (from hotel files)
+    # 2. Hotels Extraction (any record exposing hotel fields)
     try:
-        hotel_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "hotel").execute()
-        if hotel_files.data:
-            file_ids = [f["id"] for f in hotel_files.data]
-            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
-            
+        if all_records:
             # Load existing hotels
             existing_hotels = supabase.table("hotels").select("id, name").eq("event_id", event_id).execute()
             hotel_map = {h["name"]: h["id"] for h in (existing_hotels.data or [])}
@@ -975,7 +992,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             nights_payloads = {}
             participants_has_hotel = set()
 
-            for record in records.data:
+            for record in all_records:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
@@ -1047,13 +1064,9 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     except Exception as exc:
         logger.error("Failed to extract hotels during consolidation: %s", exc)
 
-    # 3. Activities Extraction (from activity files)
+    # 3. Activities Extraction (any record exposing an activity name)
     try:
-        activity_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "activity").execute()
-        if activity_files.data:
-            file_ids = [f["id"] for f in activity_files.data]
-            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
-            
+        if all_records:
             # Load existing activities
             existing_acts = supabase.table("activities").select("id, name").eq("event_id", event_id).execute()
             act_map = {a["name"]: a["id"] for a in (existing_acts.data or [])}
@@ -1069,7 +1082,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             reg_payloads = {}
             participants_has_activity = set()
 
-            for record in records.data:
+            for record in all_records:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
@@ -1121,13 +1134,9 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     except Exception as exc:
         logger.error("Failed to extract activities during consolidation: %s", exc)
 
-    # 4. Transfers Extraction (from transfer files)
+    # 4. Transfers Extraction (any record exposing pickup/dropoff)
     try:
-        transfer_files = supabase.table("uploaded_files").select("id").eq("event_id", event_id).eq("source_type", "transfer").execute()
-        if transfer_files.data:
-            file_ids = [f["id"] for f in transfer_files.data]
-            records = supabase.table("source_records").select("*").in_("file_id", file_ids).not_.is_("participant_id", "null").execute()
-            
+        if all_records:
             # Load existing transfers
             existing_trans = supabase.table("transfers").select("id, participant_id, pickup_time").eq("event_id", event_id).execute()
             existing_trans_map = {
@@ -1137,7 +1146,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             trans_payloads = {}
             participants_has_transfer = set()
 
-            for record in records.data:
+            for record in all_records:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
