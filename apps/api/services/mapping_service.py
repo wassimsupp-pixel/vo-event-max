@@ -249,13 +249,13 @@ SYNONYMS: dict[str, list[str]] = {
     "dietary_requirements": ["dietaryrequirements", "dietary", "regime", "regimealimentaire", "aliment", "food", "allergy", "allergie"],
     
     # Flights
-    "departure_date": ["departuredate", "datedepart", "outbounddate", "flightdepdate"],
+    "departure_date": ["departuredate", "departdate", "datedepart", "outbounddate", "flightdepdate"],
     "return_date": ["returndate", "dateretour", "inbounddate", "flightretdate"],
-    "flight_number": ["flightnumber", "numvol", "novol", "flightno", "numdevol", "flightcode"],
-    "departure_airport": ["departureairport", "aeroportdepart", "depapt", "depairp", "origairport", "airportofdeparture"],
-    "arrival_airport": ["arrivalairport", "aeroportarrivee", "arrapt", "arrairp", "destairport"],
-    "departure_time": ["departuretime", "heuredepart", "flightdeptime", "deptime", "datedepart"],
-    "arrival_time": ["arrivaltime", "heurearrivee", "flightarrtime", "arrtime", "datearrivee", "retdate"],
+    "flight_number": ["flightnumber", "flight", "numvol", "novol", "flightno", "numdevol", "flightcode"],
+    "departure_airport": ["departureairport", "departairport", "aeroportdepart", "depapt", "depairp", "origairport", "airportofdeparture"],
+    "arrival_airport": ["arrivalairport", "arrivairport", "aeroportarrivee", "arrapt", "arrairp", "destairport"],
+    "departure_time": ["departuretime", "departtime", "heuredepart", "flightdeptime", "deptime"],
+    "arrival_time": ["arrivaltime", "arrivtime", "heurearrivee", "flightarrtime", "arrtime"],
     "pnr_code": ["pnrcode", "pnr", "codepnr", "bookingref", "recordlocator"],
     "airline": ["airline", "compagnie", "compagnieaerienne", "carrier", "aircarrier"],
     "baggage_info": ["baggageinfo", "baggage", "luggage", "infosbagages", "bags"],
@@ -268,8 +268,10 @@ SYNONYMS: dict[str, list[str]] = {
     
     # Transfers
     "transfer_type": ["transfertype", "shuttletype", "typenavette"],
-    "pickup_location": ["pickuplocation", "lieupriseencharge", "priseencharge", "depart", "pickup", "lieudedepart"],
-    "dropoff_location": ["dropofflocation", "destination", "lieuarrivee", "arrivee", "dropoff", "lieudarrivee"],
+    # NB: bare "depart"/"arrivee" removed — too greedy, they collided with the
+    # flight Depart*/Arrival* columns. Keep only pickup/transfer-specific tokens.
+    "pickup_location": ["pickuplocation", "lieupriseencharge", "priseencharge", "pickup", "lieudedepart"],
+    "dropoff_location": ["dropofflocation", "destination", "dropoff", "lieudarrivee"],
     "pickup_time": ["pickuptime", "heurepriseencharge", "heurepickup", "heurenavette", "shuttletime"],
     "vehicle_type": ["vehicletype", "vehicle", "vehicule", "car", "bus", "voiture", "typevehicule"],
     
@@ -295,9 +297,9 @@ SYNONYMS: dict[str, list[str]] = {
 
     # Flights (extra)
     "arrival_date": ["arrivaldate", "datearrivee", "dad", "arrivaldate2", "arrdate", "arrivaldatedad"],
-    "departure_city": ["departurecity", "villedepart", "citydeparture", "depcity"],
-    "departure_country": ["departurecountry", "paysdepart", "depcountry"],
-    "arrival_city": ["arrivalcity", "villearrivee", "arrcity", "destinationcity"],
+    "departure_city": ["departurecity", "departcity", "villedepart", "citydeparture", "depcity"],
+    "departure_country": ["departurecountry", "departcountry", "paysdepart", "depcountry"],
+    "arrival_city": ["arrivalcity", "arrivcity", "villearrivee", "arrcity", "destinationcity"],
     "arrival_country": ["arrivalcountry", "paysarrivee", "country2", "arrcountry", "destinationcountry"],
     "traveler_name": ["traveler", "traveller", "nomvoyageur", "passengername", "nomsurbillet"],
     "flight_domestic_intl": ["dominternational", "domintl", "domesticinternational", "domesticintl", "domestic", "international"],
