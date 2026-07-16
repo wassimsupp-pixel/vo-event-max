@@ -6,8 +6,9 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Plane, Upload, AlertCircle, RefreshCw, CheckCircle, Search } from 'lucide-react'
+import { Plane, Upload, AlertCircle, RefreshCw, CheckCircle, Search, UserX } from 'lucide-react'
 import { api } from '@/lib/api'
+import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
 interface Flight {
   id: string
@@ -32,12 +33,18 @@ export default function FlightsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [statusMessage, setStatusMessage] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'confirmed' | 'cancelled'>('all')
+  const [masterRows, setMasterRows] = useState<CohortRow[]>([])
+  const [showMissing, setShowMissing] = useState(false)
 
   const fetchFlights = async () => {
     try {
       setLoading(true)
-      const data = await api.flights.list(eventId)
+      const [data, master] = await Promise.all([
+        api.flights.list(eventId),
+        api.masterList.get(eventId).catch(() => ({ items: [] as CohortRow[] })),
+      ])
       setFlights(data)
+      setMasterRows((master.items as CohortRow[]) || [])
     } catch (err) {
       console.error('Failed to fetch flights', err)
     } finally {
@@ -75,6 +82,7 @@ export default function FlightsPage() {
   })
 
   const missingFlightsCount = flights.filter(f => f.status === 'cancelled').length
+  const withoutFlight = masterRows.filter(r => !r.has_flight)
 
   return (
     <AppLayout eventId={eventId} locale={locale}>
@@ -112,14 +120,14 @@ export default function FlightsPage() {
         )}
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             label={t('kpiTotal')}
             value={flights.length}
             icon={<Plane className="h-5 w-5" />}
             accentColor="var(--color-accent)"
-            onClick={() => setStatusFilter('all')}
-            active={statusFilter === 'all'}
+            onClick={() => { setStatusFilter('all'); setShowMissing(false) }}
+            active={statusFilter === 'all' && !showMissing}
           />
           <KPICard
             label={t('kpiAirports')}
@@ -132,10 +140,30 @@ export default function FlightsPage() {
             value={missingFlightsCount}
             icon={<AlertCircle className="h-5 w-5" />}
             accentColor="var(--color-danger)"
-            onClick={() => setStatusFilter('cancelled')}
-            active={statusFilter === 'cancelled'}
+            onClick={() => { setStatusFilter('cancelled'); setShowMissing(false) }}
+            active={statusFilter === 'cancelled' && !showMissing}
+          />
+          <KPICard
+            label="Sans vol"
+            value={withoutFlight.length}
+            icon={<UserX className="h-5 w-5" />}
+            accentColor="var(--color-danger)"
+            onClick={() => setShowMissing(v => !v)}
+            active={showMissing}
           />
         </div>
+
+        {/* Concerned participants: those without any flight (§10) */}
+        {showMissing && (
+          <ConcernedParticipants
+            rows={withoutFlight}
+            title="Participants sans vol"
+            action="Action recommandée : relancer FCM / le participant pour obtenir les informations de vol."
+            emptyText="Tous les participants ont un vol renseigné."
+            locale={locale}
+            eventId={eventId}
+          />
+        )}
 
         {/* Search */}
         <div className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm">

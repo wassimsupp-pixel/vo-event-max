@@ -6,8 +6,9 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Hotel, Bed, Calendar, Plus, RefreshCw, Search } from 'lucide-react'
+import { Hotel, Bed, Calendar, Plus, Search, UserX } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
+import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
 interface HotelProperty {
   id: string
@@ -34,6 +35,8 @@ export default function HotelsPage() {
   const [hotels, setHotels] = useState<HotelProperty[]>([])
   const [roomingList, setRoomingList] = useState<RoomingNight[]>([])
   const [participants, setParticipants] = useState<ParticipantLookupItem[]>([])
+  const [masterRows, setMasterRows] = useState<CohortRow[]>([])
+  const [showMissing, setShowMissing] = useState(false)
   const [loading, setLoading] = useState(true)
   
   // Modals / Form states
@@ -48,14 +51,16 @@ export default function HotelsPage() {
   const fetchData = async () => {
     try {
       setLoading(true)
-      const [hotelData, roomingData, partList] = await Promise.all([
+      const [hotelData, roomingData, partList, master] = await Promise.all([
         api.hotels.list(eventId),
         api.hotels.listRooming(eventId),
-        api.participants.lookup(eventId)
+        api.participants.lookup(eventId),
+        api.masterList.get(eventId).catch(() => ({ items: [] as CohortRow[] })),
       ])
       setHotels(hotelData)
       setRoomingList(roomingData)
       setParticipants(partList)
+      setMasterRows((master.items as CohortRow[]) || [])
     } catch (err) {
       console.error('Failed to fetch hotels data', err)
     } finally {
@@ -122,6 +127,8 @@ export default function HotelsPage() {
     (r.hotel_name || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
 
+  const withoutHotel = masterRows.filter(r => !r.has_hotel)
+
   // Clicking a KPI scrolls to the detailed list of concerned participants (§11)
   const scrollToDetailList = () => {
     document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -144,7 +151,7 @@ export default function HotelsPage() {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             label={t('kpiProperties')}
             value={hotels.length}
@@ -166,7 +173,27 @@ export default function HotelsPage() {
             accentColor="var(--color-cta)"
             onClick={scrollToDetailList}
           />
+          <KPICard
+            label="Sans hébergement"
+            value={withoutHotel.length}
+            icon={<UserX className="h-5 w-5" />}
+            accentColor="var(--color-danger)"
+            onClick={() => setShowMissing(v => !v)}
+            active={showMissing}
+          />
         </div>
+
+        {/* Concerned participants: those without any hotel night (§11) */}
+        {showMissing && (
+          <ConcernedParticipants
+            rows={withoutHotel}
+            title="Participants sans hébergement"
+            action="Action recommandée : vérifier la rooming list et attribuer une chambre."
+            emptyText="Tous les participants ont un hébergement."
+            locale={locale}
+            eventId={eventId}
+          />
+        )}
 
         {/* Form area */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

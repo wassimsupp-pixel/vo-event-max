@@ -6,8 +6,9 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Truck, Users, Compass, AlertCircle, RefreshCw, Search } from 'lucide-react'
+import { Truck, Users, Compass, RefreshCw, Search, UserX } from 'lucide-react'
 import { api } from '@/lib/api'
+import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
 interface Transfer {
   id: string
@@ -25,6 +26,8 @@ export default function TransfersPage() {
   const { eventId, locale } = useParams() as { eventId: string; locale: string }
   const t = useTranslations('transfers')
   const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [masterRows, setMasterRows] = useState<CohortRow[]>([])
+  const [showMissing, setShowMissing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [grouping, setGrouping] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -39,8 +42,12 @@ export default function TransfersPage() {
   const fetchTransfers = async () => {
     try {
       setLoading(true)
-      const data = await api.transfers.list(eventId)
+      const [data, master] = await Promise.all([
+        api.transfers.list(eventId),
+        api.masterList.get(eventId).catch(() => ({ items: [] as CohortRow[] })),
+      ])
       setTransfers(data)
+      setMasterRows((master.items as CohortRow[]) || [])
     } catch (err) {
       console.error('Failed to fetch transfers', err)
     } finally {
@@ -79,6 +86,8 @@ export default function TransfersPage() {
     t.dropoff_location.toLowerCase().includes(searchTerm.toLowerCase())
   )
 
+  const withoutTransfer = masterRows.filter(r => !r.has_transfer)
+
   // Clicking a KPI scrolls to the detailed list of concerned participants (§12)
   const scrollToDetailList = () => {
     document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -108,7 +117,7 @@ export default function TransfersPage() {
         )}
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             label={t('kpiTransfers')}
             value={transfers.length}
@@ -130,7 +139,27 @@ export default function TransfersPage() {
             accentColor="var(--color-cta)"
             onClick={scrollToDetailList}
           />
+          <KPICard
+            label="Sans transfert"
+            value={withoutTransfer.length}
+            icon={<UserX className="h-5 w-5" />}
+            accentColor="var(--color-danger)"
+            onClick={() => setShowMissing(v => !v)}
+            active={showMissing}
+          />
         </div>
+
+        {/* Concerned participants: those without any transfer (§12) */}
+        {showMissing && (
+          <ConcernedParticipants
+            rows={withoutTransfer}
+            title="Participants sans transfert"
+            action="Action recommandée : planifier un transfert cohérent avec les horaires de vol."
+            emptyText="Tous les participants ont un transfert."
+            locale={locale}
+            eventId={eventId}
+          />
+        )}
 
         {/* Group Dispatcher form */}
         <div className="rounded-[var(--radius-card)] border bg-white p-6 shadow-sm">

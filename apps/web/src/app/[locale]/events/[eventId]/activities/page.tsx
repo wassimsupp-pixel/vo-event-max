@@ -6,8 +6,9 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Compass, Users, Plus, Calendar, Search, Sparkles, Loader2, ImagePlus } from 'lucide-react'
+import { Compass, Users, Plus, Calendar, Sparkles, Loader2, ImagePlus, UserX } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
+import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
 interface Activity {
   id: string
@@ -35,6 +36,8 @@ export default function ActivitiesPage() {
   const [selectedActivity, setSelectedActivity] = useState<Activity | null>(null)
   const [roster, setRoster] = useState<ParticipantRegistration[]>([])
   const [participants, setParticipants] = useState<ParticipantLookupItem[]>([])
+  const [masterRows, setMasterRows] = useState<CohortRow[]>([])
+  const [showMissing, setShowMissing] = useState(false)
   const [loading, setLoading] = useState(true)
   const [rosterLoading, setRosterLoading] = useState(false)
 
@@ -75,12 +78,14 @@ export default function ActivitiesPage() {
   const fetchActivities = async () => {
     try {
       setLoading(true)
-      const [activitiesData, partList] = await Promise.all([
+      const [activitiesData, partList, master] = await Promise.all([
         api.activities.list(eventId),
-        api.participants.lookup(eventId)
+        api.participants.lookup(eventId),
+        api.masterList.get(eventId).catch(() => ({ items: [] as CohortRow[] })),
       ])
       setActivities(activitiesData)
       setParticipants(partList)
+      setMasterRows((master.items as CohortRow[]) || [])
     } catch (err) {
       console.error('Failed to fetch activities', err)
     } finally {
@@ -179,7 +184,7 @@ export default function ActivitiesPage() {
         </div>
 
         {/* KPIs */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <KPICard
             label={t('kpiProposed')}
             value={activities.length}
@@ -201,7 +206,27 @@ export default function ActivitiesPage() {
             accentColor="var(--color-cta)"
             onClick={() => document.getElementById('detail-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
+          <KPICard
+            label="Sans activité"
+            value={masterRows.filter(r => !r.has_activities).length}
+            icon={<UserX className="h-5 w-5" />}
+            accentColor="var(--color-danger)"
+            onClick={() => setShowMissing(v => !v)}
+            active={showMissing}
+          />
         </div>
+
+        {/* Concerned participants: those registered to no activity (§12) */}
+        {showMissing && (
+          <ConcernedParticipants
+            rows={masterRows.filter(r => !r.has_activities)}
+            title="Participants sans activité"
+            action="Action recommandée : proposer/inscrire le participant à une activité selon ses préférences."
+            emptyText="Tous les participants sont inscrits à au moins une activité."
+            locale={locale}
+            eventId={eventId}
+          />
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Create Activity Form */}
