@@ -132,7 +132,7 @@ export default function LoginPage() {
               {isSignUp ? 'Créer un compte' : 'Connexion'}
             </h1>
             <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-              Plateforme de gestion événementielle
+              Event Intelligence V1
             </p>
           </div>
 
@@ -314,7 +314,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <p className="mt-6 text-center text-xs text-[var(--color-text-secondary)]">
-          © 2025 VO Event Max. Tous droits réservés.
+          © 2026 VO Group. Tous droits réservés.
         </p>
       </div>
     </div>
