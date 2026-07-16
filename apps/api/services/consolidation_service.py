@@ -768,7 +768,7 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
 
     try:
         files_resp = supabase.table("uploaded_files").select("id, source_type").eq("event_id", event_id).execute()
-        target_files = [f for f in files_resp.data or [] if f["source_type"] in ("hotel", "transfer", "activity")]
+        target_files = [f for f in files_resp.data or [] if f["source_type"] in ("fcm", "hotel", "transfer", "activity")]
     except Exception as exc:
         logger.error("Failed to load uploaded files for non-registration matching: %s", exc)
         return
@@ -790,11 +790,27 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
 
         rec_first = (normalized.get("first_name") or "").strip().lower()
         rec_last = (normalized.get("last_name") or "").strip().lower()
-        if not rec_first and " " in rec_last:
+        # Flight/hotel files usually carry the identity as a single "Traveller"
+        # field (e.g. "LAI/Chun Chi" = LAST/First, or "First Last"). Derive a
+        # name from it when first/last aren't provided separately.
+        rec_traveler = (normalized.get("traveler_name") or "").strip().lower()
+        if not rec_first and not rec_last and rec_traveler:
+            if "/" in rec_traveler:
+                a, b = rec_traveler.split("/", 1)
+                rec_last, rec_first = a.strip(), b.strip()
+            else:
+                toks = rec_traveler.split()
+                if len(toks) >= 2:
+                    rec_first, rec_last = toks[0], " ".join(toks[1:])
+                else:
+                    rec_last = rec_traveler
+        elif not rec_first and " " in rec_last:
             parts = rec_last.split(" ", 1)
             rec_first = parts[0]
             rec_last = parts[1]
 
+        # Order-insensitive matching downstream (token_sort_ratio) tolerates a
+        # wrong first/last guess.
         rec_full_name = f"{rec_first} {rec_last}".strip()
         rec_email = (normalized.get("email") or "").strip().lower()
         rec_code = (normalized.get("id") or normalized.get("participant_id") or raw.get("ID Participant") or "").strip().lower()

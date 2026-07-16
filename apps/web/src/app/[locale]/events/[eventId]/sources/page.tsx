@@ -29,10 +29,12 @@ const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; req
     { field: 'dietary_requirements', label: 'Régime Alimentaire', required: false },
     { field: 'nationality', label: 'Nationalité', required: false }
   ],
+  // Non-registration files identify the traveller by a single name (Traveller)
+  // or email and are matched to existing participants — so identity fields are
+  // OPTIONAL here (only the domain fields are truly required).
   fcm: [
-    { field: 'first_name', label: 'Prénom (First Name)', required: true },
-    { field: 'last_name', label: 'Nom (Last Name)', required: true },
-    { field: 'email', label: 'Email', required: true },
+    { field: 'traveler_name', label: 'Nom voyageur (billet)', required: false },
+    { field: 'email', label: 'Email', required: false },
     { field: 'flight_number', label: 'Numéro de Vol', required: true },
     { field: 'pnr_code', label: 'Code PNR', required: false },
     { field: 'airline', label: 'Compagnie Aérienne', required: false },
@@ -43,18 +45,20 @@ const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; req
     { field: 'baggage_info', label: 'Infos Bagages', required: false }
   ],
   hotel: [
-    { field: 'first_name', label: 'Prénom (First Name)', required: true },
-    { field: 'last_name', label: 'Nom (Last Name)', required: true },
-    { field: 'email', label: 'Email', required: true },
+    { field: 'traveler_name', label: 'Nom voyageur / complet', required: false },
+    { field: 'first_name', label: 'Prénom (First Name)', required: false },
+    { field: 'last_name', label: 'Nom (Last Name)', required: false },
+    { field: 'email', label: 'Email', required: false },
     { field: 'hotel_name', label: 'Nom de l\'Hôtel', required: true },
     { field: 'check_in_date', label: 'Date Check-in', required: true },
     { field: 'check_out_date', label: 'Date Check-out', required: true },
     { field: 'room_type', label: 'Type de Chambre', required: false }
   ],
   transfer: [
-    { field: 'first_name', label: 'Prénom (First Name)', required: true },
-    { field: 'last_name', label: 'Nom (Last Name)', required: true },
-    { field: 'email', label: 'Email', required: true },
+    { field: 'traveler_name', label: 'Nom voyageur / complet', required: false },
+    { field: 'first_name', label: 'Prénom (First Name)', required: false },
+    { field: 'last_name', label: 'Nom (Last Name)', required: false },
+    { field: 'email', label: 'Email', required: false },
     { field: 'transfer_type', label: 'Type de Transfert (arrival/departure)', required: false },
     { field: 'pickup_location', label: 'Lieu de Prise en charge', required: true },
     { field: 'dropoff_location', label: 'Destination', required: true },
@@ -62,9 +66,10 @@ const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; req
     { field: 'vehicle_type', label: 'Type de Véhicule', required: false }
   ],
   activity: [
-    { field: 'first_name', label: 'Prénom (First Name)', required: true },
-    { field: 'last_name', label: 'Nom (Last Name)', required: true },
-    { field: 'email', label: 'Email', required: true },
+    { field: 'traveler_name', label: 'Nom voyageur / complet', required: false },
+    { field: 'first_name', label: 'Prénom (First Name)', required: false },
+    { field: 'last_name', label: 'Nom (Last Name)', required: false },
+    { field: 'email', label: 'Email', required: false },
     { field: 'activity_name', label: 'Nom de l\'Activité', required: true }
   ]
 }
