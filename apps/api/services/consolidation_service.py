@@ -334,6 +334,15 @@ def detect_duplicate_emails(
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _name_key(first: Any, last: Any) -> str:
+    """Normalised 'first last' key (lowercased, accent-stripped) for deduping the
+    same person across files when the email is missing or inconsistent."""
+    import unicodedata
+    s = f"{first or ''} {last or ''}".strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    return " ".join(s.split())
+
+
 async def run_consolidation(
     event_id: str,
     run_id: str,
@@ -443,32 +452,51 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         # 4. Upsert participants from registration records
         # ---------------------------------------------------------------
-        # Build a quick lookup: email → existing participant_id
-        existing_participants: dict[str, str] = {}
+        # Lookups to dedupe the same person across the 10+ files: by email AND
+        # by normalised name (so records with a missing/inconsistent email still
+        # merge into one participant instead of creating duplicates).
+        by_email: dict[str, dict] = {}
+        by_name: dict[str, dict] = {}
         existing_data = fetch_all_participants(supabase, event_id)
         for p in existing_data:
             if p.get("email"):
-                existing_participants[p["email"].lower()] = p
+                by_email[p["email"].lower()] = p
+            nk = _name_key(p.get("first_name"), p.get("last_name"))
+            if nk:
+                by_name.setdefault(nk, p)
 
         participant_id_map: dict[str, str] = {}  # source_record_id → participant_id
 
         for reg in registrations:
             nd = reg.normalized
+            email = (nd.get("email") or "").strip().lower() or None
+            name_key = _name_key(nd.get("first_name"), nd.get("last_name"))
 
-            # Determine if participant already exists
-            existing = existing_participants.get(reg.email) if reg.email else None
+            # 1) match by email; 2) fall back to same name (unless emails clearly
+            #    conflict — that would be two different people sharing a name).
+            existing = by_email.get(email) if email else None
+            if not existing and name_key:
+                cand = by_name.get(name_key)
+                if cand:
+                    cand_email = (cand.get("email") or "").strip().lower() or None
+                    if not email or not cand_email or email == cand_email:
+                        existing = cand
 
             if existing:
-                # Non-destructive update
+                # Non-destructive merge: keep known values, fill the gaps.
                 locked = existing.get("locked_fields") or {}
                 merged = merge_participant_fields(existing, nd, locked)
                 merged["has_flight"] = existing.get("has_flight", False)
                 merged["registration_source_id"] = reg.source_record_id
-                # Only write real participant columns — extra master-file fields
-                # stay in source_records (and show on the consolidated fiche).
                 update_payload = {k: v for k, v in merged.items() if k in _PARTICIPANT_WRITABLE_FIELDS}
                 supabase.table("participants").update(update_payload).eq("id", existing["id"]).execute()
                 participant_id = existing["id"]
+                # Keep the in-memory record fresh so later files merge onto it too.
+                existing.update(update_payload)
+                if email:
+                    by_email[email] = existing
+                if name_key:
+                    by_name.setdefault(name_key, existing)
                 stats["participants_updated"] += 1
             else:
                 # Create new participant
@@ -485,10 +513,15 @@ async def run_consolidation(
                     "dietary_requirements": nd.get("dietary_requirements"),
                     "completeness_status": "incomplete",
                     "registration_source_id": reg.source_record_id,
+                    "locked_fields": {},
                 }
-                supabase.table("participants").insert(new_participant).execute()
-                if reg.email:
-                    existing_participants[reg.email] = {"id": participant_id, "email": reg.email, "locked_fields": {}}
+                supabase.table("participants").insert(
+                    {k: v for k, v in new_participant.items() if k != "locked_fields" or v}
+                ).execute()
+                if email:
+                    by_email[email] = new_participant
+                if name_key:
+                    by_name.setdefault(name_key, new_participant)
                 stats["participants_created"] += 1
 
             participant_id_map[reg.source_record_id] = participant_id
