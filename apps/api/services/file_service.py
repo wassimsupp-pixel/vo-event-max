@@ -185,6 +185,55 @@ def read_tabular(raw: bytes, filename: str) -> pd.DataFrame:
     return df
 
 
+def read_all_sheets(raw: bytes, filename: str) -> dict[str, "pd.DataFrame"]:
+    """
+    Parse EVERY sheet of an Excel file into a header-detected DataFrame
+    (``{sheet_name: df}``). Used for combined "master files" that spread info
+    across sheets (participants / hotel / transfers…). CSV → a single sheet.
+    """
+    ext = os.path.splitext(filename)[1].lower()
+    if ext == ".csv":
+        return {"CSV": read_tabular(raw, filename)}
+    if ext not in (".xlsx", ".xls"):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail=f"Unsupported file extension: {ext}")
+    raw_sheets = pd.read_excel(io.BytesIO(raw), dtype=str, header=None, sheet_name=None)
+    out: dict[str, pd.DataFrame] = {}
+    for name, df0 in raw_sheets.items():
+        if df0 is None or df0.empty:
+            continue
+        try:
+            df = _promote_header(df0, _detect_header_row(df0))
+            df = df.where(pd.notnull(df), None)
+            if len(df.columns) > 0 and len(df) > 0:
+                out[str(name)] = df
+        except Exception as exc:
+            logger.warning("Sheet '%s' could not be parsed, skipping: %s", name, exc)
+    return out
+
+
+def _download_bytes(supabase: Client, storage_path: str) -> bytes:
+    try:
+        return supabase.storage.from_(config.SUPABASE_STORAGE_BUCKET).download(storage_path)
+    except Exception as exc:
+        logger.error("Storage download failed for %s: %s", storage_path, exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to retrieve file from storage: {storage_path}",
+        ) from exc
+
+
+def download_all_sheets(supabase: Client, storage_path: str, original_filename: str) -> dict[str, "pd.DataFrame"]:
+    """Download from Storage and parse every sheet (see ``read_all_sheets``)."""
+    raw = _download_bytes(supabase, storage_path)
+    try:
+        return read_all_sheets(raw, original_filename)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to parse sheets of %s: %s", original_filename, exc)
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Could not parse file '{original_filename}': {exc}") from exc
+
+
 def download_and_parse_file(
     supabase: Client,
     storage_path: str,

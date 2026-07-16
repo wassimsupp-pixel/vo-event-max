@@ -29,8 +29,8 @@ from supabase import Client
 
 from services import exception_service
 from services.audit_service import log_change
-from services.file_service import download_and_parse_file, get_mapped_files_for_event
-from services.mapping_service import apply_mapping, normalise_fields, parse_and_insert_source_records
+from services.file_service import download_and_parse_file, download_all_sheets, get_mapped_files_for_event
+from services.mapping_service import apply_mapping, normalise_fields, parse_and_insert_source_records, suggest_mapping
 
 def fetch_all_source_records(supabase: Client, file_ids: list[str]) -> list[dict]:
     all_data = []
@@ -349,6 +349,80 @@ import re as _re
 _ROLE_NOISE = _re.compile(r"\b(total|subtotal|sous[-\s]?total|grand\s*total|facilitator|animateur|organizer|n/?a)\b", _re.I)
 
 
+def _auto_sheet_mapping(sdf) -> dict[str, str]:
+    """Auto column→field mapping for a secondary sheet (no human review): keep
+    only confident suggestions. Returns {} if nothing identifiable is found."""
+    try:
+        cols = list(sdf.columns)
+        sample = sdf.head(8).to_dict(orient="records")
+        sug = suggest_mapping(cols, sample)
+        m = {c: s["suggested_field"] for c, s in sug.items()
+             if s.get("suggested_field") and s.get("confidence", 0) >= 0.6}
+        # Only worth processing if the sheet has an identity column to link on.
+        if any(v in ("first_name", "last_name", "traveler_name", "email") for v in m.values()):
+            return m
+        return {}
+    except Exception as exc:
+        logger.warning("Auto-mapping of secondary sheet failed: %s", exc)
+        return {}
+
+
+_FR_MONTHS = {
+    "janv": 1, "jan": 1, "févr": 2, "fevr": 2, "fev": 2, "feb": 2, "mars": 3, "mar": 3,
+    "avr": 4, "apr": 4, "mai": 5, "may": 5, "juin": 6, "jun": 6, "juil": 7, "jul": 7,
+    "août": 8, "aout": 8, "aug": 8, "sept": 9, "sep": 9, "oct": 10, "nov": 11, "déc": 12, "dec": 12,
+}
+
+
+def _parse_header_date(header: str, year: int):
+    """Parse a per-night column header ('26-janv', '27-Jan', '2026-01-26', '26/01')
+    into a date. Returns a date or None."""
+    from datetime import date as _date
+    s = str(header or "").strip().lower()
+    m = _re.match(r"^(\d{4})-(\d{1,2})-(\d{1,2})", s)
+    if m:
+        try:
+            return _date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            return None
+    m = _re.match(r"^(\d{1,2})[-/\s]+([a-zàâéèêîû]+)", s)  # DD-mon
+    if m:
+        day = int(m.group(1))
+        mon = _FR_MONTHS.get(m.group(2)[:4]) or _FR_MONTHS.get(m.group(2)[:3])
+        if mon:
+            try:
+                return _date(year, mon, day)
+            except ValueError:
+                return None
+    m = _re.match(r"^(\d{1,2})[-/](\d{1,2})$", s)  # DD/MM
+    if m:
+        try:
+            return _date(year, int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+    return None
+
+
+def _parse_night_columns(raw: dict[str, Any], year: int):
+    """From per-night date columns (headers like '26-janv' with a truthy cell),
+    reconstruct (check_in, check_out) as ISO strings. check_out = last night + 1."""
+    from datetime import timedelta
+    booked = []
+    for k, v in (raw or {}).items():
+        if v is None:
+            continue
+        sv = str(v).strip().lower()
+        if sv in ("", "0", "0.0", "nan", "none", "no"):
+            continue
+        d = _parse_header_date(k, year)
+        if d:
+            booked.append(d)
+    if not booked:
+        return None, None
+    booked.sort()
+    return booked[0].isoformat(), (booked[-1] + timedelta(days=1)).isoformat()
+
+
 def _is_real_person(nd: dict[str, Any]) -> bool:
     """False for parasitic rows (subtotals, job-title labels, fully-empty)."""
     first = (nd.get("first_name") or "").strip()
@@ -442,22 +516,38 @@ async def run_consolidation(
                 logger.warning("File %s has no column_mapping — skipping.", file_id)
                 continue
 
-            df = download_and_parse_file(
-                supabase,
-                uploaded_file["storage_path"],
-                uploaded_file["original_filename"],
-            )
-            raw_rows = df.to_dict(orient="records")
+            # Read EVERY sheet. The first sheet uses the human-validated mapping;
+            # additional sheets (hotel / transfers / departures in a combined
+            # master file) are auto-mapped so their data is not lost. Rows that
+            # carry a person's name merge into the same participant, and their
+            # hotel/transfer columns are extracted afterwards.
+            try:
+                sheets = download_all_sheets(
+                    supabase, uploaded_file["storage_path"], uploaded_file["original_filename"]
+                )
+            except Exception as exc:
+                logger.warning("Multi-sheet read failed for %s (%s); falling back to first sheet", file_id, exc)
+                sheets = {"main": download_and_parse_file(
+                    supabase, uploaded_file["storage_path"], uploaded_file["original_filename"])}
 
-            # Insert source_records and get their IDs
-            inserted_ids = parse_and_insert_source_records(
-                supabase=supabase,
-                file_id=file_id,
-                event_id=event_id,
-                df_rows=raw_rows,
-                mapping=mapping,
-            )
-            stats["total_source_records"] += len(inserted_ids)
+            sheet_names = list(sheets.keys())
+            for si, sname in enumerate(sheet_names):
+                sdf = sheets[sname]
+                if si == 0:
+                    sheet_mapping = mapping                       # human-validated
+                else:
+                    sheet_mapping = _auto_sheet_mapping(sdf)      # auto (secondary sheet)
+                    if not sheet_mapping:
+                        continue
+                raw_rows = sdf.to_dict(orient="records")
+                inserted_ids = parse_and_insert_source_records(
+                    supabase=supabase,
+                    file_id=file_id,
+                    event_id=event_id,
+                    df_rows=raw_rows,
+                    mapping=sheet_mapping,
+                )
+                stats["total_source_records"] += len(inserted_ids)
 
             # Build ParticipantRecord objects — we need the normalised data
             sr_resp = (
@@ -1202,6 +1292,16 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     
                     check_in_str = data.get("check_in_date")
                     check_out_str = data.get("check_out_date")
+                    # Fallback: hotels encoded as per-night date columns (26-janv,
+                    # 27-Jan… with a "1") — reconstruct check-in/out from raw_data.
+                    if not (check_in_str and check_out_str):
+                        try:
+                            _year = int(str(default_date)[:4])
+                        except (ValueError, TypeError):
+                            _year = 2026
+                        ci_pn, co_pn = _parse_night_columns(record.get("raw_data") or {}, _year)
+                        if ci_pn and co_pn:
+                            check_in_str, check_out_str = ci_pn, co_pn
                     room_type = data.get("room_type") or "single"
                     
                     if check_in_str and check_out_str:
