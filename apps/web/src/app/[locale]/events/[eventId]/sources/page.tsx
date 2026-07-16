@@ -34,6 +34,8 @@ const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; req
   // OPTIONAL here (only the domain fields are truly required).
   fcm: [
     { field: 'traveler_name', label: 'Nom voyageur (billet)', required: false },
+    { field: 'first_name', label: 'Prénom (First Name)', required: false },
+    { field: 'last_name', label: 'Nom (Last Name)', required: false },
     { field: 'email', label: 'Email', required: false },
     { field: 'flight_number', label: 'Numéro de Vol', required: true },
     { field: 'pnr_code', label: 'Code PNR', required: false },
