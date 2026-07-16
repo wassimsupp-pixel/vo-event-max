@@ -57,7 +57,10 @@ async def get_master_list(
         for r in rows:
             r.pop("dietary_requirements", None)
             r.pop("food_allergy_info", None)
-    return {"items": rows, "total": len(rows)}
+    # Union of user-defined custom mapping field names, so the client can render
+    # one extra column per custom field.
+    custom_fields = sorted({k for r in rows for k in (r.get("custom") or {}).keys()})
+    return {"items": rows, "total": len(rows), "custom_fields": custom_fields}
 
 # Fields that are always selected for the detail view
 PARTICIPANT_FULL_SELECT = (

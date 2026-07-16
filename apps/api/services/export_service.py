@@ -84,21 +84,24 @@ def _write_header_row(ws, headers: list[str]) -> None:
 # Sheet 1 — Master List
 # ---------------------------------------------------------------------------
 
-def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str]) -> None:
+def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custom_fields: list[str] | None = None) -> None:
     """Populate the detailed Master List sheet (feedback §6): identity + real
-    flight / hotel / transfer / activity / dietary details, not just booleans."""
+    flight / hotel / transfer / activity / dietary details, not just booleans.
+    User-defined custom mapping fields are appended as extra columns."""
     ws.title = "Master List"
     ws.freeze_panes = "A2"
+    custom_fields = custom_fields or []
 
     headers = [
         "Last Name", "First Name", "Email", "Company", "Phone", "Nationality",
         "Region", "Category", "Dietary Requirements", "Food / Allergy",
         "Flights (airline · route · times)", "Hotel", "Check-in", "Check-out",
         "Nights", "Room", "Transfers", "Activities (name · day/time)", "Status",
-    ]
+    ] + list(custom_fields)
     _write_header_row(ws, headers)
 
     for row_idx, p in enumerate(rows, start=2):
+        custom = p.get("custom") or {}
         values = [
             p.get("last_name"),
             p.get("first_name"),
@@ -119,7 +122,7 @@ def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str]) -> No
             p.get("transfer_summary"),
             p.get("activities_summary"),
             p.get("completeness_status", "incomplete"),
-        ]
+        ] + [custom.get(cf) for cf in custom_fields]
 
         # Determine row colour
         p_id = str(p.get("id", ""))
@@ -413,6 +416,7 @@ async def generate_excel(
     # can trigger exports, so dietary/allergy fields are included here.
     master_rows: list[dict] = master_list_service.build_master_rows(supabase, event_id)
     master_rows.sort(key=lambda r: str(r.get("last_name") or "").lower())
+    custom_fields = sorted({k for r in master_rows for k in (r.get("custom") or {}).keys()})
 
     # Data-quality analysis (score, dimensions, distributions, recommendations, AI)
     try:
@@ -463,7 +467,7 @@ async def generate_excel(
 
     # Sheet 1: Master List (detailed)
     ws1 = wb.active
-    _build_master_list_sheet(ws1, master_rows, conflict_ids)
+    _build_master_list_sheet(ws1, master_rows, conflict_ids, custom_fields)
 
     # Sheet 2: Data-quality analysis
     ws_q = wb.create_sheet()

@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 from supabase import Client
 
+from services.mapping_service import CANONICAL_FIELDS
+
 logger = logging.getLogger(__name__)
 
 # Rich fields that live in source_records.normalized_data (not participant cols)
@@ -185,6 +187,15 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         nds = by_participant.get(pid, [])
         for field in RICH_FIELDS:
             row[field] = _first_non_empty([nd.get(field) for nd in nds])
+
+        # Custom (user-defined) mapping fields: any normalized_data key that is
+        # not a canonical field — surfaced so master list / export show them.
+        custom: dict[str, Any] = {}
+        for nd in nds:
+            for k, v in nd.items():
+                if k not in CANONICAL_FIELDS and k not in custom and v is not None and str(v).strip() != "":
+                    custom[k] = v
+        row["custom"] = custom
 
         # Flights → one line per flight, sorted by departure
         flist = sorted(flights_by_p.get(pid, []), key=lambda f: str(f.get("departure_time") or ""))

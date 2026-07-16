@@ -40,6 +40,7 @@ interface MasterRow {
   hotel_room_type?: string | null
   transfer_summary?: string | null
   activities_summary?: string | null
+  custom?: Record<string, string | null>
 }
 
 /** Multi-line detail cell: shows the text (pre-wrapped) or a red "manquant" hint. */
@@ -68,6 +69,7 @@ export default function MasterListPage() {
   const tActions = useTranslations('actions')
 
   const [rows, setRows] = useState<MasterRow[]>([])
+  const [customCols, setCustomCols] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -88,7 +90,10 @@ export default function MasterListPage() {
       setError(null)
       try {
         const res = await api.masterList.get(eventId)
-        if (!cancelled) setRows(res.items || [])
+        if (!cancelled) {
+          setRows(res.items || [])
+          setCustomCols((res as { custom_fields?: string[] }).custom_fields || [])
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Erreur lors du chargement de la master list')
       } finally {
@@ -109,7 +114,7 @@ export default function MasterListPage() {
       if (missingFilter === 'hotel' && r.has_hotel) return false
       if (missingFilter === 'transfer' && r.has_transfer) return false
       if (!q) return true
-      return [r.first_name, r.last_name, r.email, r.company, r.region, r.attendee_category, r.country, r.job_title, r.phone]
+      return [r.first_name, r.last_name, r.email, r.company, r.region, r.attendee_category, r.country, r.job_title, r.phone, ...Object.values(r.custom || {})]
         .some((v) => (v || '').toString().toLowerCase().includes(q))
     })
   }, [rows, searchQuery, statusFilter, missingFilter])
@@ -224,6 +229,9 @@ export default function MasterListPage() {
                   <th className="px-3 py-3 min-w-[180px]">Transfert</th>
                   <th className="px-3 py-3 min-w-[160px]">Activités (jour/heure)</th>
                   <th className="px-3 py-3 min-w-[140px]">Régime / Allergies</th>
+                  {customCols.map((c) => (
+                    <th key={c} className="px-3 py-3 min-w-[120px]" title={`Champ personnalisé : ${c}`}>{c}</th>
+                  ))}
                   <th className="px-3 py-3">Statut</th>
                 </tr>
               </thead>
@@ -231,13 +239,13 @@ export default function MasterListPage() {
                 {loading ? (
                   [...Array(6)].map((_, i) => (
                     <tr key={i} className="border-b border-[var(--color-border)] animate-pulse">
-                      {[...Array(11)].map((__, j) => (
+                      {[...Array(11 + customCols.length)].map((__, j) => (
                         <td key={j} className="px-3 py-3"><div className="h-4 rounded bg-gray-100" style={{ width: `${50 + ((j * 13) % 40)}%` }} /></td>
                       ))}
                     </tr>
                   ))
                 ) : pageRows.length === 0 ? (
-                  <tr><td colSpan={11} className="py-12 text-center text-sm text-[var(--color-text-secondary)]">Aucun participant trouvé</td></tr>
+                  <tr><td colSpan={11 + customCols.length} className="py-12 text-center text-sm text-[var(--color-text-secondary)]">Aucun participant trouvé</td></tr>
                 ) : (
                   pageRows.map((r) => {
                     const hotelText = [
@@ -262,6 +270,9 @@ export default function MasterListPage() {
                       <td className="px-3 py-3"><DetailCell text={r.transfer_summary} missing="pas de transfert" /></td>
                       <td className="px-3 py-3"><DetailCell text={r.activities_summary} missing="aucune activité" /></td>
                       <td className="px-3 py-3"><DetailCell text={dietText} missing="non renseigné" /></td>
+                      {customCols.map((c) => (
+                        <td key={c} className="px-3 py-3 text-[11px] text-[var(--color-text-secondary)]">{r.custom?.[c] || '—'}</td>
+                      ))}
                       <td className="px-3 py-3"><StatusPill status={r.completeness_status} /></td>
                     </tr>
                     )
