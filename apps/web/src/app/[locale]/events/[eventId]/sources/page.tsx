@@ -12,6 +12,7 @@ import type { UploadedFile, FileUploadResponse } from '@/lib/api'
 import { api } from '@/lib/api'
 
 const SOURCE_TYPES = [
+  { key: 'masterfile', name: 'Master File (infos mixtes)', icon: '🗂️', subtitle: 'Un seul fichier: participants + vols + hôtel + transferts + activités' },
   { key: 'registration', name: 'Export Inscriptions (Client)', icon: '📋', subtitle: 'Fichier des participants inscrits' },
   { key: 'fcm', name: 'Export Vols (FCM Broker)', icon: '✈️', subtitle: 'Détails des vols FCM Travel' },
   { key: 'hotel', name: 'Liste Hôtels', icon: '🏨', subtitle: 'Confirmations de réservations hôtelières' },
@@ -20,6 +21,41 @@ const SOURCE_TYPES = [
 ]
 
 const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; required: boolean }[]> = {
+  // Master File: a single file mixing every kind of info. All fields are offered
+  // and none is strictly required — the user maps whatever the file contains.
+  masterfile: [
+    { field: 'first_name', label: 'Prénom (First Name)', required: false },
+    { field: 'last_name', label: 'Nom (Last Name)', required: false },
+    { field: 'traveler_name', label: 'Nom voyageur / complet', required: false },
+    { field: 'email', label: 'Email', required: false },
+    { field: 'company', label: 'Société / Compagnie', required: false },
+    { field: 'phone', label: 'Téléphone', required: false },
+    { field: 'nationality', label: 'Nationalité', required: false },
+    { field: 'attendee_category', label: 'Catégorie participant', required: false },
+    { field: 'job_title', label: 'Fonction / Poste', required: false },
+    { field: 'region', label: 'Région', required: false },
+    { field: 'country', label: 'Pays', required: false },
+    { field: 'date_of_birth', label: 'Date de naissance', required: false },
+    { field: 'passport_number', label: 'N° passeport', required: false },
+    { field: 'passport_expiry', label: 'Expiration passeport', required: false },
+    { field: 'dietary_requirements', label: 'Régime Alimentaire', required: false },
+    { field: 'food_allergy_info', label: 'Allergies / Restrictions', required: false },
+    { field: 'airline', label: 'Compagnie Aérienne', required: false },
+    { field: 'flight_number', label: 'Numéro de Vol', required: false },
+    { field: 'departure_airport', label: 'Aéroport Départ', required: false },
+    { field: 'arrival_airport', label: 'Aéroport Arrivée', required: false },
+    { field: 'departure_time', label: 'Date/Heure Départ', required: false },
+    { field: 'arrival_time', label: 'Date/Heure Arrivée', required: false },
+    { field: 'pnr_code', label: 'Code PNR', required: false },
+    { field: 'hotel_name', label: 'Nom de l\'Hôtel', required: false },
+    { field: 'check_in_date', label: 'Date Check-in', required: false },
+    { field: 'check_out_date', label: 'Date Check-out', required: false },
+    { field: 'room_type', label: 'Type de Chambre', required: false },
+    { field: 'pickup_location', label: 'Transfert — Lieu de prise en charge', required: false },
+    { field: 'dropoff_location', label: 'Transfert — Destination', required: false },
+    { field: 'pickup_time', label: 'Transfert — Heure', required: false },
+    { field: 'activity_name', label: 'Nom de l\'Activité', required: false },
+  ],
   registration: [
     { field: 'first_name', label: 'Prénom (First Name)', required: true },
     { field: 'last_name', label: 'Nom (Last Name)', required: true },

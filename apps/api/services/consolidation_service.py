@@ -444,7 +444,11 @@ async def run_consolidation(
             )
             for sr in sr_resp.data or []:
                 pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
-                if source_type == "registration":
+                # 'masterfile' = one combined file (participants + flights + hotel +
+                # transfers + activities). Treat each row as a participant record
+                # like a registration; its flight/hotel/etc. columns are extracted
+                # afterwards by extract_domain_data_from_sources (runs on all rows).
+                if source_type in ("registration", "masterfile"):
                     registrations.append(pr)
                 elif source_type == "fcm":
                     fcm_records.append(pr)
