@@ -88,19 +88,40 @@ export default function DashboardPage() {
       const run = await api.consolidation.run(eventId)
       setConsolidationRun(run)
 
-      // Poll every 2s until the run finishes
-      const poll = async (): Promise<void> => {
-        const updated = await api.consolidation.get(eventId, run.id)
+      // Poll until the run finishes. A large consolidation keeps the API worker
+      // busy, so individual status polls can transiently fail/timeout — we
+      // tolerate that and keep waiting instead of falsely reporting an error.
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+      const MAX_MINUTES = 20
+      const start = Date.now()
+      const poll = async (consecutiveFailures = 0): Promise<void> => {
+        if (Date.now() - start > MAX_MINUTES * 60_000) {
+          setConsolidationMsg({ type: 'error', text: t('errorRun') })
+          return
+        }
+        let updated
+        try {
+          updated = await api.consolidation.get(eventId, run.id)
+        } catch {
+          // API busy during the heavy run — wait longer and retry, don't error out.
+          if (consecutiveFailures >= 40) {
+            setConsolidationMsg({ type: 'error', text: t('errorApi') })
+            return
+          }
+          await sleep(5000)
+          return poll(consecutiveFailures + 1)
+        }
         setConsolidationRun(updated)
         if (updated.status === 'running' || updated.status === 'pending') {
-          await new Promise(r => setTimeout(r, 2000))
-          return poll()
+          await sleep(3000)
+          return poll(0)
         }
         if (updated.status === 'done') {
           setConsolidationMsg({ type: 'success', text: t('successRun', { matched: updated.stats?.matched ?? 0, conflicts: updated.stats?.conflicts ?? 0 }) })
-          await loadDashboardData()
+          await loadDashboardData()   // auto-refresh — no manual reload needed
         } else {
           setConsolidationMsg({ type: 'error', text: t('errorRun') })
+          await loadDashboardData()
         }
       }
       await poll()
