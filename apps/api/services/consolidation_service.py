@@ -343,6 +343,30 @@ def _name_key(first: Any, last: Any) -> str:
     return " ".join(s.split())
 
 
+import re as _re
+# Subtotal / label rows that must NOT become participants (e.g. "115 / Total",
+# "Percussion facilitator"). Only applied when there is no email to trust.
+_ROLE_NOISE = _re.compile(r"\b(total|subtotal|sous[-\s]?total|grand\s*total|facilitator|animateur|organizer|n/?a)\b", _re.I)
+
+
+def _is_real_person(nd: dict[str, Any]) -> bool:
+    """False for parasitic rows (subtotals, job-title labels, fully-empty)."""
+    first = (nd.get("first_name") or "").strip()
+    last = (nd.get("last_name") or "").strip()
+    email = (nd.get("email") or "").strip()
+    traveler = (nd.get("traveler_name") or "").strip()
+    if not any([first, last, email, traveler]):
+        return False           # no identity at all
+    if email:
+        return True            # a real email → trust it's a person
+    combined = f"{first} {last} {traveler}".strip()
+    if _re.fullmatch(r"[\d\s/.\-]+", combined):
+        return False           # purely numeric (subtotal row)
+    if _ROLE_NOISE.search(combined):
+        return False           # "… Total", "Percussion facilitator", …
+    return True
+
+
 async def run_consolidation(
     event_id: str,
     run_id: str,
@@ -471,16 +495,34 @@ async def run_consolidation(
 
         participant_id_map: dict[str, str] = {}  # source_record_id → participant_id
 
+        skipped_noise = 0
         for reg in registrations:
             nd = reg.normalized
+
+            # Skip parasitic rows (subtotals, job-title labels, fully-empty) — they
+            # must not be created as participants (feedback #4).
+            if not _is_real_person(nd):
+                skipped_noise += 1
+                continue
+
             email = (nd.get("email") or "").strip().lower() or None
             name_key = _name_key(nd.get("first_name"), nd.get("last_name"))
+            full_name = f"{(nd.get('first_name') or '').strip()} {(nd.get('last_name') or '').strip()}".strip()
 
-            # 1) match by email; 2) fall back to same name (unless emails clearly
-            #    conflict — that would be two different people sharing a name).
+            # 1) match by email; 2) exact same name; 3) fuzzy same name — unless
+            #    emails clearly conflict (two different people sharing a name).
             existing = by_email.get(email) if email else None
             if not existing and name_key:
                 cand = by_name.get(name_key)
+                if not cand:
+                    # Fuzzy: tolerate spelling variants ("Steph" vs "Stephanie").
+                    best = 0
+                    for k, c in by_name.items():
+                        sc = fuzz.token_sort_ratio(name_key, k)
+                        if sc > best:
+                            best, cand = sc, c
+                    if best < 90:
+                        cand = None
                 if cand:
                     cand_email = (cand.get("email") or "").strip().lower() or None
                     if not email or not cand_email or email == cand_email:
@@ -493,6 +535,19 @@ async def run_consolidation(
                 merged["has_flight"] = existing.get("has_flight", False)
                 merged["registration_source_id"] = reg.source_record_id
                 update_payload = {k: v for k, v in merged.items() if k in _PARTICIPANT_WRITABLE_FIELDS}
+                # Log the real field changes so the Change Log is meaningful (feedback #9).
+                for f, newv in update_payload.items():
+                    oldv = existing.get(f)
+                    if str(oldv or "") != str(newv or ""):
+                        try:
+                            log_change(
+                                supabase=supabase, event_id=event_id, user_id=user_id,
+                                entity_type="participant", entity_id=existing["id"],
+                                field_name=f, old_value=str(oldv or ""), new_value=str(newv or ""),
+                                reason="merge",
+                            )
+                        except Exception:
+                            pass
                 supabase.table("participants").update(update_payload).eq("id", existing["id"]).execute()
                 participant_id = existing["id"]
                 # Keep the in-memory record fresh so later files merge onto it too.
@@ -537,6 +592,10 @@ async def run_consolidation(
                 "match_score": 100.0,
                 "match_signals": {"source": "registration"},
             }).eq("id", reg.source_record_id).execute()
+
+        stats["skipped_noise_rows"] = skipped_noise
+        if skipped_noise:
+            logger.info("Skipped %d parasitic (subtotal/label) rows during consolidation", skipped_noise)
 
         # ---------------------------------------------------------------
         # 5. Match FCM records → participants
