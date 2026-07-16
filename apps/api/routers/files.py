@@ -62,11 +62,12 @@ def _parse_file_to_dataframe(content: bytes, filename: str) -> pd.DataFrame:
         if ext in (".xlsx", ".xls"):
             df = pd.read_excel(io.BytesIO(content), dtype=str)
         elif ext == ".csv":
-            # Try UTF-8 first, fall back to latin-1 for Western European files
+            # sep=None + python engine auto-detects the delimiter (',' or the ';'
+            # common in French Excel CSV exports). UTF-8 first, then latin-1.
             try:
-                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="utf-8")
+                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="utf-8", sep=None, engine="python")
             except UnicodeDecodeError:
-                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1")
+                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1", sep=None, engine="python")
         else:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,

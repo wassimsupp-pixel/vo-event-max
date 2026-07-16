@@ -65,10 +65,11 @@ def download_and_parse_file(
         if ext in (".xlsx", ".xls"):
             df = pd.read_excel(io.BytesIO(raw), dtype=str)
         elif ext == ".csv":
+            # sep=None + python engine auto-detects the delimiter (',' or ';').
             try:
-                df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="utf-8")
+                df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="utf-8", sep=None, engine="python")
             except UnicodeDecodeError:
-                df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="latin-1")
+                df = pd.read_csv(io.BytesIO(raw), dtype=str, encoding="latin-1", sep=None, engine="python")
         else:
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
