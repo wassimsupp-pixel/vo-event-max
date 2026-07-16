@@ -344,6 +344,19 @@ def _name_key(first: Any, last: Any) -> str:
 
 
 import re as _re
+
+
+def _norm_name(s: Any) -> str:
+    """Lowercased, accent-stripped, punctuation/nickname-free name for matching.
+    Drops parenthesised nicknames ('Xinzhu (Judy) Zhu' → 'xinzhu zhu')."""
+    import unicodedata
+    s = str(s or "").lower()
+    s = _re.sub(r"\([^)]*\)", " ", s)                 # drop "(Judy)" nicknames
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    s = _re.sub(r"[^a-z0-9\s]", " ", s)               # drop punctuation
+    return " ".join(s.split())
+
+
 # Subtotal / label rows that must NOT become participants (e.g. "115 / Total",
 # "Percussion facilitator"). Only applied when there is no email to trust.
 _ROLE_NOISE = _re.compile(r"\b(total|subtotal|sous[-\s]?total|grand\s*total|facilitator|animateur|organizer|n/?a)\b", _re.I)
@@ -1014,12 +1027,18 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
     for p in participants:
         reg_data = reg_sr_map.get(p.get("registration_source_id"), {})
         reg_code = (reg_data.get("id") or reg_data.get("participant_id") or "").strip().lower()
+        first_n = _norm_name(p.get("first_name"))
+        last_n = _norm_name(p.get("last_name"))
         part_lookup.append({
             "id": p["id"],
             "first_name": (p["first_name"] or "").strip().lower(),
             "last_name": (p["last_name"] or "").strip().lower(),
             "email": (p["email"] or "").strip().lower(),
-            "reg_code": reg_code
+            "reg_code": reg_code,
+            "first_n": first_n,
+            "last_n": last_n,
+            "first1": first_n.split()[0] if first_n else "",
+            "tokens": set((first_n + " " + last_n).split()),
         })
 
     # Process EVERY source record not yet linked to a participant. This covers
@@ -1102,24 +1121,49 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                     break
 
         if not matched_id and rec_full_name:
+            rec_first_n = _norm_name(rec_first)
+            rec_last_n = _norm_name(rec_last)
+            rec_first1 = rec_first_n.split()[0] if rec_first_n else ""
+            rec_tokens = set((rec_first_n + " " + rec_last_n).split())
+
             for p in part_lookup:
-                p_full = f"{p['first_name']} {p['last_name']}".strip()
-                if p_full == rec_full_name:
+                if not (p["last_n"] and rec_last_n):
+                    continue
+                # Skip only when BOTH have an email and they clearly differ
+                # (two distinct people sharing a name).
+                if rec_email and p["email"] and rec_email != p["email"]:
+                    continue
+                same_last = p["last_n"] == rec_last_n
+                # Strong: same last name + same given (first) name — tolerates
+                # extra middle names / patronymics ("Natalia Sergeyevna" vs
+                # "Natalia") and NOM/Prénom departures format.
+                if same_last and p["first1"] and rec_first1 and p["first1"] == rec_first1:
+                    matched_id = p["id"]
+                    break
+                # Subset: one full name's tokens contained in the other's, sharing
+                # the last name ("Bruno Adam De Oliveira" vs "Bruno De Oliveira").
+                if same_last and rec_tokens and p["tokens"] and (
+                    rec_tokens <= p["tokens"] or p["tokens"] <= rec_tokens
+                ):
                     matched_id = p["id"]
                     break
 
             if not matched_id:
+                rec_name_n = f"{rec_first_n} {rec_last_n}".strip()
                 best_score = 0
                 best_p_id = None
                 for p in part_lookup:
-                    p_full = f"{p['first_name']} {p['last_name']}".strip()
-                    if not p_full:
+                    p_name = f"{p['first_n']} {p['last_n']}".strip()
+                    if not p_name:
                         continue
-                    score = fuzz.token_sort_ratio(rec_full_name, p_full)
+                    if rec_email and p["email"] and rec_email != p["email"]:
+                        continue
+                    # token_set_ratio is robust to extra middle names / word order.
+                    score = fuzz.token_set_ratio(rec_name_n, p_name)
                     if score > best_score:
                         best_score = score
                         best_p_id = p["id"]
-                if best_score >= 80:
+                if best_score >= 88:
                     matched_id = best_p_id
 
         # No existing participant matched → create a client so the info is linked,
