@@ -316,6 +316,41 @@ SYNONYMS: dict[str, list[str]] = {
 
 
 _FLIGHT_NO_RE = re.compile(r"^[A-Z0-9]{2,3}\s*[0-9]{1,4}[A-Z]?$", re.IGNORECASE)
+# Content-pattern detectors used to deduce a field from the DATA when the header
+# is missing, generic ("Unnamed: 3"), or misspelled.
+_PHONE_RE = re.compile(r"^[+(]?\d[\d\s().\-]{6,}$")
+_PNR_RE = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{5,7}$")
+_IATA_RE = re.compile(r"^[A-Z]{3}$")
+_TIME_RE = re.compile(r"^\d{1,2}[:hH]\d{2}")
+_PASSPORT_RE = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{7,10}$")
+# Generic/placeholder header names that carry no meaning → rely on content only.
+_GENERIC_HEADER_RE = re.compile(r"^(unnamed|column|col|field|colonne|nan|none|na|n/?a)\d*$")
+
+try:
+    from rapidfuzz import fuzz as _fuzz
+    _HAS_FUZZ = True
+except ImportError:  # pragma: no cover
+    _HAS_FUZZ = False
+
+
+def _fuzzy_name_score(norm_col: str, field: str) -> float:
+    """Best fuzzy similarity of a (normalised) column name against a field name
+    and its synonyms — tolerates spelling mistakes. Returns a 0..0.85 score."""
+    if not _HAS_FUZZ or len(norm_col) < 4:
+        return 0.0
+    candidates = [_normalize_column_name(field)] + [_normalize_column_name(s) for s in SYNONYMS.get(field, [])]
+    best = 0.0
+    for cand in candidates:
+        if len(cand) < 4:
+            continue
+        r = _fuzz.ratio(norm_col, cand)
+        if r > best:
+            best = r
+    if best >= 90:
+        return 0.85
+    if best >= 82:
+        return 0.62
+    return 0.0
 
 
 def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, dict]:
@@ -343,49 +378,64 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
                 if val_str != "":
                     vals.append(val_str)
                     
+        # A generic/placeholder or empty header carries no meaning → deduce from
+        # the data only (feedback: "if no column name, deduce from its content").
+        header_absent = norm_col == "" or bool(_GENERIC_HEADER_RE.match(norm_col))
+
         # Content match indicators
-        is_email = False
-        is_date = False
-        is_flight = False
-        
+        is_email = is_date = is_flight = False
+        is_phone = is_pnr = is_iata = is_time = is_passport = False
+
         if vals:
-            email_count = sum(1 for v in vals if _EMAIL_RE.match(v))
-            is_email = (email_count / len(vals)) > 0.5
-            
-            date_count = sum(1 for v in vals if _parse_date(v) is not None)
-            is_date = (date_count / len(vals)) > 0.5
-            
-            flight_count = sum(1 for v in vals if _FLIGHT_NO_RE.match(v))
-            is_flight = (flight_count / len(vals)) > 0.5
-            
-        # 2. Evaluate scores for each canonical field
+            n = len(vals)
+            is_email = (sum(1 for v in vals if _EMAIL_RE.match(v)) / n) > 0.5
+            is_date = (sum(1 for v in vals if _parse_date(v) is not None) / n) > 0.5
+            is_flight = (sum(1 for v in vals if _FLIGHT_NO_RE.match(v)) / n) > 0.5
+            # exclude date-like values (e.g. 13-11-2025) that also match the phone shape
+            is_phone = (not is_date) and (sum(1 for v in vals if _PHONE_RE.match(v)) / n) > 0.5
+            is_pnr = (sum(1 for v in vals if _PNR_RE.match(v)) / n) > 0.5
+            is_passport = (sum(1 for v in vals if _PASSPORT_RE.match(v)) / n) > 0.5
+            is_iata = (sum(1 for v in vals if v.isupper() and _IATA_RE.match(v)) / n) > 0.5
+            is_time = (sum(1 for v in vals if _TIME_RE.match(v)) / n) > 0.5
+
+        # 2. Evaluate name-based scores for each canonical field (skipped when the
+        #    header is generic/absent — then only content signals decide).
         field_scores = {}
         for field in CANONICAL_FIELDS:
             score = 0.0
-            norm_field = _normalize_column_name(field)
-            
-            # Exact matches
-            if norm_col == norm_field:
-                score = max(score, 0.95)
-            else:
-                # Check synonyms
-                for syn in SYNONYMS.get(field, []):
-                    norm_syn = _normalize_column_name(syn)
-                    if norm_col == norm_syn:
-                        score = max(score, 0.90)
-                        break
-                    elif norm_col.startswith(norm_syn) or norm_col.endswith(norm_syn) or norm_syn in norm_col:
-                        score = max(score, 0.60)
-                    elif norm_syn.startswith(norm_col) or norm_col in norm_syn:
-                        score = max(score, 0.40)
+            if not header_absent:
+                norm_field = _normalize_column_name(field)
+                if norm_col == norm_field:
+                    score = 0.95
+                else:
+                    for syn in SYNONYMS.get(field, []):
+                        norm_syn = _normalize_column_name(syn)
+                        if norm_col == norm_syn:
+                            score = max(score, 0.90)
+                            break
+                        elif norm_col.startswith(norm_syn) or norm_col.endswith(norm_syn) or norm_syn in norm_col:
+                            score = max(score, 0.60)
+                        elif norm_syn.startswith(norm_col) or norm_col in norm_syn:
+                            score = max(score, 0.40)
+                    # Fuzzy match to tolerate spelling mistakes in the header
+                    score = max(score, _fuzzy_name_score(norm_col, field))
             field_scores[field] = score
-            
-        # 3. Content-based adjustments/boosts
+
+        # 3. Content-based adjustments/boosts (strong, mutually-exclusive signals)
         if is_email:
             field_scores["email"] = max(field_scores.get("email", 0.0), 0.95)
-            # de-boost all others
             for f in field_scores:
                 if f != "email":
+                    field_scores[f] *= 0.1
+        elif is_flight:
+            field_scores["flight_number"] = max(field_scores.get("flight_number", 0.0), 0.95)
+            for f in field_scores:
+                if f != "flight_number":
+                    field_scores[f] *= 0.1
+        elif is_phone:
+            field_scores["phone"] = max(field_scores.get("phone", 0.0), 0.92)
+            for f in field_scores:
+                if f != "phone":
                     field_scores[f] *= 0.1
         elif is_date:
             date_fields = {
@@ -395,17 +445,22 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             }
             for f in field_scores:
                 if f in date_fields:
-                    if field_scores[f] > 0.0:
-                        field_scores[f] = max(field_scores[f], 0.95)
-                    else:
-                        field_scores[f] = 0.5
+                    field_scores[f] = max(field_scores[f], 0.95) if field_scores[f] > 0.0 else 0.5
                 else:
                     field_scores[f] *= 0.1
-        elif is_flight:
-            field_scores["flight_number"] = max(field_scores.get("flight_number", 0.0), 0.95)
-            for f in field_scores:
-                if f != "flight_number":
-                    field_scores[f] *= 0.1
+
+        # 4. Weaker content signals — only *raise* scores (used mainly to deduce
+        #    a field for an unnamed/misspelled column; a real header still wins).
+        if is_pnr and not is_flight:
+            field_scores["pnr_code"] = max(field_scores.get("pnr_code", 0.0), 0.6 if header_absent else 0.5)
+        if is_passport and not is_pnr:
+            field_scores["passport_number"] = max(field_scores.get("passport_number", 0.0), 0.55 if header_absent else 0.4)
+        if is_iata:
+            field_scores["departure_airport"] = max(field_scores.get("departure_airport", 0.0), 0.55)
+            field_scores["arrival_airport"] = max(field_scores.get("arrival_airport", 0.0), 0.5)
+        if is_time and not is_date:
+            for f in ("departure_time", "arrival_time", "pickup_time"):
+                field_scores[f] = max(field_scores.get(f, 0.0), 0.5)
                     
         # 4. Filter, sort, and format results
         candidates = []
