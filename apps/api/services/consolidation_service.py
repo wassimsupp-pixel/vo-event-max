@@ -346,6 +346,23 @@ def _name_key(first: Any, last: Any) -> str:
 import re as _re
 
 
+_CODE_JUNK = {"yes", "no", "oui", "non", "true", "false", "n/a", "na", "tbc", "tbd",
+              "x", "-", "0", "1", "masterbill", "own account", "staff", "finance"}
+
+
+def _is_plausible_code(code: Any) -> bool:
+    """A registration/participant CODE must be a real unique identifier — never a
+    form value like 'Yes'/'No'. Matching on such junk collapses everyone sharing
+    it onto one participant (contaminating flights/hotels)."""
+    c = str(code or "").strip().lower()
+    if len(c) < 5 or c in _CODE_JUNK:
+        return False
+    # A genuine code has a digit or is a long-ish token (UUID/ref), not a word.
+    if not any(ch.isdigit() for ch in c) and len(c) < 8:
+        return False
+    return True
+
+
 def _norm_name(s: Any) -> str:
     """Lowercased, accent-stripped, punctuation/nickname-free name for matching.
     Drops parenthesised nicknames ('Xinzhu (Judy) Zhu' → 'xinzhu zhu')."""
@@ -1031,6 +1048,8 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
     for p in participants:
         reg_data = reg_sr_map.get(p.get("registration_source_id"), {})
         reg_code = (reg_data.get("id") or reg_data.get("participant_id") or "").strip().lower()
+        if not _is_plausible_code(reg_code):
+            reg_code = ""   # ignore junk codes ('yes'/'no'/…) — never match on them
         first_n = _norm_name(p.get("first_name"))
         last_n = _norm_name(p.get("last_name"))
         part_lookup.append({
@@ -1118,6 +1137,8 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         rec_full_name = f"{rec_first} {rec_last}".strip()
         rec_email = (normalized.get("email") or "").strip().lower()
         rec_code = (normalized.get("id") or normalized.get("participant_id") or raw.get("ID Participant") or "").strip().lower()
+        if not _is_plausible_code(rec_code):
+            rec_code = ""   # never match on junk form values like 'Yes'/'No'
 
         matched_id = None
 
