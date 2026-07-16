@@ -593,6 +593,12 @@ async def run_consolidation(
         skipped_noise = 0
         merge_change_rows: list[dict] = []   # batched change_log (avoid 1/insert)
         allow_fuzzy = len(registrations) <= 1500  # cap the O(n^2) fuzzy dedup
+        # Accumulate in memory; write in BATCHES afterwards. Each participant is
+        # written once with its final merged state instead of once per source row
+        # (turned ~2000 sequential UPDATEs into a handful of bulk upserts).
+        touched: dict[str, dict] = {}         # participant_id -> full row (create/merge)
+        links: dict[str, list[str]] = {}      # participant_id -> [source_record_id]
+        created_ids: set[str] = set()
         for reg in registrations:
             nd = reg.normalized
 
@@ -604,7 +610,6 @@ async def run_consolidation(
 
             email = (nd.get("email") or "").strip().lower() or None
             name_key = _name_key(nd.get("first_name"), nd.get("last_name"))
-            full_name = f"{(nd.get('first_name') or '').strip()} {(nd.get('last_name') or '').strip()}".strip()
 
             # 1) match by email; 2) exact same name; 3) fuzzy same name — unless
             #    emails clearly conflict (two different people sharing a name).
@@ -612,7 +617,6 @@ async def run_consolidation(
             if not existing and name_key:
                 cand = by_name.get(name_key)
                 if not cand and allow_fuzzy and len(by_name) <= 400:
-                    # Fuzzy: tolerate spelling variants ("Steph" vs "Stephanie").
                     best = 0
                     for k, c in by_name.items():
                         sc = fuzz.token_sort_ratio(name_key, k)
@@ -629,11 +633,8 @@ async def run_consolidation(
                 # Non-destructive merge: keep known values, fill the gaps.
                 locked = existing.get("locked_fields") or {}
                 merged = merge_participant_fields(existing, nd, locked)
-                merged["has_flight"] = existing.get("has_flight", False)
                 merged["registration_source_id"] = reg.source_record_id
                 update_payload = {k: v for k, v in merged.items() if k in _PARTICIPANT_WRITABLE_FIELDS}
-                # Collect real field changes for the Change Log (#9), bulk-inserted
-                # after the loop — one insert per field would be thousands of calls.
                 if len(merge_change_rows) < 5000:
                     for f, newv in update_payload.items():
                         oldv = existing.get(f)
@@ -644,17 +645,14 @@ async def run_consolidation(
                                 "field_name": f, "old_value": str(oldv or ""),
                                 "new_value": str(newv or ""), "change_reason": "merge",
                             })
-                supabase.table("participants").update(update_payload).eq("id", existing["id"]).execute()
-                participant_id = existing["id"]
-                # Keep the in-memory record fresh so later files merge onto it too.
                 existing.update(update_payload)
+                participant_id = existing["id"]
+                touched[participant_id] = existing
                 if email:
                     by_email[email] = existing
                 if name_key:
                     by_name.setdefault(name_key, existing)
-                stats["participants_updated"] += 1
             else:
-                # Create new participant
                 participant_id = str(uuid.uuid4())
                 new_participant = {
                     "id": participant_id,
@@ -668,30 +666,45 @@ async def run_consolidation(
                     "dietary_requirements": nd.get("dietary_requirements"),
                     "completeness_status": "incomplete",
                     "registration_source_id": reg.source_record_id,
-                    "locked_fields": {},
                 }
-                supabase.table("participants").insert(
-                    {k: v for k, v in new_participant.items() if k != "locked_fields" or v}
-                ).execute()
+                touched[participant_id] = new_participant
+                created_ids.add(participant_id)
                 if email:
                     by_email[email] = new_participant
                 if name_key:
                     by_name.setdefault(name_key, new_participant)
-                stats["participants_created"] += 1
 
             participant_id_map[reg.source_record_id] = participant_id
+            links.setdefault(participant_id, []).append(reg.source_record_id)
 
-            # Link source_record → participant
-            supabase.table("source_records").update({
-                "participant_id": participant_id,
-                "match_decision": "certain",
-                "match_score": 100.0,
-                "match_signals": {"source": "registration"},
-            }).eq("id", reg.source_record_id).execute()
-
+        stats["participants_created"] = len(created_ids)
+        stats["participants_updated"] = len(touched) - len(created_ids)
         stats["skipped_noise_rows"] = skipped_noise
         if skipped_noise:
             logger.info("Skipped %d parasitic (subtotal/label) rows during consolidation", skipped_noise)
+
+        # --- Batched writes (create + merge in one upsert stream) ---
+        upsert_rows = []
+        for pid, row in touched.items():
+            r = {k: row.get(k) for k in _PARTICIPANT_WRITABLE_FIELDS if k in row}
+            r["id"] = pid
+            r["event_id"] = event_id
+            r.setdefault("first_name", row.get("first_name") or "")
+            r.setdefault("last_name", row.get("last_name") or "")
+            r.setdefault("completeness_status", row.get("completeness_status") or "incomplete")
+            upsert_rows.append(r)
+        for i in range(0, len(upsert_rows), 100):
+            supabase.table("participants").upsert(upsert_rows[i:i + 100]).execute()
+
+        # Link source_records → participant, grouped by participant (same signals).
+        for pid, sr_ids in links.items():
+            for i in range(0, len(sr_ids), 100):
+                supabase.table("source_records").update({
+                    "participant_id": pid,
+                    "match_decision": "certain",
+                    "match_score": 100.0,
+                    "match_signals": {"source": "registration"},
+                }).in_("id", sr_ids[i:i + 100]).execute()
 
         # Bulk-insert the batched merge change-log entries (chunked).
         if merge_change_rows:
