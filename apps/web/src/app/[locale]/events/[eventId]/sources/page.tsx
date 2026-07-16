@@ -467,6 +467,15 @@ export default function SourcesPage() {
                             }}
                           >
                             <option value="">-- Ignorer --</option>
+                            {customFieldList.length > 0 && (
+                              <optgroup label="⭐ Mes champs ajoutés">
+                                {customFieldList.map(name => (
+                                  <option key={name} value={name}>
+                                    {name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
                             {colOptions.suggestedField && (
                               <optgroup label="Suggéré">
                                 <option value={colOptions.suggestedField}>
@@ -479,15 +488,6 @@ export default function SourcesPage() {
                                 {colOptions.alternatives.map(field => (
                                   <option key={field} value={field}>
                                     {getFieldLabel(field)}
-                                  </option>
-                                ))}
-                              </optgroup>
-                            )}
-                            {customFieldList.length > 0 && (
-                              <optgroup label="Champs personnalisés">
-                                {customFieldList.map(name => (
-                                  <option key={name} value={name}>
-                                    {name}
                                   </option>
                                 ))}
                               </optgroup>
@@ -544,13 +544,30 @@ export default function SourcesPage() {
                             {label} {required && <span className="text-[var(--color-danger)]">*</span>}
                           </span>
                           <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                            isMapped 
-                              ? 'bg-emerald-100 text-emerald-800' 
-                              : required 
-                              ? 'bg-rose-100 text-rose-800' 
+                            isMapped
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : required
+                              ? 'bg-rose-100 text-rose-800'
                               : 'bg-slate-100 text-slate-600'
                           }`}>
                             {isMapped ? 'Mappé' : required ? 'Requis' : 'Optionnel'}
+                          </span>
+                        </li>
+                      )
+                    })}
+                    {/* User-added custom fields shown as real target columns */}
+                    {customFieldList.map((name) => {
+                      const isMapped = Object.values(mapping).includes(name)
+                      return (
+                        <li key={`custom-${name}`} className="flex items-center justify-between border-b pb-1.5 border-slate-100 last:border-b-0 last:pb-0">
+                          <span className="text-[var(--color-text-primary)] inline-flex items-center gap-1">
+                            <span className="text-[9px] font-bold text-[var(--color-accent)] bg-[var(--color-accent-light)]/50 rounded px-1 py-0.5">PERSO</span>
+                            {name}
+                          </span>
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                            isMapped ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {isMapped ? 'Mappé' : 'Optionnel'}
                           </span>
                         </li>
                       )
