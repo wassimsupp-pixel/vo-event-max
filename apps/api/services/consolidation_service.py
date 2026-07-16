@@ -586,6 +586,8 @@ async def run_consolidation(
         participant_id_map: dict[str, str] = {}  # source_record_id → participant_id
 
         skipped_noise = 0
+        merge_change_rows: list[dict] = []   # batched change_log (avoid 1/insert)
+        allow_fuzzy = len(registrations) <= 1500  # cap the O(n^2) fuzzy dedup
         for reg in registrations:
             nd = reg.normalized
 
@@ -604,7 +606,7 @@ async def run_consolidation(
             existing = by_email.get(email) if email else None
             if not existing and name_key:
                 cand = by_name.get(name_key)
-                if not cand:
+                if not cand and allow_fuzzy and len(by_name) <= 400:
                     # Fuzzy: tolerate spelling variants ("Steph" vs "Stephanie").
                     best = 0
                     for k, c in by_name.items():
@@ -625,19 +627,18 @@ async def run_consolidation(
                 merged["has_flight"] = existing.get("has_flight", False)
                 merged["registration_source_id"] = reg.source_record_id
                 update_payload = {k: v for k, v in merged.items() if k in _PARTICIPANT_WRITABLE_FIELDS}
-                # Log the real field changes so the Change Log is meaningful (feedback #9).
-                for f, newv in update_payload.items():
-                    oldv = existing.get(f)
-                    if str(oldv or "") != str(newv or ""):
-                        try:
-                            log_change(
-                                supabase=supabase, event_id=event_id, user_id=user_id,
-                                entity_type="participant", entity_id=existing["id"],
-                                field_name=f, old_value=str(oldv or ""), new_value=str(newv or ""),
-                                reason="merge",
-                            )
-                        except Exception:
-                            pass
+                # Collect real field changes for the Change Log (#9), bulk-inserted
+                # after the loop — one insert per field would be thousands of calls.
+                if len(merge_change_rows) < 5000:
+                    for f, newv in update_payload.items():
+                        oldv = existing.get(f)
+                        if str(oldv or "") != str(newv or ""):
+                            merge_change_rows.append({
+                                "event_id": event_id, "user_id": user_id,
+                                "entity_type": "participant", "entity_id": existing["id"],
+                                "field_name": f, "old_value": str(oldv or ""),
+                                "new_value": str(newv or ""), "change_reason": "merge",
+                            })
                 supabase.table("participants").update(update_payload).eq("id", existing["id"]).execute()
                 participant_id = existing["id"]
                 # Keep the in-memory record fresh so later files merge onto it too.
@@ -686,6 +687,14 @@ async def run_consolidation(
         stats["skipped_noise_rows"] = skipped_noise
         if skipped_noise:
             logger.info("Skipped %d parasitic (subtotal/label) rows during consolidation", skipped_noise)
+
+        # Bulk-insert the batched merge change-log entries (chunked).
+        if merge_change_rows:
+            try:
+                for i in range(0, len(merge_change_rows), 200):
+                    supabase.table("change_log").insert(merge_change_rows[i:i + 200]).execute()
+            except Exception as exc:
+                logger.warning("Failed to bulk-insert merge change_log: %s", exc)
 
         # ---------------------------------------------------------------
         # 5. Match FCM records → participants
