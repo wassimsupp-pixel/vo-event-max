@@ -21,6 +21,29 @@ import config
 logger = logging.getLogger(__name__)
 
 
+import re as _re
+
+_EMAIL_P = _re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_PHONE_P = _re.compile(r"^[+(]?\d[\d\s().\-]{6,}$")
+_FLIGHT_P = _re.compile(r"^[A-Z]{2,3}\s*\d{1,4}[A-Z]?$", _re.IGNORECASE)
+_IATA_P = _re.compile(r"^[A-Z]{3}$")
+_PNR_P = _re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{5,7}$")
+_TIME_P = _re.compile(r"^\d{1,2}[:hH]\d{2}")
+_DATE_P = _re.compile(r"^\d{1,4}[/\-.]\d{1,2}[/\-.]\d{1,4}$")
+
+
+def _is_blank(v: Any) -> bool:
+    """True for empty / NaN / 'nan' / 'none' cells (pandas str-casts NaN to 'nan')."""
+    if v is None:
+        return True
+    try:
+        if pd.isna(v):
+            return True
+    except (TypeError, ValueError):
+        pass
+    return str(v).strip().lower() in ("", "nan", "none", "nat")
+
+
 def _looks_numeric(v: Any) -> bool:
     """True if the value is (or looks like) a plain number."""
     if v is None:
@@ -35,45 +58,96 @@ def _looks_numeric(v: Any) -> bool:
         return False
 
 
+def _is_label_like(v: Any) -> bool:
+    """True if a cell looks like a HEADER label (short text) rather than data
+    (email, phone, date, number, long free text)."""
+    if v is None:
+        return False
+    s = str(v).strip()
+    if s == "" or len(s) > 60:
+        return False
+    if "@" in s or _looks_numeric(s) or _DATE_P.match(s) or _TIME_P.match(s):
+        return False
+    digits = sum(c.isdigit() for c in s)
+    if digits >= max(5, len(s) * 0.5):  # phone-ish / code-ish
+        return False
+    return True
+
+
 def _detect_header_row(df0: pd.DataFrame, max_scan: int = 8) -> int:
     """
     Find the row that best looks like the header among the first ``max_scan``
     rows of a header-less DataFrame. Handles files whose real column names sit
     on the 2nd/3rd row (section banners above them, e.g. the LivaNova masterfile).
 
-    Heuristic: the header is the row with the most distinct, non-numeric,
-    non-empty text cells. Ties prefer the earliest row.
+    Heuristic: the header is the row with the most *label-like* cells (short text,
+    not emails/dates/phones/numbers). Ties prefer the earliest row — so a normal
+    file keeps row 0, and a data row full of values never beats a real header.
     """
     best_idx, best_score = 0, -1.0
     limit = min(max_scan, len(df0))
     for i in range(limit):
         cells = df0.iloc[i].tolist()
-        labels = {
-            str(c).strip().lower()
-            for c in cells
-            if c is not None and str(c).strip() != "" and not _looks_numeric(c)
-        }
-        score = float(len(labels))
+        score = float(sum(1 for c in cells if _is_label_like(c)))
         if score > best_score:
             best_score, best_idx = score, i
     return best_idx
 
 
+def _infer_column_name(values: list[Any]) -> str | None:
+    """Deduce a human column label from the column's DATA when the header is
+    blank — e.g. a column full of emails becomes 'Email'. Returns None if no
+    confident pattern is found."""
+    vals = [str(v).strip() for v in values if not _is_blank(v)]
+    if len(vals) < 2:
+        return None
+    n = len(vals)
+
+    def frac(pred) -> float:
+        return sum(1 for v in vals if pred(v)) / n
+
+    if frac(lambda v: _EMAIL_P.match(v)) > 0.6:
+        return "Email"
+    if frac(lambda v: _DATE_P.match(v)) > 0.6:
+        return "Date"
+    if frac(lambda v: _TIME_P.match(v)) > 0.6:
+        return "Heure"
+    if frac(lambda v: _FLIGHT_P.match(v)) > 0.6:
+        return "N° de vol"
+    if frac(lambda v: _PHONE_P.match(v)) > 0.6:
+        return "Téléphone"
+    if frac(lambda v: v.isupper() and _IATA_P.match(v)) > 0.6:
+        return "Aéroport"
+    if frac(lambda v: _PNR_P.match(v)) > 0.6:
+        return "Code PNR"
+    # Names: mostly 2+ alphabetic words
+    if frac(lambda v: len(v.split()) >= 2 and all(p.replace("-", "").replace("'", "").isalpha() for p in v.split())) > 0.6:
+        return "Nom complet"
+    return None
+
+
 def _promote_header(df0: pd.DataFrame, header_idx: int) -> pd.DataFrame:
     """Use row ``header_idx`` as the column names; data is everything below it.
-    Blank/duplicate column names are cleaned so mappings stay stable."""
+    Blank column names are inferred from the column's content; duplicates are
+    de-duplicated so mappings stay stable."""
     header = df0.iloc[header_idx].tolist()
+    body = df0.iloc[header_idx + 1:]
     cols: list[str] = []
     seen: dict[str, int] = {}
     for j, c in enumerate(header):
-        name = str(c).strip() if (c is not None and str(c).strip() != "") else f"Colonne {j + 1}"
+        if not _is_blank(c):
+            name = str(c).strip()
+        else:
+            # No header cell → analyse the column's data to find a fitting name.
+            col_values = body.iloc[:, j].tolist() if j < body.shape[1] else []
+            name = _infer_column_name(col_values) or f"Colonne {j + 1}"
         if name in seen:
             seen[name] += 1
             name = f"{name} ({seen[name]})"
         else:
             seen[name] = 0
         cols.append(name)
-    data = df0.iloc[header_idx + 1:].copy()
+    data = body.copy()
     data.columns = cols
     return data.reset_index(drop=True)
 

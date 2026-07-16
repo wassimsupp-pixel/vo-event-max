@@ -817,6 +817,10 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         return
 
     updates = []
+    # Records that match nobody are attached to a NEW participant/client so their
+    # info is never orphaned (feedback: every info must belong to a person).
+    new_parts: list[dict] = []
+    new_by_key: dict[str, str] = {}
     for rec in records:
         normalized = rec.get("normalized_data") or {}
         raw = rec.get("raw_data") or {}
@@ -883,6 +887,26 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 if best_score >= 80:
                     matched_id = best_p_id
 
+        # No existing participant matched → create a client so the info is linked.
+        if not matched_id and (rec_full_name.strip() or rec_email):
+            nk = _name_key(rec_first, rec_last)
+            key = rec_email or nk
+            matched_id = new_by_key.get(rec_email) or new_by_key.get(nk)
+            if not matched_id and key:
+                matched_id = str(uuid.uuid4())
+                new_parts.append({
+                    "id": matched_id,
+                    "event_id": event_id,
+                    "first_name": (rec_first or "").title(),
+                    "last_name": (rec_last or "").title(),
+                    "email": rec_email or None,
+                    "completeness_status": "incomplete",
+                })
+                if rec_email:
+                    new_by_key[rec_email] = matched_id
+                if nk:
+                    new_by_key[nk] = matched_id
+
         if matched_id:
             updates.append({
                 "id": rec["id"],
@@ -893,6 +917,15 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 "normalized_data": rec["normalized_data"],
                 "participant_id": matched_id
             })
+
+    # Insert the auto-created clients first (source_records reference them).
+    if new_parts:
+        logger.info("Creating %d client participant(s) from non-registration files", len(new_parts))
+        try:
+            for i in range(0, len(new_parts), 100):
+                supabase.table("participants").insert(new_parts[i:i+100]).execute()
+        except Exception as exc:
+            logger.error("Failed to insert auto-created participants: %s", exc)
 
     if updates:
         logger.info("Matching non-registration records: updating %d records with participant_id...", len(updates))
