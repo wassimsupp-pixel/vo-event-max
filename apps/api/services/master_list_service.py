@@ -265,6 +265,12 @@ def _passport_status(expiry: Any) -> Optional[str]:
         try:
             d = datetime.strptime(raw, fmt).date()
             today = date.today()
+            # Plausibility guard: a passport EXPIRY realistically falls within a
+            # window around today. Values outside it are almost certainly a birth
+            # date or a mis-mapped column bleeding in — not a real expiry — so we
+            # ignore them instead of raising a false "expired" alert.
+            if not (today.year - 12 <= d.year <= today.year + 15):
+                return None
             if d < today:
                 return "expired"
             if (d - today).days < 183:

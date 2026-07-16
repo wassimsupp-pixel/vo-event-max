@@ -359,7 +359,11 @@ def _norm_name(s: Any) -> str:
 
 # Subtotal / label rows that must NOT become participants (e.g. "115 / Total",
 # "Percussion facilitator"). Only applied when there is no email to trust.
-_ROLE_NOISE = _re.compile(r"\b(total|subtotal|sous[-\s]?total|grand\s*total|facilitator|animateur|organizer|n/?a)\b", _re.I)
+_ROLE_NOISE = _re.compile(
+    r"\b(total|subtotal|sous[-\s]?total|grand\s*total|facilitator|animateur|organizer|"
+    r"departures?|arrivals?|arrival\s*transfers?|cancelled|canceled|villas?|hotels?|n/?a)\b",
+    _re.I,
+)
 
 
 def _auto_sheet_mapping(sdf) -> dict[str, str]:
@@ -1038,8 +1042,17 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             "first_n": first_n,
             "last_n": last_n,
             "first1": first_n.split()[0] if first_n else "",
+            "first_collapsed": first_n.replace(" ", ""),
+            "last_collapsed": last_n.replace(" ", ""),
             "tokens": set((first_n + " " + last_n).split()),
         })
+
+    # Index participants by (space-insensitive) last name, to reconcile emailless
+    # travel records whose first name differs entirely (English vs legal name).
+    last_index: dict[str, list[str]] = {}
+    for p in part_lookup:
+        if p["last_collapsed"]:
+            last_index.setdefault(p["last_collapsed"], []).append(p["id"])
 
     # Process EVERY source record not yet linked to a participant. This covers
     # separate fcm/hotel/transfer/activity files AND the secondary sheets of a
@@ -1124,6 +1137,8 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             rec_first_n = _norm_name(rec_first)
             rec_last_n = _norm_name(rec_last)
             rec_first1 = rec_first_n.split()[0] if rec_first_n else ""
+            rec_first_collapsed = rec_first_n.replace(" ", "")
+            rec_last_collapsed = rec_last_n.replace(" ", "")
             rec_tokens = set((rec_first_n + " " + rec_last_n).split())
 
             for p in part_lookup:
@@ -1133,15 +1148,19 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 # (two distinct people sharing a name).
                 if rec_email and p["email"] and rec_email != p["email"]:
                     continue
-                same_last = p["last_n"] == rec_last_n
-                # Strong: same last name + same given (first) name — tolerates
-                # extra middle names / patronymics ("Natalia Sergeyevna" vs
-                # "Natalia") and NOM/Prénom departures format.
-                if same_last and p["first1"] and rec_first1 and p["first1"] == rec_first1:
+                # Same last name — space/hyphen insensitive ("Abu Shinnar" vs
+                # "AbuShinnar").
+                same_last = p["last_n"] == rec_last_n or p["last_collapsed"] == rec_last_collapsed
+                same_first = (
+                    (p["first1"] and rec_first1 and p["first1"] == rec_first1)
+                    or (p["first_collapsed"] and rec_first_collapsed and p["first_collapsed"] == rec_first_collapsed)
+                )
+                # Strong: same last name + same given name (tolerates middle names,
+                # patronymics, spaces/hyphens, NOM/Prénom departures format).
+                if same_last and same_first:
                     matched_id = p["id"]
                     break
-                # Subset: one full name's tokens contained in the other's, sharing
-                # the last name ("Bruno Adam De Oliveira" vs "Bruno De Oliveira").
+                # Subset: one full name's tokens contained in the other's.
                 if same_last and rec_tokens and p["tokens"] and (
                     rec_tokens <= p["tokens"] or p["tokens"] <= rec_tokens
                 ):
@@ -1165,6 +1184,15 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                         best_p_id = p["id"]
                 if best_score >= 88:
                     matched_id = best_p_id
+
+            # Last resort for an emailless travel record whose first name differs
+            # entirely from the registration (English name vs legal name on the
+            # ticket, e.g. "Tony Tang" vs "Ruizhe Tang"): if exactly ONE registered
+            # participant carries that last name, it must be them.
+            if not matched_id and not rec_email and rec_last_collapsed:
+                same_last_ids = last_index.get(rec_last_collapsed)
+                if same_last_ids and len(same_last_ids) == 1:
+                    matched_id = same_last_ids[0]
 
         # No existing participant matched → create a client so the info is linked,
         # but skip parasitic rows (subtotals, job-title labels).
