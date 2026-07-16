@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2 } from 'lucide-react'
+import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2, Plus, X } from 'lucide-react'
 import type { UploadedFile, FileUploadResponse } from '@/lib/api'
 import { api } from '@/lib/api'
 
@@ -166,6 +166,42 @@ export default function SourcesPage() {
   const [mapping, setMapping] = useState<Record<string, string>>({})
   // Columns the user chose to map to a custom (non-predefined) field
   const [customFields, setCustomFields] = useState<Record<string, boolean>>({})
+  // Reusable user-defined target fields (persisted per event), available in every
+  // column's dropdown so the user can add mapping fields freely.
+  const [customFieldList, setCustomFieldList] = useState<string[]>([])
+  const [newCustomField, setNewCustomField] = useState('')
+
+  const customFieldsKey = `mapping_custom_fields_${eventId}`
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(customFieldsKey)
+      if (saved) setCustomFieldList(JSON.parse(saved))
+    } catch { /* ignore corrupt storage */ }
+  }, [customFieldsKey])
+
+  const persistCustomFields = (list: string[]) => {
+    setCustomFieldList(list)
+    try { localStorage.setItem(customFieldsKey, JSON.stringify(list)) } catch { /* ignore */ }
+  }
+
+  const addCustomField = () => {
+    const name = newCustomField.trim()
+    if (!name) return
+    if (customFieldList.some(f => f.toLowerCase() === name.toLowerCase())) { setNewCustomField(''); return }
+    persistCustomFields([...customFieldList, name])
+    setNewCustomField('')
+  }
+
+  const removeCustomField = (name: string) => {
+    persistCustomFields(customFieldList.filter(f => f !== name))
+    // Unmap any column that used this custom field
+    setMapping(prev => {
+      const next = { ...prev }
+      Object.keys(next).forEach(col => { if (next[col] === name) delete next[col] })
+      return next
+    })
+  }
 
   // Real file list state
   const [importedFiles, setImportedFiles] = useState<UploadedFile[]>([])
@@ -354,6 +390,44 @@ export default function SourcesPage() {
                 <h4 className="text-xs font-semibold text-[var(--color-text-secondary)] uppercase tracking-wider">
                   Mapping des colonnes
                 </h4>
+
+                {/* Reusable custom target fields — add mapping fields as you want */}
+                <div className="rounded-md border border-dashed border-[var(--color-accent)]/40 bg-[var(--color-accent-light)]/20 p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={newCustomField}
+                      onChange={(e) => setNewCustomField(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustomField() } }}
+                      placeholder="Ajouter un champ personnalisé (ex. Numéro de commande, VIP, Taille t-shirt…)"
+                      className="flex-1 text-xs rounded-md border border-[var(--color-border)] bg-white p-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white shrink-0"
+                      onClick={addCustomField}
+                    >
+                      <Plus className="h-3.5 w-3.5 mr-1" /> Ajouter
+                    </Button>
+                  </div>
+                  {customFieldList.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {customFieldList.map(name => (
+                        <span key={name} className="inline-flex items-center gap-1 rounded-full bg-white border border-[var(--color-accent)]/30 px-2 py-0.5 text-[11px] font-medium text-[var(--color-accent)]">
+                          {name}
+                          <button type="button" onClick={() => removeCustomField(name)} className="hover:text-[var(--color-danger)]" title="Supprimer ce champ">
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[10px] text-[var(--color-text-secondary)]">
+                    Les champs ajoutés apparaissent dans la liste déroulante de chaque colonne et sont mémorisés pour cet événement.
+                  </p>
+                </div>
+
                 <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2 border rounded-md p-4 bg-slate-50">
                   {uploadResponse.columns.map((col: string) => {
                     const colOptions = getSortedFieldsForColumn(col)
@@ -409,6 +483,15 @@ export default function SourcesPage() {
                                 ))}
                               </optgroup>
                             )}
+                            {customFieldList.length > 0 && (
+                              <optgroup label="Champs personnalisés">
+                                {customFieldList.map(name => (
+                                  <option key={name} value={name}>
+                                    {name}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
                             <optgroup label="Tous les champs">
                               {colOptions.others.map(field => (
                                 <option key={field} value={field}>
@@ -416,7 +499,7 @@ export default function SourcesPage() {
                                 </option>
                               ))}
                             </optgroup>
-                            <option value="__custom__">➕ Champ personnalisé…</option>
+                            <option value="__custom__">➕ Champ personnalisé ponctuel…</option>
                           </select>
                           {customFields[col] && (
                             <input
