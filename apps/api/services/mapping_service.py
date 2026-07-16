@@ -365,10 +365,10 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
       }
     }
     """
-    suggestions = {}
+    col_candidates: dict[str, list[tuple[str, float]]] = {}
     for col in columns:
         norm_col = _normalize_column_name(col)
-        
+
         # 1. Gather non-empty values for content checks
         vals = []
         for row in sample_rows:
@@ -462,33 +462,44 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             for f in ("departure_time", "arrival_time", "pickup_time"):
                 field_scores[f] = max(field_scores.get(f, 0.0), 0.5)
                     
-        # 4. Filter, sort, and format results
-        candidates = []
-        for field, score in field_scores.items():
-            if score >= 0.1:
-                candidates.append((field, score))
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        
-        suggested_field = None
-        confidence = 0.0
-        alternatives = []
-        
-        if candidates:
-            # Check if top candidate meets confidence threshold
-            if candidates[0][1] >= 0.5:
-                suggested_field = candidates[0][0]
-                confidence = round(candidates[0][1], 2)
-                # alternatives are other candidates with score >= 0.3
-                alternatives = [f for f, s in candidates[1:] if s >= 0.3]
-            else:
-                suggested_field = None
-                confidence = 0.0
-                alternatives = [f for f, s in candidates if s >= 0.3]
-                
-        suggestions[col] = {
-            "suggested_field": suggested_field,
-            "confidence": confidence,
-            "alternatives": alternatives
-        }
-        
+        # Collect this column's candidate (field, score) pairs; the actual
+        # suggestion is decided globally below.
+        col_candidates[col] = sorted(
+            [(f, s) for f, s in field_scores.items() if s >= 0.1],
+            key=lambda x: x[1], reverse=True,
+        )
+
+    # 5. Global assignment — give each canonical field to at most ONE column
+    #    (the highest-confidence one); other columns fall back to their next
+    #    free candidate. Prevents two columns being suggested the same target.
+    ranked_cols = sorted(
+        columns,
+        key=lambda c: (col_candidates[c][0][1] if col_candidates[c] else 0.0),
+        reverse=True,
+    )
+    used_fields: set[str] = set()
+    assigned: dict[str, tuple[str, float]] = {}
+    for col in ranked_cols:
+        for field, score in col_candidates[col]:
+            if score >= 0.5 and field not in used_fields:
+                assigned[col] = (field, score)
+                used_fields.add(field)
+                break
+
+    suggestions = {}
+    for col in columns:
+        cands = col_candidates[col]
+        if col in assigned:
+            field, score = assigned[col]
+            suggestions[col] = {
+                "suggested_field": field,
+                "confidence": round(score, 2),
+                "alternatives": [f for f, s in cands if s >= 0.3 and f != field][:5],
+            }
+        else:
+            suggestions[col] = {
+                "suggested_field": None,
+                "confidence": 0.0,
+                "alternatives": [f for f, s in cands if s >= 0.3][:5],
+            }
     return suggestions

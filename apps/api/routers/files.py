@@ -32,6 +32,7 @@ from models.schemas import (
     MessageResponse,
 )
 from services.mapping_service import suggest_mapping, CANONICAL_FIELDS
+from services.file_service import read_tabular
 from services import deletion_service
 
 logger = logging.getLogger(__name__)
@@ -57,22 +58,8 @@ def _parse_file_to_dataframe(content: bytes, filename: str) -> pd.DataFrame:
     content: Raw file bytes.
     filename: Original filename (used to determine extension).
     """
-    ext = os.path.splitext(filename)[1].lower()
     try:
-        if ext in (".xlsx", ".xls"):
-            df = pd.read_excel(io.BytesIO(content), dtype=str)
-        elif ext == ".csv":
-            # sep=None + python engine auto-detects the delimiter (',' or the ';'
-            # common in French Excel CSV exports). UTF-8 first, then latin-1.
-            try:
-                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="utf-8", sep=None, engine="python")
-            except UnicodeDecodeError:
-                df = pd.read_csv(io.BytesIO(content), dtype=str, encoding="latin-1", sep=None, engine="python")
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=config.ALLOWED_EXTENSIONS.__str__() + " files only.",
-            )
+        return read_tabular(content, filename)
     except HTTPException:
         raise
     except Exception as exc:
@@ -81,10 +68,6 @@ def _parse_file_to_dataframe(content: bytes, filename: str) -> pd.DataFrame:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Could not parse file: {exc}",
         ) from exc
-
-    # Replace NaN with None for clean JSON serialisation
-    df = df.where(pd.notnull(df), None)
-    return df
 
 
 def _df_sample(df: pd.DataFrame, n: int) -> list[dict[str, Any]]:
