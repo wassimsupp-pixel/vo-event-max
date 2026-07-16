@@ -203,6 +203,20 @@ export default function SourcesPage() {
     })
   }
 
+  // User-added source-column rows (name of a column in the file + its target).
+  // Lets the user add as many columns to map as they want.
+  const [extraColumns, setExtraColumns] = useState<{ id: string; name: string; target: string }[]>([])
+
+  const addExtraColumn = () => {
+    setExtraColumns(prev => [...prev, { id: `x_${Date.now()}_${prev.length}`, name: '', target: '' }])
+  }
+  const updateExtraColumn = (id: string, patch: Partial<{ name: string; target: string }>) => {
+    setExtraColumns(prev => prev.map(c => (c.id === id ? { ...c, ...patch } : c)))
+  }
+  const removeExtraColumn = (id: string) => {
+    setExtraColumns(prev => prev.filter(c => c.id !== id))
+  }
+
   // Real file list state
   const [importedFiles, setImportedFiles] = useState<UploadedFile[]>([])
   const [filesLoading, setFilesLoading] = useState(true)
@@ -307,6 +321,7 @@ export default function SourcesPage() {
         })
       }
       setMapping(initialMapping)
+      setExtraColumns([])
       setIsMappingMode(true)
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Erreur lors de l\'upload du fichier')
@@ -319,12 +334,19 @@ export default function SourcesPage() {
     if (!uploadResponse) return
 
     try {
-      await api.files.mapColumns(uploadResponse.file_id, mapping)
+      // Merge auto-detected mappings with the columns the user added manually.
+      const finalMapping: Record<string, string> = { ...mapping }
+      extraColumns.forEach(c => {
+        const name = c.name.trim()
+        if (name && c.target) finalMapping[name] = c.target
+      })
+      await api.files.mapColumns(uploadResponse.file_id, finalMapping)
       await loadFiles()
       setIsMappingMode(false)
       setUploadingType(null)
       setSelectedFile(null)
       setUploadResponse(null)
+      setExtraColumns([])
       setUploadError(null)
       router.refresh()
     } catch (err) {
@@ -523,6 +545,61 @@ export default function SourcesPage() {
                       </div>
                     )
                   })}
+
+                  {/* Columns the user adds manually (name from the file + target) */}
+                  {extraColumns.map((c) => (
+                    <div key={c.id} className="grid grid-cols-12 items-center gap-3">
+                      <div className="col-span-5 flex items-center gap-1.5 min-w-0">
+                        <input
+                          type="text"
+                          list="file-columns-list"
+                          value={c.name}
+                          onChange={(e) => updateExtraColumn(c.id, { name: e.target.value })}
+                          placeholder="Nom de la colonne (ex. Traveller, Airline…)"
+                          className="w-full text-sm rounded-md border border-[var(--color-accent)]/50 bg-white p-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                        />
+                        <button type="button" onClick={() => removeExtraColumn(c.id)} className="shrink-0 text-[var(--color-text-secondary)] hover:text-[var(--color-danger)]" title="Retirer cette colonne">
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <div className="col-span-7">
+                        <select
+                          className="w-full text-xs rounded-md border border-[var(--color-border)] bg-white p-2 text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                          value={c.target}
+                          onChange={(e) => updateExtraColumn(c.id, { target: e.target.value })}
+                        >
+                          <option value="">-- Choisir le champ cible --</option>
+                          {customFieldList.length > 0 && (
+                            <optgroup label="⭐ Mes champs ajoutés">
+                              {customFieldList.map(name => (
+                                <option key={name} value={name}>{name}</option>
+                              ))}
+                            </optgroup>
+                          )}
+                          <optgroup label="Tous les champs">
+                            {Object.keys(CANONICAL_FIELD_LABELS).map(field => (
+                              <option key={field} value={field}>{CANONICAL_FIELD_LABELS[field]}</option>
+                            ))}
+                          </optgroup>
+                        </select>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Datalist of the file's real columns, for quick autocomplete */}
+                  <datalist id="file-columns-list">
+                    {(uploadResponse.columns || []).map((col: string) => (
+                      <option key={col} value={col} />
+                    ))}
+                  </datalist>
+
+                  <button
+                    type="button"
+                    onClick={addExtraColumn}
+                    className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-accent)] hover:underline pt-1"
+                  >
+                    <Plus className="h-3.5 w-3.5" /> Ajouter une colonne à mapper
+                  </button>
                 </div>
               </div>
 
