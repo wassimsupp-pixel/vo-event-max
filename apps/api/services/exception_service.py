@@ -29,7 +29,7 @@ from supabase import Client
 logger = logging.getLogger(__name__)
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_DATE_RE  = re.compile(r"^\d{4}-\d{2}-\d{2}$")  # ISO 8601
+_DATE_RE  = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?([+-]\d{2}:?\d{2}|Z)?)?$")  # ISO 8601 (date, optional time)
 
 
 def _insert_exception(

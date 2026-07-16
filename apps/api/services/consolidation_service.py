@@ -63,7 +63,7 @@ def fetch_all_participants(supabase: Client, event_id: str) -> list[dict]:
     limit = 1000
     offset = 0
     while True:
-        resp = supabase.table("participants").select("id, email, locked_fields, nationality").eq("event_id", event_id).range(offset, offset + limit - 1).execute()
+        resp = supabase.table("participants").select("id, email, first_name, last_name, locked_fields, nationality, has_flight, has_hotel, has_transfer, has_activities").eq("event_id", event_id).range(offset, offset + limit - 1).execute()
         data = resp.data or []
         all_data.extend(data)
         if len(data) < limit:
@@ -531,6 +531,7 @@ async def run_consolidation(
                     supabase, uploaded_file["storage_path"], uploaded_file["original_filename"])}
 
             sheet_names = list(sheets.keys())
+            primary_ids: list[str] = []
             for si, sname in enumerate(sheet_names):
                 sdf = sheets[sname]
                 if si == 0:
@@ -548,24 +549,28 @@ async def run_consolidation(
                     mapping=sheet_mapping,
                 )
                 stats["total_source_records"] += len(inserted_ids)
+                if si == 0:
+                    primary_ids = inserted_ids
 
-            # Build ParticipantRecord objects — we need the normalised data
-            sr_resp = (
-                supabase.table("source_records")
-                .select("id, normalized_data")
-                .eq("file_id", file_id)
-                .execute()
-            )
-            for sr in sr_resp.data or []:
-                pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
-                # 'masterfile' = one combined file (participants + flights + hotel +
-                # transfers + activities). Treat each row as a participant record
-                # like a registration; its flight/hotel/etc. columns are extracted
-                # afterwards by extract_domain_data_from_sources (runs on all rows).
-                if source_type in ("registration", "masterfile"):
-                    registrations.append(pr)
-                elif source_type == "fcm":
-                    fcm_records.append(pr)
+            # Build ParticipantRecord objects from the PRIMARY sheet ONLY (the
+            # human-validated profile source). Secondary-sheet rows are NOT turned
+            # into profile records — they'd overwrite identity/region/category with
+            # their own (often messier) columns and inflate duplicates. Instead
+            # they stay unlinked and are attached later by name (domain data only).
+            for ci in range(0, len(primary_ids), 200):
+                chunk = primary_ids[ci:ci + 200]
+                sr_resp = (
+                    supabase.table("source_records")
+                    .select("id, normalized_data")
+                    .in_("id", chunk)
+                    .execute()
+                )
+                for sr in sr_resp.data or []:
+                    pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
+                    if source_type in ("registration", "masterfile"):
+                        registrations.append(pr)
+                    elif source_type == "fcm":
+                        fcm_records.append(pr)
 
         # ---------------------------------------------------------------
         # 4. Upsert participants from registration records
@@ -1004,21 +1009,33 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             "reg_code": reg_code
         })
 
+    # Process EVERY source record not yet linked to a participant. This covers
+    # separate fcm/hotel/transfer/activity files AND the secondary sheets of a
+    # master file (hotel / transfers) — the registration primary sheet is already
+    # linked, so it is skipped. Paginated (PostgREST caps at 1000).
+    records = []
     try:
-        files_resp = supabase.table("uploaded_files").select("id, source_type").eq("event_id", event_id).execute()
-        target_files = [f for f in files_resp.data or [] if f["source_type"] in ("fcm", "hotel", "transfer", "activity")]
+        offset = 0
+        page = 1000
+        while True:
+            res = (
+                supabase.table("source_records")
+                .select("id, file_id, event_id, row_index, raw_data, normalized_data, participant_id")
+                .eq("event_id", event_id)
+                .is_("participant_id", "null")
+                .range(offset, offset + page - 1)
+                .execute()
+            )
+            data = res.data or []
+            records.extend(data)
+            if len(data) < page:
+                break
+            offset += page
     except Exception as exc:
-        logger.error("Failed to load uploaded files for non-registration matching: %s", exc)
+        logger.error("Failed to load unlinked source records for matching: %s", exc)
         return
 
-    if not target_files:
-        return
-
-    file_ids = [f["id"] for f in target_files]
-    try:
-        records = fetch_all_source_records(supabase, file_ids)
-    except Exception as exc:
-        logger.error("Failed to load source records for non-registration matching: %s", exc)
+    if not records:
         return
 
     updates = []
@@ -1092,8 +1109,10 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 if best_score >= 80:
                     matched_id = best_p_id
 
-        # No existing participant matched → create a client so the info is linked.
-        if not matched_id and (rec_full_name.strip() or rec_email):
+        # No existing participant matched → create a client so the info is linked,
+        # but skip parasitic rows (subtotals, job-title labels).
+        _cand_nd = {"first_name": rec_first, "last_name": rec_last, "email": rec_email, "traveler_name": rec_traveler}
+        if not matched_id and (rec_full_name.strip() or rec_email) and _is_real_person(_cand_nd):
             nk = _name_key(rec_first, rec_last)
             key = rec_email or nk
             matched_id = new_by_key.get(rec_email) or new_by_key.get(nk)

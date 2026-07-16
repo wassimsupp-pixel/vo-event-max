@@ -122,12 +122,19 @@ def _parse_date(raw: str) -> Optional[str]:
     ``None`` if no format matched.
     """
     from datetime import datetime as dt
+    raw = str(raw).strip()
+    # Drop a trailing time component ("2026-02-09 00:00:00" / "…T00:00:00").
+    core = re.split(r"[T ]", raw, maxsplit=1)[0]
     for fmt in _DATE_FORMATS:
         try:
-            return dt.strptime(raw, fmt).date().isoformat()
+            return dt.strptime(core, fmt).date().isoformat()
         except ValueError:
             continue
-    return None
+    # Last resort: a full ISO datetime with time/zone.
+    try:
+        return dt.fromisoformat(raw.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
 
 
 import math
