@@ -605,6 +605,41 @@ async def run_consolidation(
         match_non_registration_files_to_participants(event_id, supabase)
 
         # ---------------------------------------------------------------
+        # 6c. Reconcile FCM match stats with reality. Step 5 can report
+        #     'not_found' for flight records whose identity is a single
+        #     "Traveller" name; step 6b then links them (or creates a client).
+        #     Recompute the counters from actual linkage so the dashboard is
+        #     accurate: matched_certain + matched_probable = linked, and
+        #     not_found = genuinely unlinked flight records.
+        # ---------------------------------------------------------------
+        try:
+            fcm_ids = [f["id"] for f in mapped_files if f.get("source_type") == "fcm"]
+            if fcm_ids:
+                total_fcm = 0
+                linked_fcm = 0
+                offset = 0
+                while True:
+                    res = (
+                        supabase.table("source_records")
+                        .select("participant_id")
+                        .in_("file_id", fcm_ids)
+                        .range(offset, offset + 999)
+                        .execute()
+                    )
+                    data = res.data or []
+                    total_fcm += len(data)
+                    linked_fcm += sum(1 for r in data if r.get("participant_id"))
+                    if len(data) < 1000:
+                        break
+                    offset += 1000
+                stats["not_found"] = max(0, total_fcm - linked_fcm)
+                stats["to_verify"] = 0
+                stats["matched_probable"] = min(stats["matched_probable"], linked_fcm)
+                stats["matched_certain"] = max(0, linked_fcm - stats["matched_probable"])
+        except Exception as exc:
+            logger.warning("Failed to reconcile FCM match stats: %s", exc)
+
+        # ---------------------------------------------------------------
         # 7. Full exception detection
         # ---------------------------------------------------------------
         exc_count = exception_service.detect_all(
