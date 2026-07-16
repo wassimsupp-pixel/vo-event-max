@@ -699,6 +699,9 @@ def _update_completeness_statuses(event_id: str, supabase: Client) -> None:
             .eq("event_id", event_id)
             .execute()
         )
+        # Bucket participants by target status, then issue one UPDATE per status
+        # (chunked) instead of one UPDATE per participant — avoids N+1 on big events.
+        buckets: dict[str, list[str]] = {"conflict": [], "complete": [], "incomplete": []}
         for p in participants.data or []:
             if p["id"] in conflict_ids:
                 status_val = "conflict"
@@ -706,10 +709,15 @@ def _update_completeness_statuses(event_id: str, supabase: Client) -> None:
                 status_val = "complete"
             else:
                 status_val = "incomplete"
+            buckets[status_val].append(p["id"])
 
-            supabase.table("participants").update({
-                "completeness_status": status_val
-            }).eq("id", p["id"]).execute()
+        for status_val, ids in buckets.items():
+            for i in range(0, len(ids), 100):
+                chunk = ids[i:i + 100]
+                if chunk:
+                    supabase.table("participants").update(
+                        {"completeness_status": status_val}
+                    ).in_("id", chunk).execute()
     except Exception as exc:
         logger.warning("Failed to update completeness_status: %s", exc)
 
