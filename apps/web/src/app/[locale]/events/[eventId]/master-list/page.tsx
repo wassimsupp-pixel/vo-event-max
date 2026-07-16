@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle, Loader2, Check, X } from 'lucide-react'
+import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
 import { api } from '@/lib/api'
 
 const PER_PAGE = 20
@@ -28,12 +28,26 @@ interface MasterRow {
   region?: string | null
   country?: string | null
   passport_number?: string | null
+  dietary_requirements?: string | null
+  food_allergy_info?: string | null
+  // Enriched travel details (from master_list_service)
+  flight_summary?: string | null
+  flight_count?: number
+  hotel_name?: string | null
+  hotel_checkin?: string | null
+  hotel_checkout?: string | null
+  hotel_nights_count?: number
+  hotel_room_type?: string | null
+  transfer_summary?: string | null
+  activities_summary?: string | null
 }
 
-function ServiceCell({ active }: { active?: boolean }) {
-  return active
-    ? <Check className="mx-auto h-4 w-4 text-[var(--color-success)]" />
-    : <X className="mx-auto h-4 w-4 text-[var(--color-border-strong)]" />
+/** Multi-line detail cell: shows the text (pre-wrapped) or a red "manquant" hint. */
+function DetailCell({ text, missing = 'manquant' }: { text?: string | null; missing?: string }) {
+  if (text && text.trim()) {
+    return <span className="block whitespace-pre-line text-[11px] leading-snug text-[var(--color-text-primary)]">{text}</span>
+  }
+  return <span className="text-[11px] font-semibold text-[var(--color-danger)]">{missing}</span>
 }
 
 function StatusPill({ status }: { status?: string }) {
@@ -197,20 +211,20 @@ export default function MasterListPage() {
         {/* Detailed master table */}
         <Card className="border-[var(--color-border)] shadow-[var(--shadow-card)] overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] border-collapse text-sm">
+            <table className="w-full min-w-[1500px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-[var(--color-border)] bg-[var(--color-bg-subtle)] text-left text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)]">
-                  <th className="px-4 py-3">Nom</th>
-                  <th className="px-4 py-3">Prénom</th>
-                  <th className="px-4 py-3">Email</th>
-                  <th className="px-4 py-3">Catégorie</th>
-                  <th className="px-4 py-3">Région</th>
-                  <th className="px-4 py-3">Pays</th>
-                  <th className="px-4 py-3 text-center">Vol</th>
-                  <th className="px-4 py-3 text-center">Hôtel</th>
-                  <th className="px-4 py-3 text-center">Transf.</th>
-                  <th className="px-4 py-3 text-center">Activ.</th>
-                  <th className="px-4 py-3">Statut</th>
+                  <th className="px-3 py-3">Nom</th>
+                  <th className="px-3 py-3">Prénom</th>
+                  <th className="px-3 py-3">Email</th>
+                  <th className="px-3 py-3">Catégorie</th>
+                  <th className="px-3 py-3">Région</th>
+                  <th className="px-3 py-3 min-w-[210px]">Vol (compagnie · trajet · horaires)</th>
+                  <th className="px-3 py-3 min-w-[150px]">Hôtel (arrivée → départ)</th>
+                  <th className="px-3 py-3 min-w-[180px]">Transfert</th>
+                  <th className="px-3 py-3 min-w-[160px]">Activités (jour/heure)</th>
+                  <th className="px-3 py-3 min-w-[140px]">Régime / Allergies</th>
+                  <th className="px-3 py-3">Statut</th>
                 </tr>
               </thead>
               <tbody>
@@ -218,32 +232,40 @@ export default function MasterListPage() {
                   [...Array(6)].map((_, i) => (
                     <tr key={i} className="border-b border-[var(--color-border)] animate-pulse">
                       {[...Array(11)].map((__, j) => (
-                        <td key={j} className="px-4 py-3"><div className="h-4 rounded bg-gray-100" style={{ width: `${50 + ((j * 13) % 40)}%` }} /></td>
+                        <td key={j} className="px-3 py-3"><div className="h-4 rounded bg-gray-100" style={{ width: `${50 + ((j * 13) % 40)}%` }} /></td>
                       ))}
                     </tr>
                   ))
                 ) : pageRows.length === 0 ? (
                   <tr><td colSpan={11} className="py-12 text-center text-sm text-[var(--color-text-secondary)]">Aucun participant trouvé</td></tr>
                 ) : (
-                  pageRows.map((r) => (
+                  pageRows.map((r) => {
+                    const hotelText = [
+                      r.hotel_name,
+                      (r.hotel_checkin || r.hotel_checkout) ? `${r.hotel_checkin || '?'} → ${r.hotel_checkout || '?'}` : '',
+                      [r.hotel_room_type, r.hotel_nights_count ? `${r.hotel_nights_count} nuit(s)` : ''].filter(Boolean).join(' · '),
+                    ].filter(Boolean).join('\n')
+                    const dietText = [r.dietary_requirements, r.food_allergy_info].filter(Boolean).join('\n')
+                    return (
                     <tr
                       key={r.id}
                       onClick={() => router.push(`/${locale}/events/${eventId}/participants/${r.id}`)}
-                      className="group border-b border-[var(--color-border)] bg-white cursor-pointer transition-colors hover:bg-[var(--color-accent-light)] last:border-0"
+                      className="group border-b border-[var(--color-border)] bg-white cursor-pointer align-top transition-colors hover:bg-[var(--color-accent-light)] last:border-0"
                     >
-                      <td className="px-4 py-3 font-medium text-[var(--color-text-primary)]">{r.last_name || '—'}</td>
-                      <td className="px-4 py-3 text-[var(--color-text-primary)]">{r.first_name || '—'}</td>
-                      <td className="px-4 py-3 text-[var(--color-text-secondary)]">{r.email || '—'}</td>
-                      <td className="px-4 py-3 text-[var(--color-text-secondary)]">{r.attendee_category || '—'}</td>
-                      <td className="px-4 py-3 text-[var(--color-text-secondary)]">{r.region || '—'}</td>
-                      <td className="px-4 py-3 text-[var(--color-text-secondary)]">{r.country || '—'}</td>
-                      <td className="px-4 py-3"><ServiceCell active={r.has_flight} /></td>
-                      <td className="px-4 py-3"><ServiceCell active={r.has_hotel} /></td>
-                      <td className="px-4 py-3"><ServiceCell active={r.has_transfer} /></td>
-                      <td className="px-4 py-3"><ServiceCell active={r.has_activities} /></td>
-                      <td className="px-4 py-3"><StatusPill status={r.completeness_status} /></td>
+                      <td className="px-3 py-3 font-medium text-[var(--color-text-primary)]">{r.last_name || '—'}</td>
+                      <td className="px-3 py-3 text-[var(--color-text-primary)]">{r.first_name || '—'}</td>
+                      <td className="px-3 py-3 text-[var(--color-text-secondary)]">{r.email || <span className="font-semibold text-[var(--color-danger)]">manquant</span>}</td>
+                      <td className="px-3 py-3 text-[var(--color-text-secondary)]">{r.attendee_category || '—'}</td>
+                      <td className="px-3 py-3 text-[var(--color-text-secondary)]">{r.region || '—'}</td>
+                      <td className="px-3 py-3"><DetailCell text={r.flight_summary} missing="pas de vol" /></td>
+                      <td className="px-3 py-3"><DetailCell text={hotelText} missing="pas d'hôtel" /></td>
+                      <td className="px-3 py-3"><DetailCell text={r.transfer_summary} missing="pas de transfert" /></td>
+                      <td className="px-3 py-3"><DetailCell text={r.activities_summary} missing="aucune activité" /></td>
+                      <td className="px-3 py-3"><DetailCell text={dietText} missing="non renseigné" /></td>
+                      <td className="px-3 py-3"><StatusPill status={r.completeness_status} /></td>
                     </tr>
-                  ))
+                    )
+                  })
                 )}
               </tbody>
             </table>

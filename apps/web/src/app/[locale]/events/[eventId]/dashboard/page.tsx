@@ -24,6 +24,9 @@ import {
   Play,
   Zap,
   XCircle,
+  ShieldCheck,
+  Sparkles,
+  Lightbulb,
 } from 'lucide-react'
 import { api, type Participant, type UploadedFile, type Exception, type ConsolidationRun } from '@/lib/api'
 
@@ -44,6 +47,7 @@ export default function DashboardPage() {
   const [totalParticipants, setTotalParticipants] = useState(0)
   const [files, setFiles] = useState<UploadedFile[]>([])
   const [exceptions, setExceptions] = useState<Exception[]>([])
+  const [analysis, setAnalysis] = useState<any>(null)
 
   // Consolidation state
   const [consolidating, setConsolidating] = useState(false)
@@ -54,15 +58,17 @@ export default function DashboardPage() {
       if (!eventId) return
       setLoading(true)
       try {
-        const [participantsData, filesData, exceptionsData] = await Promise.all([
+        const [participantsData, filesData, exceptionsData, analysisData] = await Promise.all([
           api.participants.list(eventId, { page_size: 5 }),
           api.files.list(eventId),
           api.exceptions.list(eventId),
+          api.reports.getAnalysis(eventId).catch(() => null),
         ])
         setParticipants(participantsData.items)
         setTotalParticipants(participantsData.total)
         setFiles(filesData)
         setExceptions(exceptionsData)
+        setAnalysis(analysisData)
       } catch (err) {
         console.error('Failed to load dashboard data:', err)
       } finally {
@@ -257,6 +263,80 @@ export default function DashboardPage() {
             href={`/${locale}/events/${eventId}/exceptions`}
           />
         </div>
+
+        {/* Intelligent data-quality analysis (same engine as Rapports §15) */}
+        {analysis && analysis.total > 0 && (
+          <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-white p-5 shadow-[var(--shadow-card)]">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+                <ShieldCheck className="h-4 w-4 text-[var(--color-accent)]" />
+                Analyse de la qualité des données
+              </h3>
+              <Link
+                href={`/${locale}/events/${eventId}/reports`}
+                className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+              >
+                Rapport complet <ChevronRight className="h-3 w-3" />
+              </Link>
+            </div>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+              {/* Score + dimensions */}
+              <div className="flex items-center gap-4 lg:col-span-1">
+                <div
+                  className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-full border-4"
+                  style={{ borderColor: analysis.quality_score >= 80 ? 'var(--color-success)' : analysis.quality_score >= 60 ? 'var(--color-warning)' : 'var(--color-danger)' }}
+                >
+                  <span className="text-2xl font-bold text-[var(--color-text-primary)]">{analysis.quality_score}</span>
+                  <span className="text-[9px] text-[var(--color-text-secondary)]">/ 100</span>
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  {Object.entries(analysis.dimensions || {}).map(([dim, val]) => {
+                    const labels: Record<string, string> = { identite: 'Identité', contact: 'Contact', voyage: 'Voyage', hebergement: 'Hébergement', regime: 'Régime', passeport: 'Passeport' }
+                    const v = val as number
+                    return (
+                      <div key={dim}>
+                        <div className="mb-0.5 flex justify-between text-[10px]">
+                          <span className="text-[var(--color-text-secondary)]">{labels[dim] || dim}</span>
+                          <span className="font-semibold text-[var(--color-text-primary)]">{v}%</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                          <div className="h-full rounded-full" style={{ width: `${v}%`, background: v >= 80 ? 'var(--color-success)' : v >= 60 ? 'var(--color-warning)' : 'var(--color-danger)' }} />
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Recommendations */}
+              <div className="lg:col-span-2">
+                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-cta)]">
+                  <Lightbulb className="h-3.5 w-3.5" /> Conseils prioritaires
+                </div>
+                {(!analysis.recommendations || analysis.recommendations.length === 0) ? (
+                  <p className="text-xs text-[var(--color-text-secondary)]">Aucune action requise — données complètes.</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {analysis.recommendations.slice(0, 4).map((r: any, i: number) => (
+                      <li key={i} className="flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-1.5">
+                        <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${r.severity === 'critical' ? 'text-[var(--color-danger)]' : r.severity === 'warning' ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-secondary)]'}`} />
+                        <span className="text-xs text-[var(--color-text-primary)]"><strong className="font-semibold">{r.count}</strong> {r.text}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {analysis.ai_summary && (
+                  <div className="mt-3 rounded-lg border border-[var(--color-accent)]/20 bg-[var(--color-accent-light)]/40 p-2.5">
+                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold text-[var(--color-accent)]">
+                      <Sparkles className="h-3 w-3" /> Synthèse IA
+                    </div>
+                    <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[var(--color-text-primary)]">{analysis.ai_summary}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Main content + right panel */}
         <div className="grid grid-cols-12 gap-6">

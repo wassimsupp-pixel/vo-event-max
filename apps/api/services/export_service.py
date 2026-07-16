@@ -19,6 +19,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from supabase import Client
 
+from services import master_list_service
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -82,19 +84,21 @@ def _write_header_row(ws, headers: list[str]) -> None:
 # Sheet 1 — Master List
 # ---------------------------------------------------------------------------
 
-def _build_master_list_sheet(ws, participants: list[dict], conflict_ids: set[str]) -> None:
-    """Populate the Master List sheet."""
+def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str]) -> None:
+    """Populate the detailed Master List sheet (feedback §6): identity + real
+    flight / hotel / transfer / activity / dietary details, not just booleans."""
     ws.title = "Master List"
     ws.freeze_panes = "A2"
 
     headers = [
         "Last Name", "First Name", "Email", "Company", "Phone", "Nationality",
-        "Dietary Requirements", "Has Flight", "Has Hotel", "Has Transfer",
-        "Has Activities", "Status", "Verification Note",
+        "Region", "Category", "Dietary Requirements", "Food / Allergy",
+        "Flights (airline · route · times)", "Hotel", "Check-in", "Check-out",
+        "Nights", "Room", "Transfers", "Activities (name · day/time)", "Status",
     ]
     _write_header_row(ws, headers)
 
-    for row_idx, p in enumerate(participants, start=2):
+    for row_idx, p in enumerate(rows, start=2):
         values = [
             p.get("last_name"),
             p.get("first_name"),
@@ -102,13 +106,19 @@ def _build_master_list_sheet(ws, participants: list[dict], conflict_ids: set[str
             p.get("company"),
             p.get("phone"),
             p.get("nationality"),
-            p.get("dietary_requirements"),   # will be None for non-admin/pm — set at query level
-            "✓" if p.get("has_flight")      else "✗",
-            "✓" if p.get("has_hotel")       else "✗",
-            "✓" if p.get("has_transfer")    else "✗",
-            "✓" if p.get("has_activities")  else "✗",
+            p.get("region"),
+            p.get("attendee_category"),
+            p.get("dietary_requirements"),
+            p.get("food_allergy_info"),
+            p.get("flight_summary"),
+            p.get("hotel_name"),
+            p.get("hotel_checkin"),
+            p.get("hotel_checkout"),
+            p.get("hotel_nights_count") or "",
+            p.get("hotel_room_type"),
+            p.get("transfer_summary"),
+            p.get("activities_summary"),
             p.get("completeness_status", "incomplete"),
-            p.get("verification_note"),
         ]
 
         # Determine row colour
@@ -126,9 +136,10 @@ def _build_master_list_sheet(ws, participants: list[dict], conflict_ids: set[str
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.fill   = fill
             cell.border = _thin_border()
-            cell.alignment = Alignment(vertical="center")
+            # Multi-line detail cells wrap; the rest are top-aligned for consistency
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-    _auto_width(ws)
+    _auto_width(ws, max_width=60)
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +256,123 @@ def _build_change_log_sheet(ws, changes: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sheet — Data-quality analysis & advice (feedback §15)
+# ---------------------------------------------------------------------------
+
+def _build_quality_sheet(ws, analysis: dict) -> None:
+    """Data-quality dimensions, missing-data counts and distributions."""
+    ws.title = "Analyse Qualité"
+
+    ws.cell(row=1, column=1, value="Indicateur").font = _header_font()
+    ws.cell(row=1, column=1).fill = _header_fill()
+    ws.cell(row=1, column=2, value="Valeur").font = _header_font()
+    ws.cell(row=1, column=2).fill = _header_fill()
+
+    dims = analysis.get("dimensions", {}) or {}
+    missing = analysis.get("missing", {}) or {}
+    dim_labels = {
+        "identite": "Identité (email présent)",
+        "contact": "Contact (email ou téléphone)",
+        "voyage": "Voyage (vol renseigné)",
+        "hebergement": "Hébergement",
+        "regime": "Régime alimentaire",
+        "passeport": "Passeport",
+    }
+    rows: list[tuple[str, Any]] = [
+        ("Participants", analysis.get("total", 0)),
+        ("Score qualité global", f"{analysis.get('quality_score', 0)}/100"),
+        ("", ""),
+        ("— Dimensions (%) —", ""),
+    ]
+    rows += [(dim_labels.get(k, k), f"{v}%") for k, v in dims.items()]
+    rows += [
+        ("", ""),
+        ("— Données manquantes —", ""),
+        ("Sans email", missing.get("email", 0)),
+        ("Sans téléphone", missing.get("phone", 0)),
+        ("Sans régime alimentaire", missing.get("dietary_requirements", 0)),
+        ("Sans n° passeport", missing.get("passport_number", 0)),
+        ("Sans fonction/poste", missing.get("job_title", 0)),
+        ("Sans région", missing.get("region", 0)),
+        ("", ""),
+        ("— Services manquants —", ""),
+        ("Sans vol", analysis.get("without_flight", 0)),
+        ("Sans hébergement", analysis.get("without_hotel", 0)),
+        ("Sans transfert", analysis.get("without_transfer", 0)),
+        ("Conflits de données non résolus", analysis.get("conflicts", 0)),
+        ("Passeports expirés", analysis.get("passport_expired", 0)),
+        ("Passeports expirant (< 6 mois)", analysis.get("passport_expiring", 0)),
+    ]
+
+    for i, (k, v) in enumerate(rows, start=2):
+        c1 = ws.cell(row=i, column=1, value=k)
+        if str(k).startswith("—") or k in ("Participants", "Score qualité global"):
+            c1.font = Font(bold=True)
+        ws.cell(row=i, column=2, value=str(v) if v != "" else "")
+
+    # Distributions on the right
+    def _write_distribution(start_col: int, title: str, dist: dict) -> None:
+        ws.cell(row=1, column=start_col, value=title).font = _header_font()
+        ws.cell(row=1, column=start_col).fill = _header_fill()
+        ws.cell(row=1, column=start_col + 1, value="Nombre").font = _header_font()
+        ws.cell(row=1, column=start_col + 1).fill = _header_fill()
+        for i, (k, v) in enumerate(list(dist.items())[:25], start=2):
+            ws.cell(row=i, column=start_col, value=str(k))
+            ws.cell(row=i, column=start_col + 1, value=v)
+
+    _write_distribution(4, "Par région", analysis.get("by_region", {}) or {})
+    _write_distribution(7, "Par catégorie", analysis.get("by_category", {}) or {})
+
+    _auto_width(ws, min_width=14, max_width=40)
+
+
+def _build_advice_sheet(ws, analysis: dict) -> None:
+    """Prioritised, data-driven recommendations + the AI narrative (feedback §15)."""
+    ws.title = "Conseils"
+
+    # AI narrative on top (if any)
+    ai = analysis.get("ai_summary")
+    start = 1
+    if ai:
+        ws.cell(row=1, column=1, value="Synthèse (IA)").font = _header_font()
+        ws.cell(row=1, column=1).fill = _header_fill()
+        cell = ws.cell(row=2, column=1, value=str(ai))
+        cell.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
+        ws.row_dimensions[2].height = 90
+        start = 4
+
+    headers = ["Priorité", "Recommandation", "Nombre concerné"]
+    for col_idx, header in enumerate(headers, start=1):
+        cell = ws.cell(row=start, column=col_idx, value=header)
+        cell.fill = _header_fill()
+        cell.font = _header_font()
+        cell.alignment = Alignment(horizontal="center")
+
+    sev_label = {"critical": "🔴 Critique", "warning": "🟠 Important", "info": "🔵 Info"}
+    sev_color = {"critical": SEV_CRITICAL, "warning": SEV_WARNING, "info": SEV_INFO}
+    recs = analysis.get("recommendations", []) or []
+    # critical → warning → info
+    order = {"critical": 0, "warning": 1, "info": 2}
+    recs = sorted(recs, key=lambda r: order.get(r.get("severity"), 3))
+
+    for i, r in enumerate(recs, start=start + 1):
+        sev = r.get("severity", "info")
+        fill = _row_fill(sev_color.get(sev, SEV_INFO))
+        vals = [sev_label.get(sev, sev), r.get("text"), r.get("count")]
+        for col_idx, value in enumerate(vals, start=1):
+            cell = ws.cell(row=i, column=col_idx, value=value)
+            cell.fill = fill
+            cell.border = _thin_border()
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+    if not recs:
+        ws.cell(row=start + 1, column=1, value="Aucun point d'attention détecté — données complètes.")
+
+    _auto_width(ws, max_width=90)
+
+
+# ---------------------------------------------------------------------------
 # Main generator
 # ---------------------------------------------------------------------------
 
@@ -280,20 +408,18 @@ async def generate_excel(
     )
     run: dict = run_resp.data or {}
 
-    # Participants (all, with dietary_requirements — this export runs server-side
-    # as an admin operation; the router enforces who can trigger exports)
-    p_resp = (
-        supabase.table("participants")
-        .select(
-            "id, first_name, last_name, email, company, phone, nationality, "
-            "dietary_requirements, has_flight, has_hotel, has_transfer, has_activities, "
-            "completeness_status, verification_note"
-        )
-        .eq("event_id", event_id)
-        .order("last_name")
-        .execute()
-    )
-    participants: list[dict] = p_resp.data or []
+    # Enriched master rows (identity + real flight/hotel/transfer/activity detail).
+    # This export runs server-side as an admin operation; the router enforces who
+    # can trigger exports, so dietary/allergy fields are included here.
+    master_rows: list[dict] = master_list_service.build_master_rows(supabase, event_id)
+    master_rows.sort(key=lambda r: str(r.get("last_name") or "").lower())
+
+    # Data-quality analysis (score, dimensions, distributions, recommendations, AI)
+    try:
+        analysis: dict = master_list_service.build_analysis(supabase, event_id)
+    except Exception as exc:
+        logger.warning("Analysis for export failed on event %s: %s", event_id, exc)
+        analysis = {}
 
     # Identify participants with DATA_CONFLICT exceptions
     conflict_resp = (
@@ -335,19 +461,27 @@ async def generate_excel(
     # --- Build workbook ---
     wb = Workbook()
 
-    # Sheet 1: Master List
+    # Sheet 1: Master List (detailed)
     ws1 = wb.active
-    _build_master_list_sheet(ws1, participants, conflict_ids)
+    _build_master_list_sheet(ws1, master_rows, conflict_ids)
 
-    # Sheet 2: Exceptions
+    # Sheet 2: Data-quality analysis
+    ws_q = wb.create_sheet()
+    _build_quality_sheet(ws_q, analysis)
+
+    # Sheet 3: Advice / recommendations
+    ws_a = wb.create_sheet()
+    _build_advice_sheet(ws_a, analysis)
+
+    # Sheet 4: Exceptions
     ws2 = wb.create_sheet()
     _build_exceptions_sheet(ws2, exceptions)
 
-    # Sheet 3: Summary
+    # Sheet 5: Summary
     ws3 = wb.create_sheet()
     _build_summary_sheet(ws3, run, user_id)
 
-    # Sheet 4: Change Log
+    # Sheet 6: Change Log
     ws4 = wb.create_sheet()
     _build_change_log_sheet(ws4, changes)
 

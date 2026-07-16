@@ -51,6 +51,44 @@ def _first_non_empty(values: list[Any]) -> Optional[Any]:
     return None
 
 
+def _fmt_dt(val: Any) -> str:
+    """Format an ISO datetime as 'DD/MM HH:MM' (best effort, returns '' on failure)."""
+    if not val:
+        return ""
+    raw = str(val).replace("Z", "+00:00")
+    try:
+        d = datetime.fromisoformat(raw)
+        return d.strftime("%d/%m %H:%M")
+    except ValueError:
+        # date only or free text
+        return _fmt_date(val)
+
+
+def _fmt_date(val: Any) -> str:
+    """Format an ISO date as 'DD/MM/YYYY' (best effort)."""
+    if not val:
+        return ""
+    raw = str(val).split("T")[0].split(" ")[0].strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return str(val)
+
+
+def _fetch_in_chunks(supabase: Client, table: str, select: str, col: str, ids: list[str], chunk: int = 100) -> list[dict[str, Any]]:
+    """Fetch rows of *table* where *col* IN *ids* (chunked to keep URLs short)."""
+    out: list[dict[str, Any]] = []
+    for i in range(0, len(ids), chunk):
+        part = ids[i : i + chunk]
+        if not part:
+            continue
+        res = supabase.table(table).select(select).in_(col, part).execute()
+        out.extend(res.data or [])
+    return out
+
+
 def _paginate(supabase: Client, table: str, select: str, event_id: str, extra_not_null: Optional[str] = None) -> list[dict[str, Any]]:
     """Fetch all rows of *table* for an event (PostgREST caps at 1000 → paginate)."""
     out: list[dict[str, Any]] = []
@@ -69,14 +107,26 @@ def _paginate(supabase: Client, table: str, select: str, event_id: str, extra_no
     return out
 
 
+def _index_by_participant(rows: list[dict[str, Any]], key: str = "participant_id") -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        pid = r.get(key)
+        if pid:
+            out.setdefault(pid, []).append(r)
+    return out
+
+
 def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
     """
-    Return one enriched row per participant: core fields + the rich master-file
-    fields merged from all of their source records (first non-empty wins).
+    Return one enriched row per participant merging, for the master list (§6):
+      * core participant fields + rich master-file fields (source_records),
+      * real flight details (airline, number, route, dep/arr times),
+      * real hotel stay (hotel name, check-in / check-out, nights, room type),
+      * real transfers (type, route, pickup time),
+      * real activities (name, day & time).
 
-    Uses two separate queries (participants, source_records) and merges in Python
-    — avoids the ambiguous PostgREST embed (participants and source_records have
-    foreign keys in both directions).
+    Uses separate queries + Python merge to avoid the ambiguous PostgREST embed
+    (participants and source_records have foreign keys in both directions).
     """
     try:
         participants = _paginate(supabase, "participants", ", ".join(CORE_FIELDS), event_id)
@@ -85,18 +135,112 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         logger.error("Failed to build master rows for %s: %s", event_id, exc)
         return []
 
+    participant_ids = [p["id"] for p in participants]
+
+    # --- Rich source fields, indexed by participant ---
     by_participant: dict[str, list[dict[str, Any]]] = {}
     for sr in source_rows:
         pid = sr.get("participant_id")
         if pid:
             by_participant.setdefault(pid, []).append(sr.get("normalized_data") or {})
 
+    # --- Travel details (best-effort; never block the master list) ---
+    flights_by_p: dict[str, list[dict[str, Any]]] = {}
+    transfers_by_p: dict[str, list[dict[str, Any]]] = {}
+    nights_by_p: dict[str, list[dict[str, Any]]] = {}
+    acts_by_p: dict[str, list[dict[str, Any]]] = {}
+    hotel_names: dict[str, str] = {}
+    activity_info: dict[str, dict[str, Any]] = {}
+    try:
+        flights = _paginate(supabase, "flights",
+                            "participant_id, airline, flight_number, departure_airport, arrival_airport, departure_time, arrival_time, status",
+                            event_id)
+        flights_by_p = _index_by_participant(flights)
+
+        transfers = _paginate(supabase, "transfers",
+                             "participant_id, transfer_type, pickup_location, dropoff_location, pickup_time, vehicle_type, status",
+                             event_id)
+        transfers_by_p = _index_by_participant(transfers)
+
+        hotels = _paginate(supabase, "hotels", "id, name", event_id)
+        hotel_names = {h["id"]: h.get("name") or "" for h in hotels}
+        nights = _fetch_in_chunks(supabase, "hotel_nights",
+                                  "participant_id, hotel_id, night_date, room_type, status",
+                                  "participant_id", participant_ids)
+        nights_by_p = _index_by_participant(nights)
+
+        activities = _paginate(supabase, "activities", "id, name, date_time, location", event_id)
+        activity_info = {a["id"]: a for a in activities}
+        pacts = _fetch_in_chunks(supabase, "participant_activities",
+                                 "participant_id, activity_id, status",
+                                 "participant_id", participant_ids)
+        acts_by_p = _index_by_participant(pacts)
+    except Exception as exc:
+        logger.warning("Master list travel enrichment partial for %s: %s", event_id, exc)
+
     rows: list[dict[str, Any]] = []
     for p in participants:
+        pid = p["id"]
         row: dict[str, Any] = {k: p.get(k) for k in CORE_FIELDS}
-        nds = by_participant.get(p["id"], [])
+        nds = by_participant.get(pid, [])
         for field in RICH_FIELDS:
             row[field] = _first_non_empty([nd.get(field) for nd in nds])
+
+        # Flights → one line per flight, sorted by departure
+        flist = sorted(flights_by_p.get(pid, []), key=lambda f: str(f.get("departure_time") or ""))
+        flight_lines = []
+        for f in flist:
+            route = f"{f.get('departure_airport') or '?'}→{f.get('arrival_airport') or '?'}"
+            times = f"{_fmt_dt(f.get('departure_time'))}→{_fmt_dt(f.get('arrival_time'))}".strip("→")
+            airline = (f.get("airline") or "").strip()
+            num = (f.get("flight_number") or "").strip()
+            head = " ".join(x for x in [airline, num] if x)
+            cancelled = " (annulé)" if f.get("status") == "cancelled" else ""
+            flight_lines.append(f"{head} · {route} · {times}{cancelled}".strip(" ·"))
+        row["flight_summary"] = "\n".join(flight_lines)
+        row["flight_count"] = len(flist)
+
+        # Hotel nights → check-in / check-out / nights
+        nl = nights_by_p.get(pid, [])
+        night_dates = sorted([str(n.get("night_date")) for n in nl if n.get("night_date")])
+        if night_dates:
+            row["hotel_name"] = _first_non_empty([hotel_names.get(n.get("hotel_id")) for n in nl]) or ""
+            row["hotel_checkin"] = _fmt_date(night_dates[0])
+            # departure = morning after the last booked night
+            row["hotel_checkout"] = _fmt_date(night_dates[-1])
+            row["hotel_nights_count"] = len(night_dates)
+            row["hotel_room_type"] = _first_non_empty([n.get("room_type") for n in nl]) or ""
+        else:
+            row["hotel_name"] = ""
+            row["hotel_checkin"] = ""
+            row["hotel_checkout"] = ""
+            row["hotel_nights_count"] = 0
+            row["hotel_room_type"] = ""
+
+        # Transfers → one line per transfer
+        tlist = sorted(transfers_by_p.get(pid, []), key=lambda t: str(t.get("pickup_time") or ""))
+        transfer_lines = []
+        for tr in tlist:
+            route = f"{tr.get('pickup_location') or '?'}→{tr.get('dropoff_location') or '?'}"
+            when = _fmt_dt(tr.get("pickup_time"))
+            veh = (tr.get("vehicle_type") or "").strip()
+            typ = (tr.get("transfer_type") or "").strip()
+            transfer_lines.append(" · ".join(x for x in [typ, route, when, veh] if x))
+        row["transfer_summary"] = "\n".join(transfer_lines)
+        row["transfer_count"] = len(tlist)
+
+        # Activities → name · day & time
+        alist = acts_by_p.get(pid, [])
+        act_lines = []
+        for pa in alist:
+            info = activity_info.get(pa.get("activity_id"), {})
+            name = (info.get("name") or "").strip()
+            when = _fmt_dt(info.get("date_time"))
+            if name:
+                act_lines.append(f"{name}{(' · ' + when) if when else ''}")
+        row["activities_summary"] = "\n".join(act_lines)
+        row["activities_count"] = len(act_lines)
+
         rows.append(row)
     return rows
 
