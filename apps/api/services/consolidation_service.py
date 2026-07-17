@@ -1316,6 +1316,9 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
     # info is never orphaned (feedback: every info must belong to a person).
     new_parts: list[dict] = []
     new_by_key: dict[str, str] = {}
+    # Name-key of the client that first claimed each email — lets us tell a
+    # personal email (same owner) from a shared booking contact (different name).
+    new_email_owner_nk: dict[str, str] = {}
     for rec in records:
         normalized = rec.get("normalized_data") or {}
         raw = rec.get("raw_data") or {}
@@ -1458,22 +1461,39 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         _cand_nd = {"first_name": rec_first, "last_name": rec_last, "email": rec_email, "traveler_name": rec_traveler}
         if not matched_id and (rec_full_name.strip() or rec_email) and _is_real_person(_cand_nd):
             nk = _name_key(rec_first, rec_last)
-            key = rec_email or nk
-            matched_id = new_by_key.get(rec_email) or new_by_key.get(nk)
-            if not matched_id and key:
+
+            # Dedup by name first when the row HAS a name. The email column of a
+            # travel file is frequently a shared BOOKING contact (one coordinator
+            # booked several passengers) — reusing the email-keyed client would
+            # merge distinct travellers onto one person. So only reuse an
+            # email-keyed client when this row has no name of its own, or its
+            # name matches the client that first claimed that email.
+            email_owner = new_by_key.get(rec_email) if rec_email else None
+            email_is_shared_contact = bool(
+                email_owner and nk and new_email_owner_nk.get(rec_email) not in (None, nk)
+            )
+            matched_id = new_by_key.get(nk) if nk else None
+            if not matched_id and email_owner and not email_is_shared_contact:
+                matched_id = email_owner
+
+            if not matched_id and (nk or (rec_email and not rec_full_name.strip())):
                 matched_id = str(uuid.uuid4())
                 new_parts.append({
                     "id": matched_id,
                     "event_id": event_id,
                     "first_name": (rec_first or "").title(),
                     "last_name": (rec_last or "").title(),
-                    "email": rec_email or None,
+                    # Never stamp a shared booking email onto a distinct traveller.
+                    "email": None if email_is_shared_contact else (rec_email or None),
                     "completeness_status": "incomplete",
                 })
-                if rec_email:
-                    new_by_key[rec_email] = matched_id
                 if nk:
                     new_by_key[nk] = matched_id
+                # Only let an email key a client the FIRST time (its owner), and
+                # only when we actually attached that email to the client.
+                if rec_email and not email_is_shared_contact and rec_email not in new_by_key:
+                    new_by_key[rec_email] = matched_id
+                    new_email_owner_nk[rec_email] = nk
 
         if matched_id:
             updates.append({
