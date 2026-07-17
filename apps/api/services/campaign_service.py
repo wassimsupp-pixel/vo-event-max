@@ -73,7 +73,8 @@ def _apply_template(template: str, ph: dict[str, str]) -> str:
 
 def _ai_personalize(instructions: str, ph: dict[str, str]) -> tuple[str, str]:
     """AI-generate a personalized subject+body for one participant."""
-    if not GEMINI_AVAILABLE:
+    from services import ai_service
+    if not ai_service.ai_available():
         # Fallback: a minimal templated message from the instructions
         subject = f"{ph.get('event_name') or 'Information'}"
         body = f"Bonjour {ph.get('first_name', '')},\n\n{instructions}\n\nCordialement,\nL'équipe organisation"
@@ -88,9 +89,8 @@ def _ai_personalize(instructions: str, ph: dict[str, str]) -> tuple[str, str]:
     Réponds STRICTEMENT en JSON : {{"subject": "...", "body": "..."}}
     """
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        text = resp.text.strip()
+        from services import ai_service
+        text = (ai_service.ai_text(prompt) or "").strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:

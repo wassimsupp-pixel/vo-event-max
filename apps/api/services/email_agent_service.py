@@ -134,11 +134,10 @@ class EmailAgentService:
         If no changes can be extracted or mapped, return empty changes.
         """
 
-        if GEMINI_AVAILABLE:
+        from services import ai_service
+        if ai_service.ai_available():
             try:
-                model = genai.GenerativeModel("gemini-1.5-flash")
-                response = model.generate_content(prompt)
-                text = response.text.strip()
+                text = (ai_service.ai_text(prompt) or "").strip()
                 # Clean markdown blocks if returned
                 if "```json" in text:
                     text = text.split("```json")[1].split("```")[0].strip()

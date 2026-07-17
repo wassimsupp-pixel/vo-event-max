@@ -386,7 +386,8 @@ def build_analysis(supabase: Client, event_id: str) -> dict[str, Any]:
 
 
 def _ai_summary(total: int, score: int, dimensions: dict, recs: list[dict]) -> Optional[str]:
-    if not GEMINI_AVAILABLE or total == 0:
+    from services import ai_service
+    if not ai_service.ai_available() or total == 0:
         return None
     try:
         prompt = f"""
@@ -399,9 +400,7 @@ def _ai_summary(total: int, score: int, dimensions: dict, recs: list[dict]) -> O
         Dimensions (%): {dimensions}
         Points d'attention: {[{'quoi': r['text'], 'nombre': r['count']} for r in recs]}
         """
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        return resp.text.strip()
+        return ai_service.ai_text(prompt)
     except Exception as exc:
         logger.warning("AI quality summary failed: %s", exc)
         return None

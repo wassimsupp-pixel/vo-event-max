@@ -189,9 +189,8 @@ def _generate_with_gemini(facts: dict[str, Any]) -> Optional[tuple[str, str]]:
     Le body est le corps de l'e-mail (texte, sauts de ligne autorisés).
     """
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content(prompt)
-        text = resp.text.strip()
+        from services import ai_service
+        text = (ai_service.ai_text(prompt) or "").strip()
         if "```json" in text:
             text = text.split("```json")[1].split("```")[0].strip()
         elif "```" in text:
@@ -221,7 +220,8 @@ def generate_confirmation(supabase: Client, participant_id: str) -> dict[str, An
         if key not in facts
     ]
 
-    result = _generate_with_gemini(facts) if GEMINI_AVAILABLE else None
+    from services import ai_service
+    result = _generate_with_gemini(facts) if ai_service.ai_available() else None
     if result is None:
         subject, body = _template(facts)
         source = "template"

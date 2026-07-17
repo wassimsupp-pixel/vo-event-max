@@ -555,17 +555,12 @@ def ai_refine_mapping(
     Returns extra {column: canonical_field} entries. Silent no-op when the
     GEMINI_API_KEY is absent or the call fails — the heuristic mapping stands.
     """
-    import os as _os
+    from services import ai_service
+
     unmapped = [c for c in columns if c not in already_mapped]
-    api_key = _os.getenv("GEMINI_API_KEY")
-    if not api_key or not unmapped:
+    if not unmapped or not ai_service.ai_available():
         return {}
     try:
-        import json as _json
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
         free_fields = sorted(CANONICAL_FIELDS - set(already_mapped.values()))
         samples = {
             c: [str(r.get(c) or "")[:40] for r in sample_rows[:3] if r.get(c) not in (None, "")]
@@ -580,12 +575,9 @@ def ai_refine_mapping(
             "fields, and omit any column you are not confident about. Never map a column to "
             "'passport_expiry' or 'date_of_birth' unless its NAME clearly says so."
         )
-        resp = model.generate_content(prompt)
-        text = (resp.text or "").strip()
-        start, end = text.find("{"), text.rfind("}")
-        if start < 0 or end <= start:
+        data = ai_service.ai_json(prompt)
+        if not isinstance(data, dict):
             return {}
-        data = _json.loads(text[start:end + 1])
 
         out: dict[str, str] = {}
         for col, field in data.items():

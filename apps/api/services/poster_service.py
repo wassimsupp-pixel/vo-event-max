@@ -43,21 +43,15 @@ Réponds UNIQUEMENT avec le JSON.
 
 def analyze_poster(image_bytes: bytes, mime_type: str) -> dict[str, Any]:
     """Return structured event info extracted from a poster image."""
-    if not GEMINI_AVAILABLE:
-        return {"error": "AI vision non configurée (GEMINI_API_KEY manquante).", "fields": {}}
+    from services import ai_service
+
+    if not ai_service.ai_available():
+        return {"error": "AI vision non configurée (clé OPENAI_API_KEY ou GEMINI_API_KEY manquante).", "fields": {}}
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        resp = model.generate_content([
-            _PROMPT,
-            {"mime_type": mime_type, "data": image_bytes},
-        ])
-        text = (resp.text or "").strip()
-        if "```json" in text:
-            text = text.split("```json")[1].split("```")[0].strip()
-        elif "```" in text:
-            text = text.split("```")[1].split("```")[0].strip()
-        fields = json.loads(text)
+        fields = ai_service.ai_json(_PROMPT, image_bytes=image_bytes, mime_type=mime_type)
+        if not isinstance(fields, dict):
+            raise ValueError("no JSON in AI answer")
         return {"fields": fields}
     except Exception as exc:
         logger.error("Poster analysis failed: %s", exc)
