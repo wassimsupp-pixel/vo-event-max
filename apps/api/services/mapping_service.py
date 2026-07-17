@@ -50,6 +50,8 @@ CANONICAL_FIELDS = {
     "fast_track", "extra_meetings", "headphones_translation",
 }
 
+_BOOLEAN_VALUES = {"yes", "no", "oui", "non", "y", "n", "true", "false", "1", "0", "x", "✓", "✗"}
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DATE_FORMATS = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y"]
 
@@ -110,6 +112,11 @@ def normalise_fields(mapped_row: dict[str, Any]) -> dict[str, Any]:
                 value = value.lower()
             elif field.endswith("_date"):
                 value = _parse_date(value) or value  # keep original if parse fails
+        # An identifier column must never hold a boolean/form value ("Yes"/"No"):
+        # matching on such a shared value collapses everyone onto one participant
+        # and contaminates their flights/hotels. Drop it.
+        if field in ("id", "participant_id") and str(value or "").strip().lower() in _BOOLEAN_VALUES:
+            value = None
         normalised[field] = value
     return normalised
 
@@ -391,10 +398,11 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
 
         # Content match indicators
         is_email = is_date = is_flight = False
-        is_phone = is_pnr = is_iata = is_time = is_passport = False
+        is_phone = is_pnr = is_iata = is_time = is_passport = is_boolean = False
 
         if vals:
             n = len(vals)
+            is_boolean = (sum(1 for v in vals if v.strip().lower() in _BOOLEAN_VALUES) / n) > 0.7
             is_email = (sum(1 for v in vals if _EMAIL_RE.match(v)) / n) > 0.5
             is_date = (sum(1 for v in vals if _parse_date(v) is not None) / n) > 0.5
             is_flight = (sum(1 for v in vals if _FLIGHT_NO_RE.match(v)) / n) > 0.5
@@ -468,7 +476,13 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         if is_time and not is_date:
             for f in ("departure_time", "arrival_time", "pickup_time"):
                 field_scores[f] = max(field_scores.get(f, 0.0), 0.5)
-                    
+
+        # A Yes/No (boolean) column must never be proposed as an identifier —
+        # it would collapse everyone sharing the value onto one participant.
+        if is_boolean:
+            field_scores["id"] = 0.0
+            field_scores["participant_id"] = 0.0
+
         # Collect this column's candidate (field, score) pairs; the actual
         # suggestion is decided globally below.
         col_candidates[col] = sorted(

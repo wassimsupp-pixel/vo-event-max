@@ -854,6 +854,18 @@ async def run_consolidation(
             logger.warning("Failed to reconcile FCM match stats: %s", exc)
 
         # ---------------------------------------------------------------
+        # 6d. Self-heal residual phantom duplicates (from earlier runs or
+        #     first-name-vs-legal-name splits) before extraction/stats.
+        # ---------------------------------------------------------------
+        try:
+            merged_phantoms = merge_duplicate_participants(event_id, supabase)
+            stats["phantoms_merged"] = merged_phantoms
+            if merged_phantoms:
+                stats["participants_created"] = max(0, stats["participants_created"] - merged_phantoms)
+        except Exception as exc:
+            logger.warning("Phantom duplicate merge failed: %s", exc)
+
+        # ---------------------------------------------------------------
         # 7. Full exception detection
         # ---------------------------------------------------------------
         exc_count = exception_service.detect_all(
@@ -1264,6 +1276,77 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 supabase.table("source_records").upsert(updates[i:i+100]).execute()
         except Exception as exc:
             logger.error("Failed to bulk update participant_id on source_records: %s", exc)
+
+
+def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
+    """
+    Self-heal residual phantom duplicates (e.g. left over from earlier runs): an
+    emailless, 'thin' participant (a travel-derived stub with no company/phone)
+    is merged into the SINGLE registered participant that shares its last name —
+    covering the English-name-vs-legal-name case (Tony↔Ruizhe Tang). Child rows
+    (flights/hotels/transfers/activities/source_records) are reassigned first,
+    then the phantom is deleted. Returns the number of phantoms merged.
+    """
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        res = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, company, phone")
+            .eq("event_id", event_id)
+            .range(offset, offset + 999)
+            .execute()
+        )
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    groups: dict[str, list[dict]] = {}
+    for p in parts:
+        lc = _norm_name(p.get("last_name")).replace(" ", "")
+        if lc:
+            groups.setdefault(lc, []).append(p)
+
+    merges: dict[str, list[str]] = {}   # canonical_id -> [phantom_ids]
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        with_email = [m for m in members if (m.get("email") or "").strip()]
+        if len(with_email) != 1:        # need exactly one unambiguous target
+            continue
+        canonical = with_email[0]
+        for m in members:
+            if m["id"] == canonical["id"] or (m.get("email") or "").strip():
+                continue
+            # Only merge a THIN stub (no company & no phone) — a real emailless
+            # registrant keeps those, so it is left alone.
+            if (m.get("company") or "").strip() or (m.get("phone") or "").strip():
+                continue
+            merges.setdefault(canonical["id"], []).append(m["id"])
+
+    if not merges:
+        return 0
+
+    all_phantoms: list[str] = []
+    for canonical_id, phantom_ids in merges.items():
+        all_phantoms.extend(phantom_ids)
+        for i in range(0, len(phantom_ids), 100):
+            chunk = phantom_ids[i:i + 100]
+            for table in ("flights", "hotel_nights", "transfers", "participant_activities", "source_records"):
+                try:
+                    supabase.table(table).update({"participant_id": canonical_id}).in_("participant_id", chunk).execute()
+                except Exception as exc:
+                    logger.warning("Reassign %s during phantom merge failed: %s", table, exc)
+    for i in range(0, len(all_phantoms), 100):
+        try:
+            supabase.table("participants").delete().in_("id", all_phantoms[i:i + 100]).execute()
+        except Exception as exc:
+            logger.warning("Delete phantoms failed: %s", exc)
+
+    logger.info("Merged %d phantom duplicate participant(s) for event %s", len(all_phantoms), event_id)
+    return len(all_phantoms)
 
 
 def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
