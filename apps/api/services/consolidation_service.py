@@ -1790,10 +1790,13 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
 
     # Load default event date as fallback
     default_date = "2025-11-10"
+    event_city = ""
     try:
-        ev_resp = supabase.table("events").select("start_date").eq("id", event_id).single().execute()
+        ev_resp = supabase.table("events").select("start_date, location_city").eq("id", event_id).single().execute()
         if ev_resp.data and ev_resp.data.get("start_date"):
             default_date = str(ev_resp.data["start_date"])
+        if ev_resp.data and ev_resp.data.get("location_city"):
+            event_city = str(ev_resp.data["location_city"]).strip()
     except Exception:
         pass
 
@@ -1867,10 +1870,30 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     data = record["normalized_data"] or record["raw_data"] or {}
 
                     flight_num = data.get("flight_number") or data.get("passenger_flight")
-                    dep_apt = data.get("departure_airport") or data.get("departure")
-                    arr_apt = data.get("arrival_airport") or data.get("arrival")
+                    if flight_num and str(flight_num).strip().lower() in (
+                        "yes", "no", "oui", "non", "true", "false", "x", "-", "n/a", "na", "tbc", "tbd"
+                    ):
+                        flight_num = None
+                    # Airports are often PARTIAL in event files: a "Da Nang
+                    # flights" list has no arrival column because everyone
+                    # lands at the event city. Fall back to cities, then to
+                    # the event's own city for the arrival — never drop the
+                    # flight just because one endpoint is implicit.
+                    dep_apt = (
+                        data.get("departure_airport") or data.get("departure")
+                        or data.get("departure_city")
+                    )
+                    arr_apt = (
+                        data.get("arrival_airport") or data.get("arrival")
+                        or data.get("arrival_city") or event_city
+                    )
+                    has_time_signal = any(
+                        data.get(k) for k in ("departure_time", "departure_date", "arrival_time", "arrival_date")
+                    )
 
-                    if flight_num and dep_apt and arr_apt:
+                    if flight_num and (dep_apt or arr_apt or has_time_signal):
+                        dep_apt = dep_apt or "-"
+                        arr_apt = arr_apt or "-"
                         flight_num_clean = str(flight_num).strip().upper()
                         dep_ts = combine_to_iso_timestamp(
                             data.get("departure_date") or data.get("departure_time"),
