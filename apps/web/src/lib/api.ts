@@ -91,6 +91,7 @@ export interface FileUploadResponse {
   row_count: number
   columns: string[]
   uploaded_at: string
+  import_status?: string
   mapping_suggestions: Record<string, ColumnMappingSuggestion>
   canonical_fields: string[]
 }

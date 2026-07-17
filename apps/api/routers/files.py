@@ -17,7 +17,7 @@ import uuid
 from typing import Any
 
 import pandas as pd
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from supabase import Client
 
 import config
@@ -33,7 +33,7 @@ from models.schemas import (
 )
 from services.mapping_service import build_auto_mapping, suggest_mapping, CANONICAL_FIELDS
 from services.file_service import read_tabular
-from services import deletion_service
+from services import consolidation_service, deletion_service
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +86,7 @@ def _df_sample(df: pd.DataFrame, n: int) -> list[dict[str, Any]]:
     summary="Upload a source file for an event",
 )
 async def upload_file(
+    background_tasks: BackgroundTasks,
     event_id: str = Form(..., description="UUID of the event this file belongs to."),
     source_type: str = Form(..., description="Source type: registration | fcm | email | hotel | transfer | activity | other"),
     file: UploadFile = File(..., description="The file to upload (.xlsx, .xls, .csv). Max 50 MB."),
@@ -198,6 +199,25 @@ async def upload_file(
             logger.info(
                 "Auto-mapped file %s: %d/%d columns", file_id, len(auto_mapping), len(columns)
             )
+            # FULLY AUTOMATIC pipeline: as soon as the file is mapped, kick off a
+            # consolidation so the master list is (re)built and this file's people
+            # are fused with the other files — no manual step. Guarded so several
+            # files dropped together don't spawn concurrent runs.
+            try:
+                auto_run_id = consolidation_service.start_consolidation_if_idle(
+                    event_id, current_user["id"], supabase
+                )
+                if auto_run_id:
+                    background_tasks.add_task(
+                        consolidation_service.run_consolidation,
+                        event_id=event_id,
+                        run_id=auto_run_id,
+                        user_id=current_user["id"],
+                        supabase=supabase,
+                    )
+                    logger.info("Auto-consolidation started after upload: run=%s event=%s", auto_run_id, event_id)
+            except Exception as exc:
+                logger.warning("Auto-consolidation trigger failed (manual run still possible): %s", exc)
     except Exception as exc:
         logger.warning("Auto-mapping failed for file %s (manual mapping still possible): %s", file_id, exc)
 

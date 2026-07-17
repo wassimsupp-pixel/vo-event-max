@@ -623,11 +623,48 @@ def _is_real_person(nd: dict[str, Any]) -> bool:
     return True
 
 
+def start_consolidation_if_idle(event_id: str, user_id: str, supabase: Client) -> Optional[str]:
+    """
+    Create a consolidation run for the event UNLESS one is already in progress
+    (avoids concurrent runs when several files are dropped at once). Returns the
+    new run_id to enqueue, or None when a fresh run is already handling it — that
+    run re-triggers itself at the end if new files arrived meanwhile.
+    """
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    try:
+        running = (
+            supabase.table("consolidation_runs")
+            .select("id, started_at")
+            .eq("event_id", event_id)
+            .eq("status", "running")
+            .execute()
+        )
+        for r in (running.data or []):
+            if (r.get("started_at") or "") >= cutoff:   # a fresh run is active
+                return None
+    except Exception as exc:
+        logger.warning("Idle check failed, starting a run anyway: %s", exc)
+    run_id = str(uuid.uuid4())
+    try:
+        supabase.table("consolidation_runs").insert({
+            "id": run_id,
+            "event_id": event_id,
+            "triggered_by": user_id,
+            "status": "running",
+        }).execute()
+    except Exception as exc:
+        logger.error("Failed to create auto consolidation run: %s", exc)
+        return None
+    return run_id
+
+
 async def run_consolidation(
     event_id: str,
     run_id: str,
     user_id: str,
     supabase: Client,
+    _depth: int = 0,
 ) -> None:
     """
     Orchestrate a full consolidation run for an event.
@@ -1112,6 +1149,32 @@ async def run_consolidation(
         )
 
         logger.info("Consolidation completed: run_id=%s stats=%s", run_id, stats)
+
+        # Re-fuse if a file was uploaded DURING this run (rapid multi-file drop):
+        # such a file is still 'mapped' (this run only marked its own snapshot
+        # 'processed'). Chain one more run, depth-capped to avoid loops.
+        if _depth < 5:
+            try:
+                late = (
+                    supabase.table("uploaded_files")
+                    .select("id")
+                    .eq("event_id", event_id)
+                    .eq("import_status", "mapped")
+                    .limit(1)
+                    .execute()
+                )
+                if late.data:
+                    next_run_id = str(uuid.uuid4())
+                    supabase.table("consolidation_runs").insert({
+                        "id": next_run_id,
+                        "event_id": event_id,
+                        "triggered_by": user_id,
+                        "status": "running",
+                    }).execute()
+                    logger.info("New files arrived during run — chaining consolidation %s (depth %d)", next_run_id, _depth + 1)
+                    await run_consolidation(event_id, next_run_id, user_id, supabase, _depth=_depth + 1)
+            except Exception as exc:
+                logger.warning("Failed to chain follow-up consolidation: %s", exc)
 
     except Exception as exc:
         logger.error("Consolidation FAILED: run_id=%s: %s", run_id, exc, exc_info=True)
