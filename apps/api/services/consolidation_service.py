@@ -982,6 +982,12 @@ async def run_consolidation(
             r.setdefault("first_name", row.get("first_name") or "")
             r.setdefault("last_name", row.get("last_name") or "")
             r.setdefault("completeness_status", row.get("completeness_status") or "incomplete")
+            # NOT-NULL boolean flags MUST be present on every row: a bulk upsert
+            # aligns all rows to a common column set, so a batch mixing existing
+            # rows (which carry has_flight) with new ones (which don't) would send
+            # has_flight=NULL for the new rows and violate the constraint.
+            for _flag in ("has_flight", "has_hotel", "has_transfer", "has_activities"):
+                r[_flag] = bool(row.get(_flag))
             upsert_rows.append(r)
         for i in range(0, len(upsert_rows), 100):
             supabase.table("participants").upsert(upsert_rows[i:i + 100]).execute()
