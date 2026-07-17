@@ -267,6 +267,7 @@ export default function SourcesPage() {
   // Upload states
   const [uploading, setUploading] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null)
   const [deletingFileId, setDeletingFileId] = useState<string | null>(null)
 
   const loadFiles = useCallback(async () => {
@@ -350,6 +351,8 @@ export default function SourcesPage() {
 
     setUploading(true)
     setUploadError(null)
+    setUploadSuccess(null)
+    const fileName = selectedFile.name
     try {
       // 'masterfile' is a UI convenience (mixed-info file). It is stored as
       // 'registration' — a valid DB source type that already creates participants;
@@ -358,7 +361,8 @@ export default function SourcesPage() {
       const response = await api.files.upload(eventId, selectedFile, apiSourceType)
       setUploadResponse(response)
 
-      // Pre-fill initial mapping guess from backend suggestions (confidence >= 0.5)
+      // Pre-fill an initial mapping guess (kept ready ONLY for the optional
+      // "Ajuster le mapping" action — not shown automatically).
       const initialMapping: Record<string, string> = {}
       if (response.mapping_suggestions) {
         Object.entries(response.mapping_suggestions).forEach(([col, sug]) => {
@@ -369,7 +373,13 @@ export default function SourcesPage() {
       }
       setMapping(initialMapping)
       setExtraColumns([])
-      setIsMappingMode(true)
+      // FULLY AUTOMATIC: no manual mapping page. Confirm and refresh the list;
+      // the mapping + consolidation run in the background.
+      setIsMappingMode(false)
+      setUploadingType(null)
+      setSelectedFile(null)
+      setUploadSuccess(`« ${fileName} » importé — analyse et consolidation en cours en arrière-plan.`)
+      await loadFiles()
     } catch (err) {
       setUploadError(err instanceof Error ? err.message : 'Erreur lors de l\'upload du fichier')
     } finally {
@@ -723,6 +733,27 @@ export default function SourcesPage() {
               <div className="flex items-center gap-2 rounded-md border border-[var(--color-danger)] bg-red-50 p-3 text-sm text-[var(--color-danger)]">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>{uploadError}</span>
+              </div>
+            )}
+
+            {uploadSuccess && (
+              <div className="flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-success)]/30 bg-[var(--color-success-light)] p-3 text-sm text-[var(--color-text-primary)]">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--color-success)]" />
+                <span className="flex-1">{uploadSuccess}</span>
+                <button
+                  onClick={() => router.push(`/${locale}/events/${eventId}/master-list`)}
+                  className="text-xs font-semibold text-[var(--color-accent)] underline"
+                >
+                  Voir la master list
+                </button>
+                {uploadResponse && (
+                  <button
+                    onClick={() => setIsMappingMode(true)}
+                    className="text-xs font-semibold text-[var(--color-text-secondary)] underline"
+                  >
+                    Ajuster le mapping
+                  </button>
+                )}
               </div>
             )}
 
