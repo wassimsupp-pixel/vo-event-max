@@ -475,7 +475,12 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             field_scores["pnr_code"] = max(field_scores.get("pnr_code", 0.0), 0.6 if header_absent else 0.5)
         if is_passport and not is_pnr:
             field_scores["passport_number"] = max(field_scores.get("passport_number", 0.0), 0.55 if header_absent else 0.4)
-        if is_iata:
+        # A 3-uppercase-letter value LOOKS like an IATA airport code, but so do
+        # many free-text tokens ("VIP", "N/A", "CEO"). Only map to an airport
+        # field when the header has NO other meaning (blank/unnamed) or actually
+        # hints at a location — otherwise a Notes/Comment column would pollute
+        # the flight data.
+        if is_iata and (header_absent or re.search(r"airport|aeroport|dep|arr|from|to|city|ville|origin|destination|vol|flight", norm_col)):
             field_scores["departure_airport"] = max(field_scores.get("departure_airport", 0.0), 0.55)
             field_scores["arrival_airport"] = max(field_scores.get("arrival_airport", 0.0), 0.5)
         if is_time and not is_date:
@@ -594,11 +599,37 @@ def ai_refine_mapping(
         return {}
 
 
+def _custom_field_key(col: str, used_targets: set[str]) -> Optional[str]:
+    """
+    Turn a leftover column header into a SAFE custom-field key so its data is
+    preserved (never silently dropped). The key is guaranteed non-canonical (so
+    it surfaces as a custom column, never overwriting a real field) and unique.
+    """
+    raw = str(col or "").strip()
+    if not raw:
+        return None
+    low = raw.lower()
+    # Nameless / index columns keep their data under a readable generic label.
+    if re.fullmatch(r"(unnamed|column|colonne|col)[\s:_\-.]*\d*", low) or re.fullmatch(r"\d+", low):
+        raw = "Info"
+    key = raw
+    # Must not collide with a canonical field name (would populate that field).
+    if key in CANONICAL_FIELDS:
+        key = f"{raw} (info)"
+    base, i = key, 2
+    while key in used_targets or key in CANONICAL_FIELDS:
+        key = f"{base} ({i})"
+        i += 1
+    return key
+
+
 def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, str]:
     """
-    Fully automatic column mapping: confident heuristic suggestions
-    (suggest_mapping >= 0.5) completed by a best-effort AI pass for the rest.
-    Returns {} when nothing at all is identifiable.
+    Fully automatic A→Z column mapping. Confident heuristic suggestions
+    (suggest_mapping >= 0.5) are completed by a best-effort AI pass for the
+    ambiguous ones, then a CATCH-ALL preserves EVERY remaining column that
+    carries data as a custom field — so no information from any file is ever
+    lost from the master list. Returns {} only when nothing is identifiable.
     """
     suggestions = suggest_mapping(columns, sample_rows)
     mapping = {
@@ -607,4 +638,17 @@ def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str,
         if s.get("suggested_field") and s.get("confidence", 0) >= 0.5
     }
     mapping.update(ai_refine_mapping(columns, sample_rows, mapping))
+
+    # CATCH-ALL: every column with data that isn't mapped to a canonical field
+    # is kept as a custom field, so the master list shows all of its info.
+    used_targets: set[str] = set(mapping.values())
+    for col in columns:
+        if col in mapping:
+            continue
+        if not any(str(r.get(col) or "").strip() for r in sample_rows):
+            continue    # truly empty column — nothing to preserve
+        key = _custom_field_key(col, used_targets)
+        if key:
+            mapping[col] = key
+            used_targets.add(key)
     return mapping

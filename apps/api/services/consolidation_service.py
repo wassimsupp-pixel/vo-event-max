@@ -447,7 +447,9 @@ _ROLE_NOISE = _re.compile(
 
 def _auto_sheet_mapping(sdf) -> dict[str, str]:
     """Auto column→field mapping for a secondary sheet (no human review): keep
-    only confident suggestions. Returns {} if nothing identifiable is found."""
+    confident suggestions, then preserve every remaining column as a custom
+    field (A→Z, nothing dropped). Returns {} if no identity column is found."""
+    from services.mapping_service import _custom_field_key
     try:
         cols = list(sdf.columns)
         sample = sdf.head(8).to_dict(orient="records")
@@ -455,9 +457,20 @@ def _auto_sheet_mapping(sdf) -> dict[str, str]:
         m = {c: s["suggested_field"] for c, s in sug.items()
              if s.get("suggested_field") and s.get("confidence", 0) >= 0.6}
         # Only worth processing if the sheet has an identity column to link on.
-        if any(v in ("first_name", "last_name", "traveler_name", "email") for v in m.values()):
-            return m
-        return {}
+        if not any(v in ("first_name", "last_name", "traveler_name", "email") for v in m.values()):
+            return {}
+        # Catch-all: keep leftover columns (with data) as custom fields.
+        used = set(m.values())
+        for col in cols:
+            if col in m:
+                continue
+            if not any(str(r.get(col) or "").strip() for r in sample):
+                continue
+            key = _custom_field_key(col, used)
+            if key:
+                m[col] = key
+                used.add(key)
+        return m
     except Exception as exc:
         logger.warning("Auto-mapping of secondary sheet failed: %s", exc)
         return {}
