@@ -117,8 +117,10 @@ def detect_all(
                                 flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
                                 label="hotel", severity="warning")
     if "transfer" in imported_types:
+        # The exception_type ENUM has no PARTICIPANT_NO_TRANSFER value — reuse
+        # MISSING_REQUIRED_FIELD (context_data carries the specifics).
         _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
-                                flag="has_transfer", exception_type="PARTICIPANT_NO_TRANSFER",
+                                flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
                                 label="transfer", severity="info")
     _detect_missing_dietary(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
@@ -607,7 +609,8 @@ def _detect_name_mismatches_between_sources(event_id: str, run_id: str, supabase
                     supabase=supabase,
                     run_id=run_id,
                     event_id=event_id,
-                    exception_type="NAME_MISMATCH_BETWEEN_SOURCES",
+                    # ENUM-valid name for a registration-vs-FCM name mismatch.
+                    exception_type="NAME_DIVERGENCE",
                     severity="warning",
                     message=(
                         f"Name mismatch: registration name is '{reg_name}' "
@@ -695,11 +698,14 @@ def _detect_missing_dietary(event_id: str, run_id: str, supabase: Client, except
         if val:
             continue
         name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+        # NOTE: the Postgres exception_type ENUM has no PARTICIPANT_NO_DIETARY
+        # value — inserting it 22P02-fails the whole bulk chunk. Reuse
+        # MISSING_REQUIRED_FIELD with the field named in context_data.
         _insert_exception(
             supabase=supabase,
             run_id=run_id,
             event_id=event_id,
-            exception_type="PARTICIPANT_NO_DIETARY",
+            exception_type="MISSING_REQUIRED_FIELD",
             severity="info",
             message=f"Participant '{name}' has no dietary-requirements information.",
             participant_id=p["id"],
@@ -736,7 +742,8 @@ def _detect_missing_contact(event_id: str, run_id: str, supabase: Client, except
                 supabase=supabase,
                 run_id=run_id,
                 event_id=event_id,
-                exception_type="MISSING_CONTACT",
+                # The exception_type ENUM has no MISSING_CONTACT value.
+                exception_type="MISSING_REQUIRED_FIELD",
                 severity="warning",
                 message=f"Participant '{name}' has no email and no phone number.",
                 participant_id=p["id"],

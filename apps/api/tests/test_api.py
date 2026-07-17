@@ -826,7 +826,9 @@ class TestQualityEngineAndMatchingCorrections:
 
         assert count == 1
         assert len(exceptions) == 1
-        assert exceptions[0]["exception_type"] == "NAME_MISMATCH_BETWEEN_SOURCES"
+        # NAME_DIVERGENCE is the ENUM-valid type for registration-vs-FCM
+        # name mismatches (NAME_MISMATCH_BETWEEN_SOURCES 22P02-failed inserts).
+        assert exceptions[0]["exception_type"] == "NAME_DIVERGENCE"
         assert "Sébastien" in exceptions[0]["message"]
 
     def test_source_type_never_in_nationality_validation(self):

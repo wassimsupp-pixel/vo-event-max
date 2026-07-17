@@ -437,6 +437,61 @@ def _parse_header_date(header: str, year: int):
     return None
 
 
+_STAY_RANGE_RE = _re.compile(
+    r"(?:arriv\w*\s*)?(\d{1,2})\s*/\s*(\d{1,2})(?:\s*/\s*(\d{2,4}))?"
+    r"\s*(?:-|–|—|to|au|a)\s*"
+    r"(?:depart\w*\s*)?(\d{1,2})\s*/\s*(\d{1,2})(?:\s*/\s*(\d{2,4}))?",
+    _re.IGNORECASE,
+)
+
+
+def _parse_stay_range(text: Any, year: int) -> Optional[tuple[str, str]]:
+    """
+    Parse villa-roster stay texts — 'Arrival 03/02 - departure 06/02',
+    '3/02 - 6/02', '31/01-6/02' (day/month[, year]) — into ISO
+    (check_in, check_out). Returns None when no plausible range is found.
+    """
+    from datetime import date as _date
+    m = _STAY_RANGE_RE.search(str(text or ""))
+    if not m:
+        return None
+    d1, m1, y1, d2, m2, y2 = m.groups()
+    try:
+        yy1 = int(y1) if y1 else year
+        yy2 = int(y2) if y2 else year
+        if yy1 < 100:
+            yy1 += 2000
+        if yy2 < 100:
+            yy2 += 2000
+        ci = _date(yy1, int(m1), int(d1))
+        co = _date(yy2, int(m2), int(d2))
+        if co <= ci and not y2:
+            co = _date(yy2 + 1, int(m2), int(d2))   # stay across New Year
+    except ValueError:
+        return None
+    if co <= ci or (co - ci).days > 60:
+        return None
+    return ci.isoformat(), co.isoformat()
+
+
+def _parse_flexible_day(value: Any):
+    """Parse a single date-ish cell: ISO, 'DD/MM/YYYY', 'DD-MM-YYYY', 'DD.MM.YYYY'."""
+    from datetime import date as _date, datetime as _dt
+    raw = str(value or "").split("T")[0].split(" ")[0].strip()
+    if not raw:
+        return None
+    try:
+        return _date.fromisoformat(raw)
+    except ValueError:
+        pass
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return _dt.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _parse_night_columns(raw: dict[str, Any], year: int):
     """From per-night date columns (headers like '26-janv' with a truthy cell),
     reconstruct (check_in, check_out) as ISO strings. check_out = last night + 1."""
@@ -814,6 +869,15 @@ async def run_consolidation(
         stats["exceptions_count"] += dup_count
 
         # ---------------------------------------------------------------
+        # 6a-bis. Sever contaminated links from earlier runs (junk codes,
+        #         shared organizer emails) so 6b can relink them correctly.
+        # ---------------------------------------------------------------
+        try:
+            stats["links_sanitized"] = sanitize_participant_links(event_id, supabase)
+        except Exception as exc:
+            logger.warning("Link sanitization failed: %s", exc)
+
+        # ---------------------------------------------------------------
         # 6b. Match non-registration source records to participants
         # ---------------------------------------------------------------
         match_non_registration_files_to_participants(event_id, supabase)
@@ -1152,6 +1216,14 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         if not _is_plausible_code(rec_code):
             rec_code = ""   # never match on junk form values like 'Yes'/'No'
 
+        rec_first_n = _norm_name(rec_first)
+        rec_last_n = _norm_name(rec_last)
+        rec_first1 = rec_first_n.split()[0] if rec_first_n else ""
+        rec_first_collapsed = rec_first_n.replace(" ", "")
+        rec_last_collapsed = rec_last_n.replace(" ", "")
+        rec_tokens = set((rec_first_n + " " + rec_last_n).split())
+        rec_name_joined = f"{rec_first_n} {rec_last_n}".strip()
+
         matched_id = None
 
         if rec_code:
@@ -1160,26 +1232,37 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                     matched_id = p["id"]
                     break
 
+        # Set when the record's email matched a participant whose NAME clearly
+        # designates someone else: the email is then a shared contact column
+        # (organizer address repeated on every villa row) and must no longer
+        # veto name matching for this record.
+        email_is_contact = False
+
         if not matched_id and rec_email:
             for p in part_lookup:
                 if p["email"] == rec_email:
+                    # An email column is often a shared CONTACT (villa rosters
+                    # repeat one organizer's address on every row). Never let it
+                    # override a record name that clearly designates someone
+                    # else — leave those rows to name matching below.
+                    if (
+                        rec_tokens and p["tokens"]
+                        and not (rec_tokens & p["tokens"])
+                        and fuzz.token_set_ratio(rec_name_joined, f"{p['first_n']} {p['last_n']}") < 70
+                    ):
+                        email_is_contact = True
+                        continue
                     matched_id = p["id"]
                     break
 
         if not matched_id and rec_full_name:
-            rec_first_n = _norm_name(rec_first)
-            rec_last_n = _norm_name(rec_last)
-            rec_first1 = rec_first_n.split()[0] if rec_first_n else ""
-            rec_first_collapsed = rec_first_n.replace(" ", "")
-            rec_last_collapsed = rec_last_n.replace(" ", "")
-            rec_tokens = set((rec_first_n + " " + rec_last_n).split())
-
             for p in part_lookup:
                 if not (p["last_n"] and rec_last_n):
                     continue
                 # Skip only when BOTH have an email and they clearly differ
-                # (two distinct people sharing a name).
-                if rec_email and p["email"] and rec_email != p["email"]:
+                # (two distinct people sharing a name) — unless the email was
+                # exposed as a shared contact column above.
+                if not email_is_contact and rec_email and p["email"] and rec_email != p["email"]:
                     continue
                 # Same last name — space/hyphen insensitive ("Abu Shinnar" vs
                 # "AbuShinnar").
@@ -1208,7 +1291,7 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                     p_name = f"{p['first_n']} {p['last_n']}".strip()
                     if not p_name:
                         continue
-                    if rec_email and p["email"] and rec_email != p["email"]:
+                    if not email_is_contact and rec_email and p["email"] and rec_email != p["email"]:
                         continue
                     # token_set_ratio is robust to extra middle names / word order.
                     score = fuzz.token_set_ratio(rec_name_n, p_name)
@@ -1222,10 +1305,14 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             # entirely from the registration (English name vs legal name on the
             # ticket, e.g. "Tony Tang" vs "Ruizhe Tang"): if exactly ONE registered
             # participant carries that last name, it must be them.
-            if not matched_id and not rec_email and rec_last_collapsed:
+            if not matched_id and (not rec_email or email_is_contact) and rec_last_collapsed:
                 same_last_ids = last_index.get(rec_last_collapsed)
                 if same_last_ids and len(same_last_ids) == 1:
                     matched_id = same_last_ids[0]
+
+        # A shared contact email must not identify (or deduplicate) a new client.
+        if email_is_contact:
+            rec_email = ""
 
         # No existing participant matched → create a client so the info is linked,
         # but skip parasitic rows (subtotals, job-title labels).
@@ -1278,6 +1365,97 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             logger.error("Failed to bulk update participant_id on source_records: %s", exc)
 
 
+def sanitize_participant_links(event_id: str, supabase: Client) -> int:
+    """
+    Sever source_record → participant links that are clearly WRONG. Contaminated
+    links persist across runs (the matcher only processes unlinked records): junk
+    'id'='Yes' codes and shared organizer emails once collapsed hundreds of
+    travellers onto one participant (Chander: 44 flights). A link is severed only
+    when the record carries a real name that shares no token (nor collapsed
+    substring, nor fuzzy similarity) with the participant's name. Registration-
+    anchored records are never touched. Returns the number of links severed;
+    the matcher relinks those records right after.
+    """
+    try:
+        parts_resp = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, registration_source_id")
+            .eq("event_id", event_id)
+            .execute()
+        )
+        participants = parts_resp.data or []
+    except Exception as exc:
+        logger.error("Failed to load participants for link sanitization: %s", exc)
+        return 0
+    if not participants:
+        return 0
+
+    anchored = {p["registration_source_id"] for p in participants if p.get("registration_source_id")}
+    pmap: dict[str, tuple[set[str], str, str]] = {}
+    for p in participants:
+        first_n = _norm_name(p.get("first_name"))
+        last_n = _norm_name(p.get("last_name"))
+        tokens = set((first_n + " " + last_n).split())
+        pmap[p["id"]] = (tokens, f"{first_n} {last_n}".strip(), "".join(sorted(tokens)))
+
+    to_unlink: list[str] = []
+    offset = 0
+    while True:
+        try:
+            res = (
+                supabase.table("source_records")
+                .select("id, participant_id, normalized_data")
+                .eq("event_id", event_id)
+                .not_.is_("participant_id", "null")
+                .range(offset, offset + 999)
+                .execute()
+            )
+        except Exception as exc:
+            logger.error("Failed to page linked source records for sanitization: %s", exc)
+            break
+        data = res.data or []
+        for rec in data:
+            if rec["id"] in anchored:
+                continue
+            info = pmap.get(rec.get("participant_id"))
+            if not info:
+                continue
+            nd = rec.get("normalized_data") or {}
+            toks: set[str] = set()
+            for k in ("first_name", "last_name", "traveler_name", "full_name", "name"):
+                v = nd.get(k)
+                if v:
+                    toks |= set(_norm_name(str(v).replace("/", " ")).split())
+            if not toks:
+                continue    # nameless record — nothing to contradict the link
+            p_tokens, p_name, p_collapsed = info
+            if toks & p_tokens:
+                continue
+            # Space variants: "Abu Shinnar" tokens vs collapsed "abushinnar".
+            rec_collapsed = "".join(sorted(toks))
+            if any(len(t) >= 4 and t in p_collapsed for t in toks) or any(
+                len(t) >= 4 and t in rec_collapsed for t in p_tokens
+            ):
+                continue
+            if fuzz.token_set_ratio(" ".join(sorted(toks)), p_name) >= 70:
+                continue
+            to_unlink.append(rec["id"])
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    for i in range(0, len(to_unlink), 100):
+        try:
+            supabase.table("source_records").update({"participant_id": None}).in_(
+                "id", to_unlink[i:i + 100]
+            ).execute()
+        except Exception as exc:
+            logger.warning("Failed to unlink mismatched records chunk: %s", exc)
+    if to_unlink:
+        logger.info("Sanitized %d mismatched participant link(s) for event %s", len(to_unlink), event_id)
+    return len(to_unlink)
+
+
 def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
     """
     Self-heal residual phantom duplicates (e.g. left over from earlier runs): an
@@ -1292,7 +1470,7 @@ def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
     while True:
         res = (
             supabase.table("participants")
-            .select("id, first_name, last_name, email, company, phone")
+            .select("id, first_name, last_name, email, company, phone, registration_source_id")
             .eq("event_id", event_id)
             .range(offset, offset + 999)
             .execute()
@@ -1309,22 +1487,69 @@ def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
         if lc:
             groups.setdefault(lc, []).append(p)
 
+    def _is_thin(m: dict) -> bool:
+        # A travel-derived stub: no email, no company, no phone. A real emailless
+        # registrant keeps company/phone, so it is left alone.
+        return not (
+            (m.get("email") or "").strip()
+            or (m.get("company") or "").strip()
+            or (m.get("phone") or "").strip()
+        )
+
     merges: dict[str, list[str]] = {}   # canonical_id -> [phantom_ids]
     for members in groups.values():
         if len(members) < 2:
             continue
         with_email = [m for m in members if (m.get("email") or "").strip()]
-        if len(with_email) != 1:        # need exactly one unambiguous target
-            continue
-        canonical = with_email[0]
-        for m in members:
-            if m["id"] == canonical["id"] or (m.get("email") or "").strip():
-                continue
-            # Only merge a THIN stub (no company & no phone) — a real emailless
-            # registrant keeps those, so it is left alone.
-            if (m.get("company") or "").strip() or (m.get("phone") or "").strip():
-                continue
-            merges.setdefault(canonical["id"], []).append(m["id"])
+        thin = [m for m in members if _is_thin(m)]
+
+        for m in thin:
+            target = None
+            if len(with_email) == 1:
+                # Single registered person with that last name — the stub is
+                # their legal/ticket name (Tony ↔ Ruizhe Tang).
+                target = with_email[0]
+            elif with_email:
+                # Several registered people share the last name (Zhang…):
+                # merge only when the given name singles ONE of them out —
+                # exact collapsed match, legal name inside the email local
+                # part (Jieyu → jieyu.zhang@), or a close typo (Huusam ↔
+                # Hussam). Ambiguity keeps everyone separate.
+                m_first = _norm_name(m.get("first_name"))
+                m_coll = m_first.replace(" ", "")
+                m_toks = [t for t in m_first.split() if len(t) >= 4]
+                scored: list[tuple[int, dict]] = []
+                for t in with_email:
+                    t_coll = _norm_name(t.get("first_name")).replace(" ", "")
+                    local = _re.sub(r"[^a-z]", "", (t.get("email") or "").split("@")[0].lower())
+                    if m_coll and t_coll and m_coll == t_coll:
+                        s = 100
+                    elif m_coll and local and (m_coll in local or any(tok in local for tok in m_toks)):
+                        s = 95
+                    elif m_coll and t_coll:
+                        s = int(fuzz.ratio(m_coll, t_coll))
+                    else:
+                        s = 0
+                    scored.append((s, t))
+                scored.sort(key=lambda x: -x[0])
+                if scored and scored[0][0] >= 75 and (len(scored) == 1 or scored[1][0] < 60):
+                    target = scored[0][1]
+            if target is not None and target["id"] != m["id"]:
+                merges.setdefault(target["id"], []).append(m["id"])
+
+        # Typo pair with no email at all (Bharathi / Baharathi Senthil): merge
+        # the unregistered spelling into the registered one.
+        if not with_email and len(members) == 2:
+            a, b = members
+            fa = _norm_name(a.get("first_name")).replace(" ", "")
+            fb = _norm_name(b.get("first_name")).replace(" ", "")
+            if fa and fb and fuzz.ratio(fa, fb) >= 88:
+                registered = [x for x in members if x.get("registration_source_id")]
+                if len(registered) == 1:
+                    keeper = registered[0]
+                    loser = b if keeper is a else a
+                    if _is_thin(loser):
+                        merges.setdefault(keeper["id"], []).append(loser["id"])
 
     if not merges:
         return 0
@@ -1334,19 +1559,34 @@ def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
         all_phantoms.extend(phantom_ids)
         for i in range(0, len(phantom_ids), 100):
             chunk = phantom_ids[i:i + 100]
-            for table in ("flights", "hotel_nights", "transfers", "participant_activities", "source_records"):
+            # Reassign EVERY table holding a participant FK — exceptions included,
+            # otherwise the delete below is blocked by the FK constraint.
+            for table in (
+                "flights", "hotel_nights", "transfers", "participant_activities",
+                "source_records", "exceptions", "communications",
+            ):
                 try:
                     supabase.table(table).update({"participant_id": canonical_id}).in_("participant_id", chunk).execute()
                 except Exception as exc:
                     logger.warning("Reassign %s during phantom merge failed: %s", table, exc)
-    for i in range(0, len(all_phantoms), 100):
-        try:
-            supabase.table("participants").delete().in_("id", all_phantoms[i:i + 100]).execute()
-        except Exception as exc:
-            logger.warning("Delete phantoms failed: %s", exc)
 
-    logger.info("Merged %d phantom duplicate participant(s) for event %s", len(all_phantoms), event_id)
-    return len(all_phantoms)
+    deleted = 0
+    for i in range(0, len(all_phantoms), 100):
+        chunk = all_phantoms[i:i + 100]
+        try:
+            supabase.table("participants").delete().in_("id", chunk).execute()
+            deleted += len(chunk)
+        except Exception:
+            # One blocked row must not keep the whole chunk alive — retry one by one.
+            for pid in chunk:
+                try:
+                    supabase.table("participants").delete().eq("id", pid).execute()
+                    deleted += 1
+                except Exception as exc2:
+                    logger.warning("Delete phantom %s failed: %s", pid, exc2)
+
+    logger.info("Merged %d phantom duplicate participant(s) for event %s", deleted, event_id)
+    return deleted
 
 
 def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
@@ -1377,7 +1617,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
         while True:
             _res = (
                 supabase.table("source_records")
-                .select("participant_id, normalized_data, raw_data")
+                .select("id, file_id, row_index, participant_id, normalized_data, raw_data")
                 .eq("event_id", event_id)
                 .not_.is_("participant_id", "null")
                 .range(_offset, _offset + 999)
@@ -1391,15 +1631,42 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     except Exception as exc:
         logger.error("Failed to load source records for domain extraction: %s", exc)
 
+    # DETERMINISM: two runs over the same sources must produce the same result.
+    # Without a stable order, "last write wins" collisions below pick a random
+    # record each run (flights flipping airports/times between exports).
+    all_records.sort(key=lambda r: (str(r.get("file_id") or ""), r.get("row_index") or 0, str(r.get("id") or "")))
+
     # 1. Flights Extraction (any record exposing flight fields)
     try:
         if all_records:
-            # Load existing flights to optimize queries (bulk upsert)
-            existing_flights = supabase.table("flights").select("id, participant_id, flight_number").eq("event_id", event_id).execute()
-            existing_flights_map = {
-                (f["participant_id"], f["flight_number"]): f["id"] for f in (existing_flights.data or [])
-            }
-            
+            # Existing flights: reuse ids on upsert; anything not regenerated
+            # this run is STALE (a leftover of contaminated links) and deleted.
+            existing_flights = supabase.table("flights").select("id, participant_id, flight_number, departure_time").eq("event_id", event_id).execute()
+            existing_rows = existing_flights.data or []
+            existing_flights_map = {}
+            for f in existing_rows:
+                k = (f["participant_id"], f["flight_number"], str(f.get("departure_time") or "")[:10])
+                existing_flights_map.setdefault(k, f["id"])
+
+            def _flight_quality(p: dict) -> int:
+                # When several records collide on the same (participant, flight,
+                # date), keep the richest segment: real times over 00:00
+                # defaults, IATA codes over city names, airline/PNR present.
+                q = 0
+                if p.get("departure_time") and "00:00:00" not in str(p["departure_time"]):
+                    q += 4
+                if p.get("arrival_time") and "00:00:00" not in str(p["arrival_time"]):
+                    q += 4
+                if _re.fullmatch(r"[A-Z]{3}", p.get("departure_airport") or ""):
+                    q += 2
+                if _re.fullmatch(r"[A-Z]{3}", p.get("arrival_airport") or ""):
+                    q += 2
+                if p.get("airline"):
+                    q += 1
+                if p.get("pnr_code"):
+                    q += 1
+                return q
+
             flight_payloads = {}
             participants_has_flight = set()
 
@@ -1407,11 +1674,11 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
-                    
+
                     flight_num = data.get("flight_number") or data.get("passenger_flight")
                     dep_apt = data.get("departure_airport") or data.get("departure")
                     arr_apt = data.get("arrival_airport") or data.get("arrival")
-                    
+
                     if flight_num and dep_apt and arr_apt:
                         flight_num_clean = str(flight_num).strip().upper()
                         dep_ts = combine_to_iso_timestamp(
@@ -1424,11 +1691,11 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                             data.get("arrival_time"),
                             default_date
                         )
-                        
+
                         pnr = data.get("pnr_code") or data.get("pnr")
                         airline = data.get("airline")
                         baggage = data.get("baggage_info") or data.get("baggage")
-                        
+
                         payload = {
                             "id": str(uuid.uuid4()),
                             "event_id": event_id,
@@ -1443,24 +1710,42 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                             "baggage_info": baggage,
                             "status": "confirmed",
                         }
-                        
-                        # Add primary key ID if it exists to trigger update instead of duplicate insert
-                        existing_id = existing_flights_map.get((part_id, flight_num_clean))
+
+                        # Key includes the DATE: the same flight number on two
+                        # different days is two distinct segments, not one.
+                        key = (part_id, flight_num_clean, str(dep_ts or "")[:10])
+                        existing_id = existing_flights_map.get(key)
                         if existing_id:
                             payload["id"] = existing_id
-                            
-                        flight_payloads[(part_id, flight_num_clean)] = payload
+
+                        prev = flight_payloads.get(key)
+                        if prev is None:
+                            flight_payloads[key] = payload
+                        elif _flight_quality(payload) > _flight_quality(prev):
+                            payload["id"] = prev["id"]   # keep the id already chosen
+                            flight_payloads[key] = payload
                         participants_has_flight.add(part_id)
                 except Exception as record_exc:
                     logger.warning("Failed to extract flight record: %s", record_exc)
-            
+
             # Bulk upsert flights
             payload_list = list(flight_payloads.values())
             if payload_list:
                 for i in range(0, len(payload_list), 100):
                     supabase.table("flights").upsert(payload_list[i:i+100]).execute()
-            
-            # Bulk update participants
+
+            # Delete stale flights (their record was unlinked/relinked elsewhere;
+            # keeping them is exactly the "44 flights on one person" bug).
+            kept_ids = {p["id"] for p in flight_payloads.values()}
+            stale_ids = [f["id"] for f in existing_rows if f["id"] not in kept_ids]
+            for i in range(0, len(stale_ids), 100):
+                try:
+                    supabase.table("flights").delete().in_("id", stale_ids[i:i+100]).execute()
+                except Exception as exc:
+                    logger.warning("Failed to delete stale flights chunk: %s", exc)
+
+            # Recompute has_flight from scratch so it reflects the rebuilt table.
+            supabase.table("participants").update({"has_flight": False}).eq("event_id", event_id).execute()
             if participants_has_flight:
                 part_ids = list(participants_has_flight)
                 for i in range(0, len(part_ids), 50):
@@ -1486,16 +1771,20 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             
             nights_payloads = {}
             participants_has_hotel = set()
+            try:
+                _year = int(str(default_date)[:4])
+            except (ValueError, TypeError):
+                _year = 2026
 
             for record in all_records:
                 try:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
-                    
+
                     hotel_name = data.get("hotel_name")
-                    if not hotel_name:
+                    if not hotel_name or str(hotel_name).strip().lower() in ("yes", "no", "oui", "non", "x", "1", "0", "true", "false"):
                         continue
-                    
+
                     # Check / Create Hotel Property
                     if hotel_name not in hotel_map:
                         new_hotel = supabase.table("hotels").insert({
@@ -1506,28 +1795,31 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                         hotel_map[hotel_name] = hotel_id
                     else:
                         hotel_id = hotel_map[hotel_name]
-                    
+
                     check_in_str = data.get("check_in_date")
                     check_out_str = data.get("check_out_date")
+                    room_type = data.get("room_type") or "single"
+
+                    # Parse dates flexibly: ISO, DD/MM/YYYY, or a textual stay
+                    # range crammed into ONE cell ('Arrival 03/02 - departure
+                    # 06/02', '3/02 - 6/02') as villa rosters do.
+                    check_in = _parse_flexible_day(check_in_str) if check_in_str else None
+                    check_out = _parse_flexible_day(check_out_str) if check_out_str else None
+                    if not (check_in and check_out):
+                        rng = _parse_stay_range(f"{check_in_str or ''} {check_out_str or ''}", _year)
+                        if rng:
+                            check_in = date.fromisoformat(rng[0])
+                            check_out = date.fromisoformat(rng[1])
                     # Fallback: hotels encoded as per-night date columns (26-janv,
                     # 27-Jan… with a "1") — reconstruct check-in/out from raw_data.
-                    if not (check_in_str and check_out_str):
-                        try:
-                            _year = int(str(default_date)[:4])
-                        except (ValueError, TypeError):
-                            _year = 2026
+                    if not (check_in and check_out):
                         ci_pn, co_pn = _parse_night_columns(record.get("raw_data") or {}, _year)
                         if ci_pn and co_pn:
-                            check_in_str, check_out_str = ci_pn, co_pn
-                    room_type = data.get("room_type") or "single"
-                    
-                    if check_in_str and check_out_str:
+                            check_in = _parse_flexible_day(ci_pn)
+                            check_out = _parse_flexible_day(co_pn)
+
+                    if check_in and check_out and check_in < check_out:
                         try:
-                            ci_clean = str(check_in_str).split("T")[0].split(" ")[0].strip()
-                            co_clean = str(check_out_str).split("T")[0].split(" ")[0].strip()
-                            check_in = date.fromisoformat(ci_clean)
-                            check_out = date.fromisoformat(co_clean)
-                            
                             current_date = check_in
                             while current_date < check_out:
                                 night_str = current_date.isoformat()
@@ -1559,8 +1851,18 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             if payload_list:
                 for i in range(0, len(payload_list), 100):
                     supabase.table("hotel_nights").upsert(payload_list[i:i+100]).execute()
-                    
-            # Bulk update participants
+
+            # Delete stale nights (left over from contaminated links).
+            kept_night_ids = {p["id"] for p in nights_payloads.values()}
+            stale_nights = [nid for nid in existing_nights_map.values() if nid not in kept_night_ids]
+            for i in range(0, len(stale_nights), 100):
+                try:
+                    supabase.table("hotel_nights").delete().in_("id", stale_nights[i:i+100]).execute()
+                except Exception as exc:
+                    logger.warning("Failed to delete stale hotel nights chunk: %s", exc)
+
+            # Recompute has_hotel from scratch so it reflects the rebuilt table.
+            supabase.table("participants").update({"has_hotel": False}).eq("event_id", event_id).execute()
             if participants_has_hotel:
                 part_ids = list(participants_has_hotel)
                 for i in range(0, len(part_ids), 50):

@@ -483,6 +483,16 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             field_scores["id"] = 0.0
             field_scores["participant_id"] = 0.0
 
+        # Identity-critical date fields require HEADER evidence — they must
+        # never be deduced from date-looking content alone, or a leftover date
+        # column ("Depart Date6") falls back onto passport_expiry and poisons
+        # every participant with fake expired passports.
+        _col_l = str(col).lower()
+        if "passport_expiry" in field_scores and not re.search(r"pass|expir|valid", _col_l):
+            field_scores["passport_expiry"] = 0.0
+        if "date_of_birth" in field_scores and not re.search(r"birth|dob|naiss|n[ée] le", _col_l):
+            field_scores["date_of_birth"] = 0.0
+
         # Collect this column's candidate (field, score) pairs; the actual
         # suggestion is decided globally below.
         col_candidates[col] = sorted(
