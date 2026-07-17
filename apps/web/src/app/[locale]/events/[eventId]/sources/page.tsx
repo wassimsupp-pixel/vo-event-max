@@ -465,7 +465,7 @@ export default function SourcesPage() {
                   Mapping des colonnes — {selectedFile?.name}
                 </h3>
                 <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
-                  Le mapping a été détecté automatiquement. Vérifiez ou ajustez si nécessaire — c'est optionnel.
+                  Le mapping a été détecté automatiquement. Vérifiez ou ajustez si nécessaire — c&apos;est optionnel.
                 </p>
               </div>
               <Badge variant="outline" className="border-[var(--color-accent)] text-[var(--color-accent)] bg-[var(--color-accent-light)]">

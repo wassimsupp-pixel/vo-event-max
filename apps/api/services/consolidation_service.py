@@ -1051,7 +1051,37 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         # 6b. Match non-registration source records to participants
         # ---------------------------------------------------------------
-        match_non_registration_files_to_participants(event_id, supabase)
+        doubts = match_non_registration_files_to_participants(event_id, supabase) or []
+        # A name reduced to an initial ("Wassim A") was merged to its best
+        # candidate — flag a DOUBT so a human can confirm (feedback: fuse but
+        # emit a doubt in exceptions).
+        if doubts:
+            doubt_rows = []
+            for d in doubts:
+                multi = " (plusieurs candidats)" if d.get("candidates", 1) > 1 else ""
+                doubt_rows.append({
+                    "run_id": run_id,
+                    "event_id": event_id,
+                    "participant_id": d["participant_id"],
+                    "exception_type": "PROBABLE_MATCH",
+                    "severity": "warning",
+                    "message": (
+                        f"Fusion à vérifier : « {d['rec_name']} » (nom réduit à une initiale) "
+                        f"rattaché à « {d['part_name']} »{multi}."
+                    ),
+                    "context_data": {
+                        "record_name": d["rec_name"],
+                        "participant_name": d["part_name"],
+                        "candidate_count": d.get("candidates", 1),
+                        "reason": "initial_based_merge",
+                    },
+                })
+            try:
+                for i in range(0, len(doubt_rows), 100):
+                    supabase.table("exceptions").insert(doubt_rows[i:i+100]).execute()
+                stats["exceptions_count"] += len(doubt_rows)
+            except Exception as exc:
+                logger.warning("Failed to insert doubt exceptions: %s", exc)
 
         # ---------------------------------------------------------------
         # 6c. Reconcile FCM match stats with reality. Step 5 can report
@@ -1300,7 +1330,26 @@ def combine_to_iso_timestamp(date_val: Any, time_val: Any, default_date: str = "
     return f"{target_date}T{target_time}Z"
 
 
-def match_non_registration_files_to_participants(event_id: str, supabase: Client) -> None:
+def _token_name_match(name_toks: list[str], p_tokens: set[str]) -> bool:
+    """
+    True when every FULL (2+ letter) token of the record name is present in the
+    participant's name tokens, and every single-letter INITIAL matches the start
+    of a distinct remaining participant token. Handles 'Wassim M Abdoun',
+    'Wassim Abdoun', 'Wassim A', 'W Abdoun' → 'Wassim Mohamed Abdoun'.
+    """
+    full = [t for t in name_toks if len(t) > 1]
+    if not full or not all(t in p_tokens for t in full):
+        return False
+    remaining = [t for t in p_tokens if t not in full]
+    for ini in [t for t in name_toks if len(t) == 1]:
+        idx = next((i for i, t in enumerate(remaining) if t.startswith(ini)), None)
+        if idx is None:
+            return False
+        remaining.pop(idx)      # a participant token can back only ONE initial
+    return True
+
+
+def match_non_registration_files_to_participants(event_id: str, supabase: Client):
     """
     Match source_records from non-registration files (hotel, transfer, activity)
     to the correct participant based on registration code, email, or name.
@@ -1395,6 +1444,8 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
     # Name-key of the client that first claimed each email — lets us tell a
     # personal email (same owner) from a shared booking contact (different name).
     new_email_owner_nk: dict[str, str] = {}
+    # Tentative (initial-based) links to flag as a doubt in the exceptions.
+    doubt_links: list[dict] = []
     for rec in records:
         normalized = rec.get("normalized_data") or {}
         raw = rec.get("raw_data") or {}
@@ -1441,6 +1492,11 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         rec_last_collapsed = rec_last_n.replace(" ", "")
         rec_tokens = set((rec_first_n + " " + rec_last_n).split())
         rec_name_joined = f"{rec_first_n} {rec_last_n}".strip()
+        rec_name_toks = rec_name_joined.split()
+        # A DOUBT case: the surname or the given name itself is reduced to a
+        # single-letter initial ("Wassim A", "W Abdoun"). A mere middle initial
+        # ("Wassim M Abdoun") is NOT a doubt — first and last are still full.
+        is_doubt_case = len(rec_name_toks) >= 2 and (len(rec_name_toks[0]) == 1 or len(rec_name_toks[-1]) == 1)
 
         matched_id = None
 
@@ -1500,9 +1556,17 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 ):
                     matched_id = p["id"]
                     break
+                # Clean token match with a MIDDLE initial ("Wassim M Abdoun"):
+                # first & last are full, so it's confident — no doubt.
+                if not is_doubt_case and _token_name_match(rec_name_toks, p["tokens"]):
+                    matched_id = p["id"]
+                    break
 
-            if not matched_id:
-                rec_name_n = f"{rec_first_n} {rec_last_n}".strip()
+            # Fuzzy — but NOT for doubt cases (a name reduced to an initial like
+            # "Wassim A" would fuzzy-match the wrong "Wassim Ali" with false
+            # confidence; those go through the doubt path below).
+            if not matched_id and not is_doubt_case:
+                rec_name_n = rec_name_joined
                 best_score = 0
                 best_p_id = None
                 for p in part_lookup:
@@ -1518,6 +1582,31 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                         best_p_id = p["id"]
                 if best_score >= 88:
                     matched_id = best_p_id
+
+            # Initial-aware TENTATIVE match for a DOUBT case ("Wassim A",
+            # "W Abdoun"): find every participant the name could designate, merge
+            # to the best one, and raise a DOUBT. On several candidates we prefer
+            # a REGISTERED one (has email/code), per the chosen policy.
+            if not matched_id and is_doubt_case:
+                cands = [
+                    p for p in part_lookup
+                    if (email_is_contact or not rec_email or not p["email"] or rec_email == p["email"])
+                    and _token_name_match(rec_name_toks, p["tokens"])
+                ]
+                if cands:
+                    registered = [p for p in cands if (p.get("email") or p.get("reg_code"))]
+                    pool = registered or cands
+                    chosen = max(
+                        pool,
+                        key=lambda p: (fuzz.token_set_ratio(rec_name_joined, f"{p['first_n']} {p['last_n']}"), p["id"]),
+                    )
+                    matched_id = chosen["id"]
+                    doubt_links.append({
+                        "participant_id": matched_id,
+                        "rec_name": rec_full_name.title(),
+                        "part_name": f"{chosen['first_n']} {chosen['last_n']}".title(),
+                        "candidates": len(cands),
+                    })
 
             # Last resort for an emailless travel record whose first name differs
             # entirely from the registration (English name vs legal name on the
@@ -1598,6 +1687,13 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
                 supabase.table("source_records").upsert(updates[i:i+100]).execute()
         except Exception as exc:
             logger.error("Failed to bulk update participant_id on source_records: %s", exc)
+
+    # Collapse doubts to one per participant (a person may gather several
+    # initial-based records) so the exceptions page shows one card per person.
+    by_part: dict[str, dict] = {}
+    for d in doubt_links:
+        by_part.setdefault(d["participant_id"], d)
+    return list(by_part.values())
 
 
 def cleanup_stale_source_records(

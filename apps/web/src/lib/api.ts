@@ -263,8 +263,8 @@ function mapException(exc: any): Exception {
   const EXC_CATEGORY: Record<string, Exception['type']> = {
     DATA_CONFLICT: 'conflict', NAME_DIVERGENCE: 'conflict', conflict: 'conflict',
     POSSIBLE_DUPLICATE: 'duplicate', DUPLICATE_EMAIL: 'duplicate', duplicate: 'duplicate',
-    FLIGHT_NO_PARTICIPANT: 'not_found', PROBABLE_MATCH: 'not_found', not_found: 'not_found',
-    MISSING_REQUIRED_FIELD: 'to_verify', INVALID_FORMAT: 'to_verify',
+    FLIGHT_NO_PARTICIPANT: 'not_found', not_found: 'not_found',
+    PROBABLE_MATCH: 'to_verify', MISSING_REQUIRED_FIELD: 'to_verify', INVALID_FORMAT: 'to_verify',
     DATE_INCOHERENCE: 'to_verify', MISSING_CONTACT: 'to_verify', to_verify: 'to_verify',
     PARTICIPANT_NO_FLIGHT: 'coverage', PARTICIPANT_NO_HOTEL: 'coverage',
     PARTICIPANT_NO_TRANSFER: 'coverage', PARTICIPANT_NO_DIETARY: 'coverage',
