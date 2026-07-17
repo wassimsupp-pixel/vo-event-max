@@ -3,14 +3,17 @@ services/ai_service.py — Unified AI gateway for every intelligent step
 (auto-mapping, file analysis, poster recognition, quality summaries, email
 agent, campaign generation).
 
-Provider policy:
-  1. OpenAI (env ``OPENAI_API_KEY``, model gpt-4o-mini, vision-capable) — used
-     FIRST whenever the key is present and valid.
-  2. Google Gemini (env ``GEMINI_API_KEY``, gemini-1.5-flash) — automatic
-     fallback when OpenAI is absent, invalid, or errors out.
+Provider policy (first usable wins, automatic fallback on failure):
+  1. NVIDIA NIM (env ``NVIDIA_API_KEY``, Mistral ``mistralai/mistral-nemotron``)
+     — used FIRST for text reasoning (mapping, fusion, analysis). OpenAI-
+     compatible endpoint. Text-only.
+  2. OpenAI (env ``OPENAI_API_KEY``, gpt-4o-mini) — vision-capable; also the
+     fallback for text.
+  3. Google Gemini (env ``GEMINI_API_KEY``, gemini-1.5-flash) — final fallback.
 
-An invalid OpenAI key is detected once (401/403) and the process stops trying
-it — calls then go straight to Gemini with no added latency.
+An invalid key is detected once (401/403) and that provider is skipped for the
+rest of the process — no added latency on later calls. Image prompts skip
+NVIDIA (text-only) and go straight to a vision-capable provider.
 """
 
 from __future__ import annotations
@@ -24,6 +27,10 @@ from typing import Any, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-nemotron")
+_nvidia_disabled = False
 
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _OPENAI_MODEL = "gpt-4o-mini"
@@ -39,6 +46,12 @@ except ImportError:
     pass
 
 
+def _nvidia_key() -> Optional[str]:
+    if _nvidia_disabled:
+        return None
+    return (os.getenv("NVIDIA_API_KEY") or "").strip() or None
+
+
 def _openai_key() -> Optional[str]:
     if _openai_disabled:
         return None
@@ -47,7 +60,44 @@ def _openai_key() -> Optional[str]:
 
 def ai_available() -> bool:
     """True when at least one AI provider is usable."""
-    return bool(_openai_key()) or GEMINI_AVAILABLE
+    return bool(_nvidia_key()) or bool(_openai_key()) or GEMINI_AVAILABLE
+
+
+def _openai_compatible_complete(url: str, key: str, model: str, prompt: str) -> tuple[Optional[str], bool]:
+    """
+    POST an OpenAI-style chat completion. Returns (text, invalid_key). Text-only.
+    ``invalid_key`` is True on 401/403 so the caller can disable that provider.
+    """
+    try:
+        resp = httpx.post(
+            url,
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            },
+            timeout=45.0,
+        )
+        if resp.status_code in (401, 403):
+            return None, True
+        resp.raise_for_status()
+        return (resp.json()["choices"][0]["message"]["content"] or "").strip(), False
+    except Exception as exc:
+        logger.warning("%s call failed: %s", url.split("/")[2], exc)
+        return None, False
+
+
+def _nvidia_complete(prompt: str, image_bytes: Optional[bytes]) -> Optional[str]:
+    global _nvidia_disabled
+    key = _nvidia_key()
+    if not key or image_bytes is not None:   # NVIDIA text model — no vision here
+        return None
+    text, invalid = _openai_compatible_complete(_NVIDIA_URL, key, _NVIDIA_MODEL, prompt)
+    if invalid:
+        logger.error("NVIDIA key rejected — skipping NVIDIA for the rest of this process.")
+        _nvidia_disabled = True
+    return text
 
 
 def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
@@ -109,7 +159,8 @@ def ai_text(
     provider. Returns the raw text answer, or None when no provider succeeds.
     """
     return (
-        _openai_complete(prompt, image_bytes, mime_type)
+        _nvidia_complete(prompt, image_bytes)
+        or _openai_complete(prompt, image_bytes, mime_type)
         or _gemini_complete(prompt, image_bytes, mime_type)
     )
 
