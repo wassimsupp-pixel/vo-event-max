@@ -4,16 +4,18 @@ services/ai_service.py — Unified AI gateway for every intelligent step
 agent, campaign generation).
 
 Provider policy (first usable wins, automatic fallback on failure):
-  1. NVIDIA NIM (env ``NVIDIA_API_KEY``, Mistral ``mistralai/mistral-nemotron``)
-     — used FIRST for text reasoning (mapping, fusion, analysis). OpenAI-
-     compatible endpoint. Text-only.
-  2. OpenAI (env ``OPENAI_API_KEY``, gpt-4o-mini) — vision-capable; also the
-     fallback for text.
+  1. NVIDIA NIM (env ``NVIDIA_API_KEY``) — used FIRST. Text reasoning (mapping,
+     fusion, analysis) via Mistral ``mistralai/mistral-nemotron``; photo/PDF
+     vision (event posters) via ``meta/llama-3.2-90b-vision-instruct``.
+     OpenAI-compatible endpoint.
+  2. OpenAI (env ``OPENAI_API_KEY``, gpt-4o-mini) — vision-capable fallback.
   3. Google Gemini (env ``GEMINI_API_KEY``, gemini-1.5-flash) — final fallback.
 
 An invalid key is detected once (401/403) and that provider is skipped for the
-rest of the process — no added latency on later calls. Image prompts skip
-NVIDIA (text-only) and go straight to a vision-capable provider.
+rest of the process — no added latency on later calls. A slow or too-large
+image on NVIDIA simply falls back to the next vision provider.
+
+Model overrides: ``NVIDIA_MODEL`` (text), ``NVIDIA_VISION_MODEL`` (vision).
 """
 
 from __future__ import annotations
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 _NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 _NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-nemotron")
+# Vision model for event photo/PDF analysis (Pixtral is not available on the
+# integrate endpoint; Llama 3.2 90B Vision is and is confirmed working).
+_NVIDIA_VISION_MODEL = os.getenv("NVIDIA_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct")
 _nvidia_disabled = False
 
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -63,41 +68,50 @@ def ai_available() -> bool:
     return bool(_nvidia_key()) or bool(_openai_key()) or GEMINI_AVAILABLE
 
 
-def _openai_compatible_complete(url: str, key: str, model: str, prompt: str) -> tuple[Optional[str], bool]:
+def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
     """
-    POST an OpenAI-style chat completion. Returns (text, invalid_key). Text-only.
-    ``invalid_key`` is True on 401/403 so the caller can disable that provider.
+    NVIDIA NIM chat completion (OpenAI-compatible). Text uses the Mistral text
+    model; an image uses the vision model with a longer timeout. Returns None on
+    any failure so the gateway falls back to the next provider.
     """
+    global _nvidia_disabled
+    key = _nvidia_key()
+    if not key:
+        return None
+
+    if image_bytes is not None:
+        b64 = base64.b64encode(image_bytes).decode()
+        content: Any = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{mime_type or 'image/png'};base64,{b64}"}},
+        ]
+        model = _NVIDIA_VISION_MODEL
+        timeout = 120.0
+    else:
+        content = prompt
+        model = _NVIDIA_MODEL
+        timeout = 45.0
+
     try:
         resp = httpx.post(
-            url,
+            _NVIDIA_URL,
             headers={"Authorization": f"Bearer {key}"},
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": content}],
                 "temperature": 0,
             },
-            timeout=45.0,
+            timeout=timeout,
         )
         if resp.status_code in (401, 403):
-            return None, True
+            logger.error("NVIDIA key rejected — skipping NVIDIA for the rest of this process.")
+            _nvidia_disabled = True
+            return None
         resp.raise_for_status()
-        return (resp.json()["choices"][0]["message"]["content"] or "").strip(), False
+        return (resp.json()["choices"][0]["message"]["content"] or "").strip()
     except Exception as exc:
-        logger.warning("%s call failed: %s", url.split("/")[2], exc)
-        return None, False
-
-
-def _nvidia_complete(prompt: str, image_bytes: Optional[bytes]) -> Optional[str]:
-    global _nvidia_disabled
-    key = _nvidia_key()
-    if not key or image_bytes is not None:   # NVIDIA text model — no vision here
+        logger.warning("NVIDIA call failed (%s) — trying next provider.", exc)
         return None
-    text, invalid = _openai_compatible_complete(_NVIDIA_URL, key, _NVIDIA_MODEL, prompt)
-    if invalid:
-        logger.error("NVIDIA key rejected — skipping NVIDIA for the rest of this process.")
-        _nvidia_disabled = True
-    return text
 
 
 def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
@@ -159,7 +173,7 @@ def ai_text(
     provider. Returns the raw text answer, or None when no provider succeeds.
     """
     return (
-        _nvidia_complete(prompt, image_bytes)
+        _nvidia_complete(prompt, image_bytes, mime_type)
         or _openai_complete(prompt, image_bytes, mime_type)
         or _gemini_complete(prompt, image_bytes, mime_type)
     )
