@@ -113,19 +113,62 @@ export default function HotelsPage() {
     }
   }
 
-  const handleDeleteRooming = async (id: string) => {
-    try {
-      await api.hotels.deleteRooming(id)
-      await fetchData()
-    } catch (err) {
-      console.error('Failed to delete rooming night', err)
-    }
-  }
 
   const filteredRooming = roomingList.filter(r =>
     (r.participant_name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
     (r.hotel_name || '').toLowerCase().includes(searchTerm.toLowerCase())
   )
+
+  // Group nights per (participant · hotel · room type) into one stay: instead of
+  // one row per night, show the client with the date range and the night count
+  // (e.g. 21/07/2026 - 22/07/2026 => 2).
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso)
+    return isNaN(d.getTime())
+      ? iso
+      : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+  }
+  interface Stay {
+    key: string
+    participant_name?: string
+    hotel_name?: string
+    room_type: string
+    status: string
+    nightIds: string[]
+    firstNight: string
+    lastNight: string
+    nights: number
+  }
+  const stays: Stay[] = Object.values(
+    filteredRooming.reduce((acc: Record<string, Stay>, r) => {
+      const key = `${r.participant_id}|${r.hotel_id}|${r.room_type}`
+      const s = acc[key] || (acc[key] = {
+        key,
+        participant_name: r.participant_name,
+        hotel_name: r.hotel_name,
+        room_type: r.room_type,
+        status: r.status,
+        nightIds: [],
+        firstNight: r.night_date,
+        lastNight: r.night_date,
+        nights: 0,
+      })
+      s.nightIds.push(r.id)
+      if (r.night_date < s.firstNight) s.firstNight = r.night_date
+      if (r.night_date > s.lastNight) s.lastNight = r.night_date
+      s.nights += 1
+      return acc
+    }, {})
+  ).sort((a, b) => (a.participant_name || '').localeCompare(b.participant_name || ''))
+
+  const handleDeleteStay = async (stay: Stay) => {
+    try {
+      await Promise.all(stay.nightIds.map((id) => api.hotels.deleteRooming(id)))
+      fetchData()
+    } catch (err) {
+      console.error('Failed to delete stay', err)
+    }
+  }
 
   const withoutHotel = masterRows.filter(r => !r.has_hotel)
 
@@ -336,7 +379,8 @@ export default function HotelsPage() {
                 <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] font-medium">
                   <th className="p-4">{t('tableParticipant')}</th>
                   <th className="p-4">{t('tableHotel')}</th>
-                  <th className="p-4">{t('tableNightDate')}</th>
+                  <th className="p-4">{t('tableStay')}</th>
+                  <th className="p-4 text-center">{t('tableNights')}</th>
                   <th className="p-4">{t('tableRoomType')}</th>
                   <th className="p-4">{t('tableStatus')}</th>
                   <th className="p-4 text-right">{t('tableActions')}</th>
@@ -344,37 +388,46 @@ export default function HotelsPage() {
               </thead>
               <tbody className="divide-y text-[var(--color-text-primary)]">
                 {loading ? (
-                  <TableSkeleton cols={6} rows={4} />
-                ) : filteredRooming.length === 0 ? (
+                  <TableSkeleton cols={7} rows={4} />
+                ) : stays.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-[var(--color-text-secondary)]">
+                    <td colSpan={7} className="p-8 text-center text-[var(--color-text-secondary)]">
                       {t('noAssignments')}
                     </td>
                   </tr>
                 ) : (
-                  filteredRooming.map((room) => (
-                    <tr key={room.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-semibold">{room.participant_name || 'N/A'}</td>
-                      <td className="p-4">{room.hotel_name || 'N/A'}</td>
-                      <td className="p-4 font-mono text-xs">{room.night_date}</td>
+                  stays.map((stay) => (
+                    <tr key={stay.key} className="hover:bg-slate-50 transition-colors">
+                      <td className="p-4 font-semibold">{stay.participant_name || 'N/A'}</td>
+                      <td className="p-4">{stay.hotel_name || 'N/A'}</td>
+                      <td className="p-4 whitespace-nowrap">
+                        {stay.nights > 1
+                          ? `${fmtDate(stay.firstNight)} - ${fmtDate(stay.lastNight)}`
+                          : fmtDate(stay.firstNight)}
+                      </td>
+                      <td className="p-4 text-center">
+                        <span className="inline-flex items-center justify-center min-w-[1.75rem] rounded-full bg-[var(--color-accent-light)] px-2 py-0.5 text-xs font-bold text-[var(--color-accent)]">
+                          {stay.nights}
+                        </span>
+                      </td>
                       <td className="p-4">
-                        {room.room_type === 'single' ? t('roomTypeSingle') :
-                         room.room_type === 'double' ? t('roomTypeDouble') :
-                         room.room_type === 'twin' ? t('roomTypeTwin') :
-                         room.room_type === 'suite' ? t('roomTypeSuite') : room.room_type}
+                        {stay.room_type === 'single' ? t('roomTypeSingle') :
+                         stay.room_type === 'double' ? t('roomTypeDouble') :
+                         stay.room_type === 'twin' ? t('roomTypeTwin') :
+                         stay.room_type === 'suite' ? t('roomTypeSuite') : stay.room_type}
                       </td>
                       <td className="p-4">
                         <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          room.status === 'confirmed'
+                          stay.status === 'confirmed'
                             ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                             : 'bg-amber-50 text-amber-700 border border-amber-200'
                         }`}>
-                          {room.status === 'confirmed' ? t('statusConfirmed') : t('statusRequested')}
+                          {stay.status === 'confirmed' ? t('statusConfirmed') : t('statusRequested')}
                         </span>
                       </td>
                       <td className="p-4 text-right">
                         <button
-                          onClick={() => handleDeleteRooming(room.id)}
+                          onClick={() => handleDeleteStay(stay)}
                           className="text-rose-600 hover:text-rose-900 font-semibold text-xs transition-colors"
                         >
                           {t('deleteButton')}

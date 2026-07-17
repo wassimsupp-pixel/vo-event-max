@@ -223,7 +223,9 @@
     "noAssignments": "Geen kamertoewijzingen geregistreerd.",
     "statusConfirmed": "Bevestigd",
     "statusRequested": "Aangevraagd",
-    "deleteButton": "Verwijderen"
+    "deleteButton": "Verwijderen",
+    "tableStay": "Verblijf",
+    "tableNights": "Nachten"
   },
   "activities": {
     "title": "Activiteiten & Diners",

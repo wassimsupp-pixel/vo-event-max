@@ -223,7 +223,9 @@
     "noAssignments": "No room assignments registered.",
     "statusConfirmed": "Confirmed",
     "statusRequested": "Requested",
-    "deleteButton": "Delete"
+    "deleteButton": "Delete",
+    "tableStay": "Stay",
+    "tableNights": "Nights"
   },
   "activities": {
     "title": "Activities & Dinners",

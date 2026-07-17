@@ -223,7 +223,9 @@
     "noAssignments": "Aucune affectation de chambre enregistrée.",
     "statusConfirmed": "Confirmé",
     "statusRequested": "Demandé",
-    "deleteButton": "Supprimer"
+    "deleteButton": "Supprimer",
+    "tableStay": "Séjour",
+    "tableNights": "Nuits"
   },
   "activities": {
     "title": "Activités & Dîners",
