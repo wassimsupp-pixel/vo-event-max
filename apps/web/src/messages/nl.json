@@ -98,7 +98,8 @@
     "sourceA": "Bron A",
     "sourceB": "Bron B",
     "resolved": "Opgelost",
-    "filterAll": "Alle"
+    "filterAll": "Alle",
+    "coverage": "Dekking (vluchten/hotels…)"
   },
   "actions": {
     "import": "Importeren",

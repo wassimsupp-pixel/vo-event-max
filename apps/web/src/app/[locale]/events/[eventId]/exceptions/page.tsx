@@ -27,6 +27,9 @@ const EXC_TYPE_LABELS: Record<string, string> = {
   INVALID_FORMAT: 'Format invalide',
   DATE_INCOHERENCE: 'Incohérence de dates',
   FLIGHT_NO_PARTICIPANT: 'Vol sans participant',
+  NAME_DIVERGENCE: 'Noms divergents entre sources',
+  PROBABLE_MATCH: 'Correspondance à confirmer',
+  coverage: 'Couverture',
 }
 const excTypeLabel = (t: string) => EXC_TYPE_LABELS[t] || t
 
@@ -40,8 +43,8 @@ export default function ExceptionsPage() {
 
   // Optional deep-link filter, e.g. /exceptions?type=conflict from the dashboard.
   // Read from window on mount to avoid a static-prerender bail-out on useSearchParams.
-  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify'
-  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify']
+  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage'
+  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify', 'coverage']
   const [typeFilter, setTypeFilter] = useState<ExceptionType | null>(null)
 
   useEffect(() => {
@@ -59,6 +62,7 @@ export default function ExceptionsPage() {
     duplicate: tExc('duplicate'),
     not_found: tExc('notFound'),
     to_verify: tExc('toCheck'),
+    coverage: tExc('coverage'),
   }
 
   const [exceptions, setExceptions] = useState<Exception[]>([])
@@ -237,11 +241,11 @@ export default function ExceptionsPage() {
                   <div className="flex-1 min-w-0 space-y-2">
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
-                        {exc.participant_name ?? '\u2014'}
+                        {exc.participant_name ?? excTypeLabel(exc.exception_type ?? exc.type)}
                       </h3>
                       {getSeverityBadge(exc.severity)}
                       <Badge variant="outline" className="text-[10px] border-slate-200">
-                        {excTypeLabel(exc.type)}
+                        {excTypeLabel(exc.exception_type ?? exc.type)}
                       </Badge>
                     </div>
 

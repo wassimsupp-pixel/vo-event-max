@@ -98,7 +98,8 @@
     "sourceA": "Source A",
     "sourceB": "Source B",
     "resolved": "Résolu",
-    "filterAll": "Toutes"
+    "filterAll": "Toutes",
+    "coverage": "Couverture (vols/hôtels…)"
   },
   "actions": {
     "import": "Importer",

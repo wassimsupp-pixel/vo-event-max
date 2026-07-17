@@ -102,7 +102,11 @@ def detect_all(
         logger.warning("Could not load imported source types: %s", exc)
 
     if "fcm" in imported_types:
-        _detect_participant_no_flight(event_id, run_id, supabase, exceptions_to_insert)
+        _aggregate_coverage_exception(
+            event_id, run_id, supabase, exceptions_to_insert,
+            flag="has_flight", exception_type="PARTICIPANT_NO_FLIGHT",
+            message_fr="{count} participant(s) n'ont pas encore de vol enregistré — voir la master list (filtre « Sans vol »).",
+        )
     _detect_flight_no_participant(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_required_fields(event_id, run_id, supabase, exceptions_to_insert)
     _detect_invalid_formats(event_id, run_id, supabase, exceptions_to_insert)
@@ -113,15 +117,19 @@ def detect_all(
     # Per-participant "missing info in the master list" alerts (feedback §14),
     # gated on the relevant source file having been imported.
     if "hotel" in imported_types:
-        _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
-                                flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
-                                label="hotel", severity="warning")
+        _aggregate_coverage_exception(
+            event_id, run_id, supabase, exceptions_to_insert,
+            flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
+            message_fr="{count} participant(s) n'ont pas encore d'hébergement — voir la master list (filtre « Sans hôtel »).",
+        )
     if "transfer" in imported_types:
         # The exception_type ENUM has no PARTICIPANT_NO_TRANSFER value — reuse
         # MISSING_REQUIRED_FIELD (context_data carries the specifics).
-        _detect_missing_service(event_id, run_id, supabase, exceptions_to_insert,
-                                flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
-                                label="transfer", severity="info")
+        _aggregate_coverage_exception(
+            event_id, run_id, supabase, exceptions_to_insert,
+            flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
+            message_fr="{count} participant(s) n'ont pas encore de transfert — voir la master list (filtre « Sans transfert »).",
+        )
     _detect_missing_dietary(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
 
@@ -156,40 +164,54 @@ def detect_all(
 # Individual detectors
 # ---------------------------------------------------------------------------
 
-def _detect_participant_no_flight(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+def _aggregate_coverage_exception(
+    event_id: str,
+    run_id: str,
+    supabase: Client,
+    exceptions_list: list[dict],
+    *,
+    flag: str,
+    exception_type: str,
+    message_fr: str,
+) -> int:
     """
-    PARTICIPANT_NO_FLIGHT — participants with has_flight=False.
+    COVERAGE gaps ("no flight / no hotel / no transfer") are NOT per-person
+    errors: they get ONE aggregated info card with the count and the list of
+    concerned participants — the master-list filters show the detail.
     """
     try:
         result = (
             supabase.table("participants")
-            .select("id, first_name, last_name, email")
+            .select("id, first_name, last_name")
             .eq("event_id", event_id)
-            .eq("has_flight", False)
+            .eq(flag, False)
             .execute()
         )
     except Exception as exc:
-        logger.error("PARTICIPANT_NO_FLIGHT query failed: %s", exc)
+        logger.error("%s query failed: %s", exception_type, exc)
         return 0
 
-    count = 0
-    for p in result.data or []:
-        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
-        _insert_exception(
-            supabase=supabase,
-            run_id=run_id,
-            event_id=event_id,
-            exception_type="PARTICIPANT_NO_FLIGHT",
-            severity="warning",
-            message=f"Participant '{name}' ({p.get('email', 'no email')}) has no flight record.",
-            participant_id=p["id"],
-            context_data={"participant_name": name, "email": p.get("email")},
-            exceptions_list=exceptions_list,
-        )
-        count += 1
-
-    logger.debug("PARTICIPANT_NO_FLIGHT: %d exceptions", count)
-    return count
+    people = result.data or []
+    if not people:
+        return 0
+    names = [f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() for p in people]
+    _insert_exception(
+        supabase=supabase,
+        run_id=run_id,
+        event_id=event_id,
+        exception_type=exception_type,
+        severity="info",
+        message=message_fr.format(count=len(people)),
+        participant_id=None,
+        context_data={
+            "aggregate": True,
+            "count": len(people),
+            "participant_ids": [p["id"] for p in people[:500]],
+            "sample_names": names[:15],
+        },
+        exceptions_list=exceptions_list,
+    )
+    return 1
 
 
 def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
@@ -692,30 +714,33 @@ def _detect_missing_dietary(event_id: str, run_id: str, supabase: Client, except
         logger.error("PARTICIPANT_NO_DIETARY query failed: %s", exc)
         return 0
 
-    count = 0
-    for p in result.data or []:
-        val = (p.get("dietary_requirements") or "").strip()
-        if val:
-            continue
-        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip()
+    # ONE aggregated info card — a missing dietary preference is a coverage
+    # gap, not a per-person error (it would otherwise flood the page with
+    # hundreds of cards).
+    missing = [p for p in (result.data or []) if not (p.get("dietary_requirements") or "").strip()]
+    if not missing:
+        return 0
+    names = [f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() for p in missing]
+    _insert_exception(
+        supabase=supabase,
+        run_id=run_id,
+        event_id=event_id,
         # NOTE: the Postgres exception_type ENUM has no PARTICIPANT_NO_DIETARY
-        # value — inserting it 22P02-fails the whole bulk chunk. Reuse
-        # MISSING_REQUIRED_FIELD with the field named in context_data.
-        _insert_exception(
-            supabase=supabase,
-            run_id=run_id,
-            event_id=event_id,
-            exception_type="MISSING_REQUIRED_FIELD",
-            severity="info",
-            message=f"Participant '{name}' has no dietary-requirements information.",
-            participant_id=p["id"],
-            context_data={"participant_name": name, "email": p.get("email"), "missing": "dietary_requirements"},
-            exceptions_list=exceptions_list,
-        )
-        count += 1
-
-    logger.debug("PARTICIPANT_NO_DIETARY: %d exceptions", count)
-    return count
+        # value — reuse MISSING_REQUIRED_FIELD with the field in context_data.
+        exception_type="MISSING_REQUIRED_FIELD",
+        severity="info",
+        message=f"{len(missing)} participant(s) n'ont pas d'information de régime alimentaire.",
+        participant_id=None,
+        context_data={
+            "aggregate": True,
+            "missing": "dietary_requirements",
+            "count": len(missing),
+            "participant_ids": [p["id"] for p in missing[:500]],
+            "sample_names": names[:15],
+        },
+        exceptions_list=exceptions_list,
+    )
+    return 1
 
 
 def _detect_missing_contact(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:

@@ -149,7 +149,8 @@ export interface Export {
 export interface Exception {
   id: string
   event_id: string
-  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify'
+  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage'
+  exception_type?: string
   severity: 'critical' | 'warning' | 'info'
   participant_id?: string
   participant_name?: string
@@ -256,9 +257,25 @@ function mapException(exc: any): Exception {
     participant_name = ctx.participant_name
   }
 
+  // Every backend type falls into ONE of the filter categories so the chips
+  // actually sort the page (coverage = aggregated "X participants without…").
+  const EXC_CATEGORY: Record<string, Exception['type']> = {
+    DATA_CONFLICT: 'conflict', NAME_DIVERGENCE: 'conflict', conflict: 'conflict',
+    POSSIBLE_DUPLICATE: 'duplicate', DUPLICATE_EMAIL: 'duplicate', duplicate: 'duplicate',
+    FLIGHT_NO_PARTICIPANT: 'not_found', PROBABLE_MATCH: 'not_found', not_found: 'not_found',
+    MISSING_REQUIRED_FIELD: 'to_verify', INVALID_FORMAT: 'to_verify',
+    DATE_INCOHERENCE: 'to_verify', MISSING_CONTACT: 'to_verify', to_verify: 'to_verify',
+    PARTICIPANT_NO_FLIGHT: 'coverage', PARTICIPANT_NO_HOTEL: 'coverage',
+    PARTICIPANT_NO_TRANSFER: 'coverage', PARTICIPANT_NO_DIETARY: 'coverage',
+  }
+  const category: Exception['type'] = ctx.aggregate
+    ? 'coverage'
+    : (EXC_CATEGORY[exc.exception_type as string] || EXC_CATEGORY[exc.type as string] || 'to_verify')
+
   return {
     ...exc,
-    type: (exc.exception_type === 'DATA_CONFLICT' || exc.exception_type === 'conflict') ? 'conflict' : (exc.type || exc.exception_type || 'to_verify'),
+    type: category,
+    exception_type: exc.exception_type,
     participant_name,
     value_a,
     value_b,
