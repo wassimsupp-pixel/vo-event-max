@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
+import { Download, Search, Filter, CheckCircle2, AlertCircle, HelpCircle, Loader2, RefreshCw } from 'lucide-react'
 import { api } from '@/lib/api'
 
 const PER_PAGE = 20
@@ -77,32 +77,62 @@ export default function MasterListPage() {
   const [missingFilter, setMissingFilter] = useState<'flight' | 'hotel' | 'transfer' | null>(null)
   const [page, setPage] = useState(1)
   const [isExporting, setIsExporting] = useState(false)
+  const [consolidating, setConsolidating] = useState(false)
 
   useEffect(() => {
     const m = new URLSearchParams(window.location.search).get('missing')
     if (m === 'flight' || m === 'hotel' || m === 'transfer') setMissingFilter(m)
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    async function load() {
-      setLoading(true)
-      setError(null)
-      try {
-        const res = await api.masterList.get(eventId)
-        if (!cancelled) {
-          setRows(res.items || [])
-          setCustomCols((res as { custom_fields?: string[] }).custom_fields || [])
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Erreur lors du chargement de la master list')
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+  const loadMasterList = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await api.masterList.get(eventId)
+      setRows(res.items || [])
+      setCustomCols((res as { custom_fields?: string[] }).custom_fields || [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erreur lors du chargement de la master list')
+    } finally {
+      setLoading(false)
     }
-    if (eventId) load()
-    return () => { cancelled = true }
   }, [eventId])
+
+  useEffect(() => {
+    if (eventId) loadMasterList()
+  }, [eventId, loadMasterList])
+
+  // "Lancer la consolidation" directly from the database view: trigger a run,
+  // poll resiliently until it completes, then reload the consolidated list.
+  const handleConsolidate = async () => {
+    setConsolidating(true)
+    setError(null)
+    try {
+      const run = await api.consolidation.run(eventId)
+      let failures = 0
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 4000))
+        try {
+          const updated = await api.consolidation.get(eventId, run.id)
+          failures = 0
+          if (updated.status === 'done') break
+          if (updated.status === 'error') {
+            setError('La consolidation a échoué — consulte le dashboard pour le détail.')
+            break
+          }
+        } catch {
+          // Transient failure while the worker is busy — keep polling.
+          failures += 1
+          if (failures > 30) { setError('Impossible de suivre la consolidation.'); break }
+        }
+      }
+      await loadMasterList()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Impossible de lancer la consolidation.')
+    } finally {
+      setConsolidating(false)
+    }
+  }
 
   useEffect(() => { setPage(1) }, [searchQuery, statusFilter, missingFilter])
 
@@ -153,14 +183,24 @@ export default function MasterListPage() {
               {loading ? 'Chargement…' : `${rows.length} participants — informations fusionnées de tous les fichiers sources`}
             </p>
           </div>
-          <Button
-            className="bg-[var(--color-cta)] hover:bg-[var(--color-cta)]/90 text-white font-medium self-start md:self-auto flex items-center gap-2 shadow-sm"
-            onClick={handleExport}
-            disabled={isExporting}
-          >
-            {isExporting ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Download className="h-4.5 w-4.5" />}
-            {isExporting ? 'Génération...' : tActions('export')}
-          </Button>
+          <div className="flex items-center gap-2 self-start md:self-auto">
+            <Button
+              className="bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-white font-medium flex items-center gap-2 shadow-sm"
+              onClick={handleConsolidate}
+              disabled={consolidating}
+            >
+              {consolidating ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <RefreshCw className="h-4.5 w-4.5" />}
+              {consolidating ? 'Consolidation en cours…' : 'Lancer la consolidation'}
+            </Button>
+            <Button
+              className="bg-[var(--color-cta)] hover:bg-[var(--color-cta)]/90 text-white font-medium flex items-center gap-2 shadow-sm"
+              onClick={handleExport}
+              disabled={isExporting}
+            >
+              {isExporting ? <Loader2 className="h-4.5 w-4.5 animate-spin" /> : <Download className="h-4.5 w-4.5" />}
+              {isExporting ? 'Génération...' : tActions('export')}
+            </Button>
+          </div>
         </div>
 
         {/* Filters */}

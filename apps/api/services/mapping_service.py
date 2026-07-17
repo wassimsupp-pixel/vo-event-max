@@ -539,3 +539,80 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
                 "alternatives": [f for f, s in cands if s >= 0.3][:5],
             }
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Fully automatic mapping (no human step)
+# ---------------------------------------------------------------------------
+
+def ai_refine_mapping(
+    columns: list[str],
+    sample_rows: list[dict],
+    already_mapped: dict[str, str],
+) -> dict[str, str]:
+    """
+    Best-effort Gemini pass over the columns the heuristics could NOT identify.
+    Returns extra {column: canonical_field} entries. Silent no-op when the
+    GEMINI_API_KEY is absent or the call fails — the heuristic mapping stands.
+    """
+    import os as _os
+    unmapped = [c for c in columns if c not in already_mapped]
+    api_key = _os.getenv("GEMINI_API_KEY")
+    if not api_key or not unmapped:
+        return {}
+    try:
+        import json as _json
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        free_fields = sorted(CANONICAL_FIELDS - set(already_mapped.values()))
+        samples = {
+            c: [str(r.get(c) or "")[:40] for r in sample_rows[:3] if r.get(c) not in (None, "")]
+            for c in unmapped[:20]
+        }
+        prompt = (
+            "You map spreadsheet columns of an event-management file to canonical fields.\n"
+            f"Available fields: {free_fields}\n"
+            "Columns with sample values:\n"
+            + "\n".join(f"- {c!r}: {v}" for c, v in samples.items())
+            + "\n\nReturn ONLY a JSON object {column: field} using EXCLUSIVELY the available "
+            "fields, and omit any column you are not confident about. Never map a column to "
+            "'passport_expiry' or 'date_of_birth' unless its NAME clearly says so."
+        )
+        resp = model.generate_content(prompt)
+        text = (resp.text or "").strip()
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            return {}
+        data = _json.loads(text[start:end + 1])
+
+        out: dict[str, str] = {}
+        for col, field in data.items():
+            if col not in unmapped or field not in free_fields or field in out.values():
+                continue
+            if field in ("passport_expiry", "date_of_birth", "id", "participant_id"):
+                continue    # identity/sensitive fields stay heuristic-only
+            out[col] = field
+        if out:
+            logger.info("AI mapping refinement resolved %d extra column(s): %s", len(out), out)
+        return out
+    except Exception as exc:
+        logger.warning("AI mapping refinement skipped: %s", exc)
+        return {}
+
+
+def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, str]:
+    """
+    Fully automatic column mapping: confident heuristic suggestions
+    (suggest_mapping >= 0.5) completed by a best-effort AI pass for the rest.
+    Returns {} when nothing at all is identifiable.
+    """
+    suggestions = suggest_mapping(columns, sample_rows)
+    mapping = {
+        col: s["suggested_field"]
+        for col, s in suggestions.items()
+        if s.get("suggested_field") and s.get("confidence", 0) >= 0.5
+    }
+    mapping.update(ai_refine_mapping(columns, sample_rows, mapping))
+    return mapping

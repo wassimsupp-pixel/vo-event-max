@@ -33,6 +33,17 @@ export interface Participant {
   updated_at: string
 }
 
+export interface ProjectMember {
+  id: string
+  user_id: string
+  access_level: 'viewer' | 'editor'
+  event_ids: string[] | null
+  email?: string
+  full_name?: string
+  user_role?: string
+  created_at?: string
+}
+
 export interface ParticipantLookupItem {
   id: string
   first_name: string
@@ -770,6 +781,34 @@ export const api = {
     },
     async delete(projectId: string): Promise<void> {
       await request(`/api/projects/${projectId}`, { method: 'DELETE' })
+    },
+  },
+
+  sharing: {
+    async listMembers(projectId: string): Promise<ProjectMember[]> {
+      return request<ProjectMember[]>(`/api/projects/${projectId}/members`)
+    },
+    async addMember(
+      projectId: string,
+      payload: { email: string; access_level: 'viewer' | 'editor'; event_ids?: string[] | null }
+    ): Promise<ProjectMember> {
+      return request<ProjectMember>(`/api/projects/${projectId}/members`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
+    async updateMember(
+      projectId: string,
+      memberId: string,
+      patch: { access_level?: 'viewer' | 'editor'; event_ids?: string[] }
+    ): Promise<ProjectMember> {
+      return request<ProjectMember>(`/api/projects/${projectId}/members/${memberId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      })
+    },
+    async removeMember(projectId: string, memberId: string): Promise<void> {
+      await request(`/api/projects/${projectId}/members/${memberId}`, { method: 'DELETE' })
     },
   },
 

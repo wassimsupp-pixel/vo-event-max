@@ -66,7 +66,7 @@ async def create_hotel(
     """
     Add a hotel property to an event.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump()
     payload["event_id"] = event_id
@@ -97,7 +97,7 @@ async def update_hotel(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump(exclude_none=True)
     user_id = current_user["id"]
@@ -184,7 +184,7 @@ async def assign_rooming_night(
     """
     Assign a rooming night to a participant.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Verify participant is in event
     part = (
@@ -271,7 +271,7 @@ async def update_rooming_night(
         )
 
     event_id = existing.data["hotels"]["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump(exclude_none=True)
     user_id = current_user["id"]
@@ -323,7 +323,7 @@ async def delete_rooming_night(
         )
 
     event_id = existing.data["hotels"]["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     supabase.table("hotel_nights").delete().eq("id", rooming_id).execute()
     return MessageResponse(message="Successfully deleted rooming night allocation.")
@@ -353,7 +353,7 @@ async def bulk_assign_rooming_night(
     """
     Assign a rooming night to all participants of the event in bulk.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Verify hotel belongs to event
     hotel = (

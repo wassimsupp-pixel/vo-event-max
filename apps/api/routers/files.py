@@ -31,7 +31,7 @@ from models.schemas import (
     ColumnMappingSuggestion,
     MessageResponse,
 )
-from services.mapping_service import suggest_mapping, CANONICAL_FIELDS
+from services.mapping_service import build_auto_mapping, suggest_mapping, CANONICAL_FIELDS
 from services.file_service import read_tabular
 from services import deletion_service
 
@@ -126,7 +126,7 @@ async def upload_file(
         )
 
     # --- Verify event access ---
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # --- Parse with Pandas ---
     df = _parse_file_to_dataframe(content, filename)
@@ -183,6 +183,24 @@ async def upload_file(
     }
     canonical_fields_list = sorted(list(CANONICAL_FIELDS))
 
+    # FULLY AUTOMATIC mapping: confident heuristics + best-effort AI pass are
+    # applied immediately — the file lands ready to consolidate ('mapped').
+    # The mapping UI stays available to review or adjust.
+    import_status = "pending"
+    try:
+        auto_mapping = build_auto_mapping(columns, sample_rows)
+        if auto_mapping:
+            supabase.table("uploaded_files").update({
+                "column_mapping": auto_mapping,
+                "import_status": "mapped",
+            }).eq("id", file_id).execute()
+            import_status = "mapped"
+            logger.info(
+                "Auto-mapped file %s: %d/%d columns", file_id, len(auto_mapping), len(columns)
+            )
+    except Exception as exc:
+        logger.warning("Auto-mapping failed for file %s (manual mapping still possible): %s", file_id, exc)
+
     return FileUploadResponse(
         file_id=uuid.UUID(file_id),
         original_filename=filename,
@@ -191,7 +209,7 @@ async def upload_file(
         column_count=len(columns),
         columns=columns,
         sample_rows=sample_rows,
-        import_status="pending",
+        import_status=import_status,
         mapping_suggestions=mapping_suggestions,
         canonical_fields=canonical_fields_list,
     )
@@ -307,7 +325,7 @@ async def map_columns(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
 
     meta = meta_resp.data
-    await verify_event_access(meta["event_id"], current_user, supabase)
+    await verify_event_access(meta["event_id"], current_user, supabase, write=True)
 
     if meta["import_status"] == "processed":
         raise HTTPException(
@@ -413,7 +431,7 @@ async def delete_file(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found.")
 
     meta = meta_resp.data
-    await verify_event_access(meta["event_id"], current_user, supabase)
+    await verify_event_access(meta["event_id"], current_user, supabase, write=True)
 
     # 1. Delete from Supabase Storage
     try:

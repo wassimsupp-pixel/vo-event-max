@@ -78,7 +78,7 @@ async def create_transfer(
     """
     Create a ground transfer.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Verify participant is in event
     part = (
@@ -128,7 +128,7 @@ async def update_transfer(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump(exclude_none=True)
     user_id = current_user["id"]
@@ -174,7 +174,7 @@ async def delete_transfer(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     supabase.table("transfers").delete().eq("id", transfer_id).execute()
     return MessageResponse(message="Successfully deleted transfer booking.")
@@ -199,7 +199,7 @@ async def auto_group_shuttles(
     For flights arriving inside each window_minutes block, it schedules a single transfer
     pickup slot at the end of the window.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Fetch all flights for this event
     flights_res = (

@@ -330,6 +330,68 @@ def detect_duplicate_emails(
     return count
 
 
+def detect_duplicate_participant_emails(
+    run_id: str,
+    event_id: str,
+    supabase: Client,
+) -> int:
+    """
+    Flag emails shared by SEVERAL DISTINCT participants in the final master
+    list — one exception per email, listing everyone concerned. Rows repeated
+    across source files that consolidated into ONE participant are NOT flagged.
+    """
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        res = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email")
+            .eq("event_id", event_id)
+            .range(offset, offset + 999)
+            .execute()
+        )
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for p in parts:
+        email = (p.get("email") or "").strip().lower()
+        if email:
+            groups[email].append(p)
+
+    rows: list[dict] = []
+    for email, members in groups.items():
+        if len(members) < 2:
+            continue
+        names = ", ".join(
+            f"{m.get('first_name') or ''} {m.get('last_name') or ''}".strip() for m in members
+        )
+        rows.append({
+            "run_id": run_id,
+            "event_id": event_id,
+            "participant_id": members[0]["id"],
+            "exception_type": "DUPLICATE_EMAIL",
+            "severity": "critical",
+            "message": f"Email '{email}' est partagé par {len(members)} participants distincts : {names}",
+            "context_data": {
+                "email": email,
+                "participant_count": len(members),
+                "participant_ids": [m["id"] for m in members],
+                "participant_names": names,
+            },
+        })
+
+    for i in range(0, len(rows), 100):
+        try:
+            supabase.table("exceptions").insert(rows[i:i + 100]).execute()
+        except Exception as exc:
+            logger.error("Failed to insert duplicate-email exceptions: %s", exc)
+    return len(rows)
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
@@ -621,6 +683,16 @@ async def run_consolidation(
         if not mapped_files:
             raise RuntimeError("No mapped files found — consolidation aborted.")
 
+        # ---------------------------------------------------------------
+        # 1b. Exceptions describe the CURRENT state of the master list:
+        #     wipe the previous run's findings so the exceptions page never
+        #     stacks the same issue once per run.
+        # ---------------------------------------------------------------
+        try:
+            supabase.table("exceptions").delete().eq("event_id", event_id).execute()
+        except Exception as exc:
+            logger.warning("Failed to purge previous exceptions: %s", exc)
+
         registrations: list[ParticipantRecord] = []
         fcm_records:   list[ParticipantRecord] = []
         # Every record id (re)written THIS run + the files actually parsed:
@@ -895,19 +967,6 @@ async def run_consolidation(
                 stats["not_found"] += 1
 
         # ---------------------------------------------------------------
-        # 6. Duplicate email detection
-        # ---------------------------------------------------------------
-        dup_exceptions = []
-        dup_count = detect_duplicate_emails(registrations, run_id, event_id, supabase, exceptions_list=dup_exceptions)
-        if dup_exceptions:
-            try:
-                for i in range(0, len(dup_exceptions), 100):
-                    supabase.table("exceptions").insert(dup_exceptions[i:i+100]).execute()
-            except Exception as exc:
-                logger.error("Failed to bulk insert duplicate email exceptions: %s", exc)
-        stats["exceptions_count"] += dup_count
-
-        # ---------------------------------------------------------------
         # 6a-1. Purge stale source-record copies from earlier runs (records
         #       used to be re-inserted with random UUIDs each run — the stale
         #       copies carried pre-repair data: junk passports, inflated
@@ -990,6 +1049,17 @@ async def run_consolidation(
                 stats["participants_created"] = max(0, stats["participants_created"] - merged_phantoms)
         except Exception as exc:
             logger.warning("Phantom duplicate merge failed: %s", exc)
+
+        # ---------------------------------------------------------------
+        # 6e. Duplicate emails — computed on the FINAL participants (after
+        #     merges), one exception per email. Six rows of the same person
+        #     across six files are ONE participant, not six alerts.
+        # ---------------------------------------------------------------
+        try:
+            dup_count = detect_duplicate_participant_emails(run_id, event_id, supabase)
+            stats["exceptions_count"] += dup_count
+        except Exception as exc:
+            logger.warning("Duplicate-email detection failed: %s", exc)
 
         # ---------------------------------------------------------------
         # 7. Full exception detection
@@ -1167,8 +1237,9 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         logger.error("Failed to load participants for non-registration mapping: %s", exc)
         return
 
-    if not participants:
-        return
+    # NOTE: an empty participant list is NOT a reason to bail out — with a lone
+    # travel/hotel file (no registration list at all), every record below simply
+    # falls through to client auto-creation, which IS the master list.
 
     reg_sr_ids = [p["registration_source_id"] for p in participants if p.get("registration_source_id")]
     reg_sr_map = {}

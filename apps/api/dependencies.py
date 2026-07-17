@@ -166,25 +166,57 @@ def require_role(allowed_roles: list[str]):
 # Event access guard
 # ---------------------------------------------------------------------------
 
+#: Roles with implicit full access to every project of their organisation.
+STAFF_ROLES = ("admin", "pm")
+
+
+def get_project_membership(
+    supabase: Client,
+    project_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    """
+    Return the sharing row (project_members) for a user on a project, or None.
+
+    Returns ``{"__no_table__": True}`` when the sharing migration has not been
+    run yet, so callers can fall back to legacy org-wide behaviour instead of
+    locking every non-staff user out.
+    """
+    try:
+        res = (
+            supabase.table("project_members")
+            .select("id, access_level, event_ids")
+            .eq("project_id", project_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return (res.data or [None])[0]
+    except Exception as exc:
+        # 42P01 = relation does not exist (migration 003 not applied yet)
+        if "42P01" in str(exc) or "project_members" in str(exc):
+            logger.warning("project_members table missing — sharing not enforced yet.")
+            return {"__no_table__": True}
+        logger.error("Failed to load project membership: %s", exc)
+        return None
+
+
 async def verify_event_access(
     event_id: str,
     current_user: dict[str, Any],
     supabase: Client,
+    write: bool = False,
 ) -> dict[str, Any]:
     """
-    Verify that the current user's organisation owns the given event.
+    Verify that the current user may access the given event.
 
-    Returns the event row if accessible, raises HTTP 404 otherwise (to avoid
-    leaking the existence of events belonging to other organisations).
+    - The event must belong to the user's organisation (404 otherwise, to avoid
+      leaking the existence of other organisations' events).
+    - ``admin``/``pm`` (staff) have full access to every org event.
+    - Other users need a ``project_members`` row for the event's project; if
+      that row restricts ``event_ids``, the event must be listed. With
+      ``write=True`` the membership must be ``editor`` (403 otherwise).
 
-    Parameters
-    ----------
-    event_id:
-        UUID string of the event.
-    current_user:
-        User dict returned by ``get_current_user``.
-    supabase:
-        Supabase client.
+    Returns the event row if accessible.
     """
     org_id: str = current_user.get("org_id", "")
 
@@ -209,4 +241,28 @@ async def verify_event_access(
             detail="Event not found.",
         )
 
-    return response.data
+    event = response.data
+
+    if current_user.get("role") in STAFF_ROLES:
+        return event
+
+    membership = get_project_membership(supabase, event.get("project_id", ""), current_user.get("id", ""))
+    if membership and membership.get("__no_table__"):
+        return event      # migration not applied yet → legacy org-wide access
+    if not membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found.",
+        )
+    restricted = membership.get("event_ids")
+    if restricted and event_id not in restricted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found.",
+        )
+    if write and membership.get("access_level") != "editor":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Read-only access: you cannot modify this event.",
+        )
+    return event

@@ -29,7 +29,31 @@
     "deleteProject": "Supprimer le projet",
     "confirmDeleteEvent": "Supprimer cet événement « {name} » et toutes ses données ? Cette action est irréversible.",
     "confirmDeleteProject": "Supprimer le projet « {name} » et TOUS ses événements ? Cette action est irréversible.",
-    "deleteError": "Échec de la suppression."
+    "deleteError": "Échec de la suppression.",
+    "shareProject": "Partager le projet"
+  },
+  "sharing": {
+    "title": "Partager « {name} »",
+    "close": "Fermer",
+    "addTitle": "Inviter un utilisateur",
+    "existingOnly": "La personne doit déjà avoir un compte sur la plateforme (liens d'invitation bientôt disponibles).",
+    "emailPlaceholder": "email@exemple.com",
+    "accessLevel": "Niveau d'accès",
+    "viewer": "Lecture",
+    "editor": "Édition",
+    "add": "Ajouter",
+    "scopeWhole": "Accès : tout le projet",
+    "scopeRestricted": "Accès : {count} événement(s) sélectionné(s)",
+    "wholeProject": "Tout le projet",
+    "someEvents": "{count} événement(s)",
+    "membersTitle": "Membres",
+    "loading": "Chargement...",
+    "noMembers": "Personne n'a encore accès à ce projet.",
+    "remove": "Révoquer l'accès",
+    "loadError": "Impossible de charger les membres.",
+    "addError": "Impossible d'ajouter ce membre.",
+    "updateError": "Impossible de modifier l'accès.",
+    "removeError": "Impossible de révoquer l'accès."
   },
   "branding": {
     "poweredBy": "Powered by"

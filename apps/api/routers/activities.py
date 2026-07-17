@@ -42,7 +42,7 @@ async def analyze_poster(
     (title, location, date, time, capacity, description). Used to pre-fill an
     activity — nothing is persisted here.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
     ct = (file.content_type or "").lower()
     if not (ct.startswith("image/") or ct == "application/pdf"):
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Fichier image ou PDF requis.")
@@ -108,7 +108,7 @@ async def create_activity(
     """
     Create a new activity or excursion for an event.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump()
     payload["event_id"] = event_id
@@ -139,7 +139,7 @@ async def update_activity(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump(exclude_none=True)
     user_id = current_user["id"]
@@ -185,7 +185,7 @@ async def delete_activity(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     supabase.table("activities").delete().eq("id", activity_id).execute()
     return MessageResponse(message="Successfully deleted activity.")
@@ -266,7 +266,7 @@ async def register_participant(
         )
 
     event_id = activity.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Check participant exists
     part = (
@@ -334,7 +334,7 @@ async def unregister_participant(
         )
 
     event_id = activity.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     supabase.table("participant_activities").delete().eq("participant_id", participant_id).eq("activity_id", activity_id).execute()
     return MessageResponse(message="Successfully unregistered participant from activity.")

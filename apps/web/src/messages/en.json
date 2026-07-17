@@ -29,7 +29,31 @@
     "deleteProject": "Delete project",
     "confirmDeleteEvent": "Delete the event \"{name}\" and all its data? This action is irreversible.",
     "confirmDeleteProject": "Delete the project \"{name}\" and ALL its events? This action is irreversible.",
-    "deleteError": "Deletion failed."
+    "deleteError": "Deletion failed.",
+    "shareProject": "Share project"
+  },
+  "sharing": {
+    "title": "Share “{name}”",
+    "close": "Close",
+    "addTitle": "Invite a user",
+    "existingOnly": "The person must already have an account on the platform (invitation links coming soon).",
+    "emailPlaceholder": "email@example.com",
+    "accessLevel": "Access level",
+    "viewer": "View",
+    "editor": "Edit",
+    "add": "Add",
+    "scopeWhole": "Access: whole project",
+    "scopeRestricted": "Access: {count} selected event(s)",
+    "wholeProject": "Whole project",
+    "someEvents": "{count} event(s)",
+    "membersTitle": "Members",
+    "loading": "Loading...",
+    "noMembers": "Nobody has access to this project yet.",
+    "remove": "Revoke access",
+    "loadError": "Could not load members.",
+    "addError": "Could not add this member.",
+    "updateError": "Could not update access.",
+    "removeError": "Could not revoke access."
   },
   "branding": {
     "poweredBy": "Powered by"

@@ -52,7 +52,7 @@ async def preview_campaign(
     supabase: Client = Depends(get_supabase_client),
 ) -> dict[str, Any]:
     """Preview a few personalized examples + recipient count (no send, no persist)."""
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
     return campaign_service.preview(
         supabase, event_id, payload.mode, payload.subject, payload.body, payload.instructions
     )
@@ -69,7 +69,7 @@ async def send_campaign(
     Generate a personalized email per participant, store each in communications,
     and (if payload.send) deliver via the connected mailbox.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
     return await campaign_service.run_campaign(
         supabase, event_id, payload.mode, payload.subject, payload.body,
         payload.instructions, payload.send, current_user["id"],
@@ -87,7 +87,7 @@ async def generate_confirmation(
     Generate an individual confirmation draft from the participant's consolidated
     data and persist it as a `communications` row (status=draft).
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     draft = confirmation_service.generate_confirmation(supabase, participant_id)
 
@@ -162,7 +162,7 @@ async def update_communication(
     existing = supabase.table("communications").select("event_id").eq("id", communication_id).maybe_single().execute()
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication not found.")
-    await verify_event_access(existing.data["event_id"], current_user, supabase)
+    await verify_event_access(existing.data["event_id"], current_user, supabase, write=True)
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
@@ -186,7 +186,7 @@ async def send_communication(
     existing = supabase.table("communications").select("event_id").eq("id", communication_id).maybe_single().execute()
     if not existing.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Communication not found.")
-    await verify_event_access(existing.data["event_id"], current_user, supabase)
+    await verify_event_access(existing.data["event_id"], current_user, supabase, write=True)
 
     res = (
         supabase.table("communications")

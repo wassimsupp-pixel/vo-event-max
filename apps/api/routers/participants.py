@@ -394,7 +394,7 @@ async def update_participant(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found.")
 
     existing = existing_resp.data
-    await verify_event_access(existing["event_id"], current_user, supabase)
+    await verify_event_access(existing["event_id"], current_user, supabase, write=True)
 
     old_value = existing.get(body.field)
 
@@ -477,7 +477,7 @@ async def lock_field(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found.")
 
     existing = existing_resp.data
-    await verify_event_access(existing["event_id"], current_user, supabase)
+    await verify_event_access(existing["event_id"], current_user, supabase, write=True)
 
     locked_fields: dict = existing.get("locked_fields") or {}
     locked_fields[field] = True
@@ -530,7 +530,7 @@ async def unlock_field(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participant not found.")
 
     existing = existing_resp.data
-    await verify_event_access(existing["event_id"], current_user, supabase)
+    await verify_event_access(existing["event_id"], current_user, supabase, write=True)
 
     locked_fields: dict = existing.get("locked_fields") or {}
     was_locked = locked_fields.pop(field, False)

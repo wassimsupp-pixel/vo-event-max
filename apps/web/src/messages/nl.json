@@ -29,7 +29,31 @@
     "deleteProject": "Project verwijderen",
     "confirmDeleteEvent": "Het evenement \"{name}\" en alle bijbehorende gegevens verwijderen? Deze actie is onomkeerbaar.",
     "confirmDeleteProject": "Het project \"{name}\" en ALLE bijbehorende evenementen verwijderen? Deze actie is onomkeerbaar.",
-    "deleteError": "Verwijderen mislukt."
+    "deleteError": "Verwijderen mislukt.",
+    "shareProject": "Project delen"
+  },
+  "sharing": {
+    "title": "“{name}” delen",
+    "close": "Sluiten",
+    "addTitle": "Een gebruiker uitnodigen",
+    "existingOnly": "De persoon moet al een account op het platform hebben (uitnodigingslinks volgen binnenkort).",
+    "emailPlaceholder": "email@voorbeeld.com",
+    "accessLevel": "Toegangsniveau",
+    "viewer": "Lezen",
+    "editor": "Bewerken",
+    "add": "Toevoegen",
+    "scopeWhole": "Toegang: het hele project",
+    "scopeRestricted": "Toegang: {count} geselecteerd(e) evenement(en)",
+    "wholeProject": "Het hele project",
+    "someEvents": "{count} evenement(en)",
+    "membersTitle": "Leden",
+    "loading": "Laden...",
+    "noMembers": "Niemand heeft nog toegang tot dit project.",
+    "remove": "Toegang intrekken",
+    "loadError": "Kan leden niet laden.",
+    "addError": "Kan dit lid niet toevoegen.",
+    "updateError": "Kan toegang niet wijzigen.",
+    "removeError": "Kan toegang niet intrekken."
   },
   "branding": {
     "poweredBy": "Powered by"

@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw, Trash2 } from 'lucide-react'
+import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw, Trash2, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
+import { ShareProjectModal } from '@/components/ui/ShareProjectModal'
 import { useRouter, useParams } from 'next/navigation'
 
 interface Event {
@@ -37,6 +38,9 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
   const [pendingDelete, setPendingDelete] = useState<{ kind: 'event' | 'project'; id: string; name: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+
+  // Sharing modal state
+  const [sharingProject, setSharingProject] = useState<{ id: string; name: string } | null>(null)
 
   // Creation state
   const [isCreating, setIsCreating] = useState(false)
@@ -304,6 +308,15 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
                             <span className="truncate flex-1">{project.client_name} — {project.name}</span>
                             <button
                               type="button"
+                              onClick={(e) => { e.stopPropagation(); setSharingProject({ id: project.id, name: project.name }) }}
+                              title={t('shareProject')}
+                              aria-label={t('shareProject')}
+                              className="flex-shrink-0 rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-accent-light)] hover:text-[var(--color-accent)] transition-colors"
+                            >
+                              <Share2 className="h-3 w-3" />
+                            </button>
+                            <button
+                              type="button"
                               onClick={(e) => { e.stopPropagation(); setActionError(null); setPendingDelete({ kind: 'project', id: project.id, name: project.name }) }}
                               title={t('deleteProject')}
                               aria-label={t('deleteProject')}
@@ -490,6 +503,17 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
             )}
           </div>
         </>
+      )}
+
+      {sharingProject && (
+        <ShareProjectModal
+          projectId={sharingProject.id}
+          projectName={sharingProject.name}
+          events={events
+            .filter((e) => e.project_id === sharingProject.id)
+            .map((e) => ({ id: e.id, name: e.name }))}
+          onClose={() => setSharingProject(null)}
+        />
       )}
     </div>
   )

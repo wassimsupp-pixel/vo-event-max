@@ -15,13 +15,41 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 
-from dependencies import get_current_user, get_supabase_client, require_role, verify_event_access
+from dependencies import STAFF_ROLES, get_current_user, get_supabase_client, require_role, verify_event_access
 from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse, ProjectCreate, ProjectResponse
 from services import deletion_service
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _memberships_by_project(supabase: Client, user_id: str) -> dict[str, dict] | None:
+    """
+    All sharing rows of a user, keyed by project_id. Returns None when the
+    sharing migration (003) has not been applied yet, so callers keep the
+    legacy org-wide behaviour instead of hiding everything.
+    """
+    try:
+        res = (
+            supabase.table("project_members")
+            .select("project_id, access_level, event_ids")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return {m["project_id"]: m for m in (res.data or [])}
+    except Exception as exc:
+        if "42P01" in str(exc) or "project_members" in str(exc):
+            return None
+        logger.error("Failed to load memberships: %s", exc)
+        return {}
+
+
+def _shared_project_ids(supabase: Client, user_id: str) -> set[str] | None:
+    memberships = _memberships_by_project(supabase, user_id)
+    if memberships is None:
+        return None
+    return set(memberships.keys())
 
 
 @router.post(
@@ -68,7 +96,8 @@ async def list_projects(
     supabase: Client = Depends(get_supabase_client),
 ) -> list[ProjectResponse]:
     """
-    List all projects for the caller's organization.
+    List projects for the caller: staff (admin/pm) see every org project;
+    other users only see projects shared with them (project_members).
     """
     org_id = current_user["org_id"]
     try:
@@ -85,7 +114,13 @@ async def list_projects(
             detail="Failed to retrieve projects.",
         ) from exc
 
-    return [ProjectResponse(**row) for row in res.data]
+    rows = res.data or []
+    if current_user.get("role") not in STAFF_ROLES:
+        shared = _shared_project_ids(supabase, current_user["id"])
+        if shared is not None:                     # None = migration not applied yet
+            rows = [r for r in rows if r["id"] in shared]
+
+    return [ProjectResponse(**row) for row in rows]
 
 
 
@@ -172,7 +207,7 @@ async def update_event(
 
     Only ``admin`` and ``pm`` roles may update events.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     updates = body.model_dump(mode="json", exclude_none=True)
     if not updates:
@@ -218,7 +253,7 @@ async def delete_event(
     Only ``admin`` and ``pm`` roles may delete. Access is checked against the
     caller's organisation first.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
     try:
         deletion_service.delete_event(supabase, event_id)
     except Exception as exc:
@@ -279,7 +314,9 @@ async def list_events(
     supabase: Client = Depends(get_supabase_client),
 ) -> list[EventResponse]:
     """
-    List all events for the caller's organization.
+    List events for the caller: staff (admin/pm) see every org event; other
+    users only see events of projects shared with them — and when the share
+    is restricted to specific events, only those.
     """
     org_id = current_user["org_id"]
     try:
@@ -296,5 +333,20 @@ async def list_events(
             detail="Failed to retrieve events.",
         ) from exc
 
-    return [EventResponse(**row) for row in res.data]
+    rows = res.data or []
+    if current_user.get("role") not in STAFF_ROLES:
+        memberships = _memberships_by_project(supabase, current_user["id"])
+        if memberships is not None:                # None = migration not applied yet
+            filtered = []
+            for r in rows:
+                m = memberships.get(r.get("project_id"))
+                if not m:
+                    continue
+                restricted = m.get("event_ids")
+                if restricted and r["id"] not in restricted:
+                    continue
+                filtered.append(r)
+            rows = filtered
+
+    return [EventResponse(**row) for row in rows]
 

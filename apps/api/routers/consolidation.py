@@ -57,7 +57,7 @@ async def trigger_consolidation(
 
     **Prerequisites**: At least one file for this event must have ``import_status=mapped``.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # Check that at least one mapped or processed file exists
     mapped_files = (
@@ -283,7 +283,7 @@ async def resolve_exception(
     context_data = exception.get("context_data") or {}
 
     # Verify event access
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     # 2. Mark exception as resolved
     try:

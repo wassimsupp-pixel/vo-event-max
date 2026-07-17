@@ -75,7 +75,7 @@ async def update_flight(
         )
 
     event_id = existing.data["event_id"]
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     payload = body.model_dump(exclude_none=True)
     user_id = current_user["id"]
@@ -113,7 +113,7 @@ async def extract_flights(
     """
     Scan mapped FCM source records linked to participants and extract flight details.
     """
-    await verify_event_access(event_id, current_user, supabase)
+    await verify_event_access(event_id, current_user, supabase, write=True)
 
     fcm_files = (
         supabase.table("uploaded_files")
