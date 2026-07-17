@@ -5,8 +5,8 @@ agent, campaign generation).
 
 Provider policy (first usable wins, automatic fallback on failure):
   1. NVIDIA NIM (env ``NVIDIA_API_KEY``) — used FIRST. Text reasoning (mapping,
-     fusion, analysis) via Mistral ``mistralai/mistral-nemotron``; photo/PDF
-     vision (event posters) via ``meta/llama-3.2-90b-vision-instruct``.
+     fusion, analysis) via ``meta/llama-3.3-70b-instruct``; photo/PDF vision
+     (event posters) via ``meta/llama-3.2-90b-vision-instruct``.
      OpenAI-compatible endpoint.
   2. OpenAI (env ``OPENAI_API_KEY``, gpt-4o-mini) — vision-capable fallback.
   3. Google Gemini (env ``GEMINI_API_KEY``, gemini-1.5-flash) — final fallback.
@@ -31,7 +31,11 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-nemotron")
+# Text model for mapping / fusion / analysis. Llama 3.3 70B is far stronger than
+# mistral-nemotron on structured extraction yet stays fast (~16s) and reliable
+# on JSON — the 675B/397B flagships time out, so they're unusable in the
+# upload-time mapping path. Override with NVIDIA_MODEL.
+_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
 # Vision model for event photo/PDF analysis (Pixtral is not available on the
 # integrate endpoint; Llama 3.2 90B Vision is and is confirmed working).
 _NVIDIA_VISION_MODEL = os.getenv("NVIDIA_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct")
