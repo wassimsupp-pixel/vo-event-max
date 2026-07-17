@@ -636,6 +636,46 @@ def _is_real_person(nd: dict[str, Any]) -> bool:
     return True
 
 
+async def auto_map_and_consolidate(
+    file_id: str,
+    event_id: str,
+    columns: list,
+    sample_rows: list,
+    user_id: str,
+    supabase: Client,
+) -> None:
+    """
+    Background job kicked off right after upload: AI-map the file (slow on the
+    free tier — hence off the request path), mark it mapped, then consolidate so
+    its people fuse with the other files. Keeps the upload endpoint instant.
+    """
+    from services.mapping_service import build_auto_mapping
+    try:
+        # Respect a mapping the user may have confirmed in the meantime — only
+        # auto-map while the file is still 'pending' (no mapping yet).
+        cur = supabase.table("uploaded_files").select("import_status").eq("id", file_id).single().execute()
+        if (cur.data or {}).get("import_status") in ("pending", None):
+            mapping = build_auto_mapping(columns, sample_rows)
+            if not mapping:
+                logger.warning("Auto-map produced no mapping for file %s", file_id)
+                return
+            supabase.table("uploaded_files").update({
+                "column_mapping": mapping,
+                "import_status": "mapped",
+            }).eq("id", file_id).execute()
+            logger.info("Auto-mapped file %s: %d/%d columns", file_id, len(mapping), len(columns))
+    except Exception as exc:
+        logger.error("Background auto-mapping failed for file %s: %s", file_id, exc)
+        return
+
+    try:
+        run_id = start_consolidation_if_idle(event_id, user_id, supabase)
+        if run_id:
+            await run_consolidation(event_id, run_id, user_id, supabase)
+    except Exception as exc:
+        logger.error("Background consolidation after upload failed: %s", exc)
+
+
 def start_consolidation_if_idle(event_id: str, user_id: str, supabase: Client) -> Optional[str]:
     """
     Create a consolidation run for the event UNLESS one is already in progress

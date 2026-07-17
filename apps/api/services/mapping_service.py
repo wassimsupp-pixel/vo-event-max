@@ -580,7 +580,9 @@ def ai_refine_mapping(
             "fields, and omit any column you are not confident about. Never map a column to "
             "'passport_expiry' or 'date_of_birth' unless its NAME clearly says so."
         )
-        data = ai_service.ai_json(prompt)
+        # Bounded: heuristics + catch-all already produce a complete mapping;
+        # the AI only refines ambiguous columns, so it must not stall the run.
+        data = ai_service.ai_json(prompt, timeout_s=20.0)
         if not isinstance(data, dict):
             return {}
 

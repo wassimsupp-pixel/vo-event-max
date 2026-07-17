@@ -26,6 +26,7 @@ router = APIRouter()
 )
 async def get_report_analysis(
     event_id: str,
+    ai_summary: bool = False,
     current_user: dict[str, Any] = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client),
 ) -> dict[str, Any]:
@@ -33,9 +34,11 @@ async def get_report_analysis(
     Intelligent data-quality analysis (feedback §15): weighted quality score,
     per-dimension breakdown, region/category distributions, missing-info counts,
     and prioritized recommendations, computed from the consolidated master list.
+    The AI narrative is generated only with ``?ai_summary=true`` (the dashboard
+    omits it to stay fast).
     """
     await verify_event_access(event_id, current_user, supabase)
-    return master_list_service.build_analysis(supabase, event_id)
+    return master_list_service.build_analysis(supabase, event_id, include_ai_summary=ai_summary)
 
 
 @router.get(

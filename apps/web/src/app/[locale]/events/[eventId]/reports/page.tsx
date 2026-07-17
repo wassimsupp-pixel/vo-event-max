@@ -52,6 +52,7 @@ export default function ReportsPage() {
   const fetchData = async () => {
     try {
       setLoading(true)
+      // Fast path: analysis WITHOUT the AI narrative (never blocks the page).
       const [sumData, nightData, analysisData] = await Promise.all([
         api.reports.getSummary(eventId),
         api.reports.getHotelNights(eventId),
@@ -60,6 +61,12 @@ export default function ReportsPage() {
       setSummary(sumData)
       setHotelNights(nightData)
       setAnalysis(analysisData)
+      // Then fetch the AI narrative in the background and merge it in when ready.
+      api.reports.getAnalysis(eventId, true)
+        .then((full) => {
+          if (full?.ai_summary) setAnalysis((prev: typeof analysisData) => prev ? { ...prev, ai_summary: full.ai_summary } : full)
+        })
+        .catch(() => { /* narrative optional */ })
     } catch (err) {
       console.error('Failed to fetch report statistics', err)
     } finally {

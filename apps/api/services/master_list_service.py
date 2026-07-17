@@ -284,11 +284,13 @@ def _passport_status(expiry: Any) -> Optional[str]:
     return None
 
 
-def build_analysis(supabase: Client, event_id: str) -> dict[str, Any]:
+def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = False) -> dict[str, Any]:
     """
     Data-quality analysis over the master list: a weighted quality score,
     per-dimension breakdown, distributions (region / category), and concrete
-    recommendations. An optional AI narrative summarizes it (feedback §15).
+    recommendations (all computed WITHOUT AI, so it is fast). The AI narrative
+    is generated only when ``include_ai_summary`` is set — off by default so the
+    dashboard never waits on a slow model.
     """
     rows = build_master_rows(supabase, event_id)
     total = len(rows)
@@ -383,7 +385,7 @@ def build_analysis(supabase: Client, event_id: str) -> dict[str, Any]:
         "by_region": by_region,
         "by_category": by_category,
         "recommendations": recommendations,
-        "ai_summary": _ai_summary(total, quality_score, dimensions, recommendations),
+        "ai_summary": _ai_summary(total, quality_score, dimensions, recommendations) if include_ai_summary else None,
     }
     return analysis
 
@@ -403,7 +405,9 @@ def _ai_summary(total: int, score: int, dimensions: dict, recs: list[dict]) -> O
         Dimensions (%): {dimensions}
         Points d'attention: {[{'quoi': r['text'], 'nombre': r['count']} for r in recs]}
         """
-        return ai_service.ai_text(prompt)
+        # Short timeout: this runs on the interactive Reports page — a slow model
+        # must never hang it. No summary is better than a frozen page.
+        return ai_service.ai_text(prompt, timeout_s=15.0)
     except Exception as exc:
         logger.warning("AI quality summary failed: %s", exc)
         return None

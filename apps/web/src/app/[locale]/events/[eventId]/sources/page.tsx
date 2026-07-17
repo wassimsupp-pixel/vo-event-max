@@ -439,26 +439,24 @@ export default function SourcesPage() {
 
         {isMappingMode && uploadResponse ? (
           <Card className="p-6 border-[var(--color-border)] shadow-[var(--shadow-card)] space-y-6">
-            {uploadResponse.import_status === 'mapped' && (
-              <div className="flex items-start gap-3 rounded-lg border border-[var(--color-success)]/30 bg-[var(--color-success-light)] px-4 py-3">
-                <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--color-success)] mt-0.5" />
-                <div className="text-sm">
-                  <p className="font-semibold text-[var(--color-text-primary)]">
-                    Analyse & mapping automatiques terminés — consolidation lancée.
-                  </p>
-                  <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
-                    Les informations de cette personne sont fusionnées avec les autres fichiers.
-                    Vous pouvez ajuster le mapping ci-dessous si besoin, ou{' '}
-                    <button
-                      onClick={() => router.push(`/${locale}/events/${eventId}/master-list`)}
-                      className="font-semibold text-[var(--color-accent)] underline"
-                    >
-                      aller à la master list
-                    </button>.
-                  </p>
-                </div>
+            <div className="flex items-start gap-3 rounded-lg border border-[var(--color-success)]/30 bg-[var(--color-success-light)] px-4 py-3">
+              <CheckCircle2 className="h-5 w-5 shrink-0 text-[var(--color-success)] mt-0.5" />
+              <div className="text-sm">
+                <p className="font-semibold text-[var(--color-text-primary)]">
+                  Fichier importé — analyse & consolidation en cours en arrière-plan.
+                </p>
+                <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
+                  Le mapping est détecté automatiquement et les informations sont fusionnées avec les
+                  autres fichiers. Vous pouvez ajuster le mapping ci-dessous si besoin, ou{' '}
+                  <button
+                    onClick={() => router.push(`/${locale}/events/${eventId}/master-list`)}
+                    className="font-semibold text-[var(--color-accent)] underline"
+                  >
+                    aller à la master list
+                  </button>.
+                </p>
               </div>
-            )}
+            </div>
             <div className="flex items-center justify-between border-b pb-4">
               <div>
                 <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">

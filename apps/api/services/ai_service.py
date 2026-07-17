@@ -74,7 +74,7 @@ def ai_available() -> bool:
     return bool(_nvidia_key()) or bool(_openai_key()) or GEMINI_AVAILABLE
 
 
-def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
+def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None) -> Optional[str]:
     """
     NVIDIA NIM chat completion (OpenAI-compatible). Text uses the Mistral text
     model; an image uses the vision model with a longer timeout. Returns None on
@@ -92,11 +92,11 @@ def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
             {"type": "image_url", "image_url": {"url": f"data:{mime_type or 'image/png'};base64,{b64}"}},
         ]
         model = _NVIDIA_VISION_MODEL
-        timeout = 120.0
+        timeout = timeout_s or 120.0
     else:
         content = prompt
         model = _NVIDIA_MODEL
-        timeout = 45.0
+        timeout = timeout_s or 45.0
 
     try:
         resp = httpx.post(
@@ -120,7 +120,7 @@ def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
         return None
 
 
-def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
+def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None) -> Optional[str]:
     global _openai_disabled
     key = _openai_key()
     if not key:
@@ -141,7 +141,7 @@ def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0,
             },
-            timeout=45.0,
+            timeout=timeout_s or 45.0,
         )
         if resp.status_code in (401, 403):
             logger.error("OpenAI key rejected (%s) — falling back to Gemini for this process.", resp.status_code)
@@ -154,7 +154,7 @@ def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
         return None
 
 
-def _gemini_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str]) -> Optional[str]:
+def _gemini_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None) -> Optional[str]:
     if not GEMINI_AVAILABLE:
         return None
     try:
@@ -162,7 +162,8 @@ def _gemini_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
         parts: list[Any] = [prompt]
         if image_bytes is not None:
             parts.append({"mime_type": mime_type or "image/png", "data": image_bytes})
-        resp = model.generate_content(parts)
+        opts = {"timeout": timeout_s} if timeout_s else None
+        resp = model.generate_content(parts, request_options=opts) if opts else model.generate_content(parts)
         return (resp.text or "").strip()
     except Exception as exc:
         logger.warning("Gemini call failed: %s", exc)
@@ -173,15 +174,18 @@ def ai_text(
     prompt: str,
     image_bytes: Optional[bytes] = None,
     mime_type: Optional[str] = None,
+    timeout_s: Optional[float] = None,
 ) -> Optional[str]:
     """
     Run the prompt (optionally with an image) through the best available
     provider. Returns the raw text answer, or None when no provider succeeds.
+    ``timeout_s`` bounds each provider call — pass a short value on interactive
+    paths so a slow model never blocks the UI.
     """
     return (
-        _nvidia_complete(prompt, image_bytes, mime_type)
-        or _openai_complete(prompt, image_bytes, mime_type)
-        or _gemini_complete(prompt, image_bytes, mime_type)
+        _nvidia_complete(prompt, image_bytes, mime_type, timeout_s)
+        or _openai_complete(prompt, image_bytes, mime_type, timeout_s)
+        or _gemini_complete(prompt, image_bytes, mime_type, timeout_s)
     )
 
 
@@ -210,6 +214,7 @@ def ai_json(
     prompt: str,
     image_bytes: Optional[bytes] = None,
     mime_type: Optional[str] = None,
+    timeout_s: Optional[float] = None,
 ) -> Optional[Any]:
     """ai_text + JSON extraction. Returns the parsed object, or None."""
-    return strip_json(ai_text(prompt, image_bytes, mime_type))
+    return strip_json(ai_text(prompt, image_bytes, mime_type, timeout_s))

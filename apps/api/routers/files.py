@@ -184,42 +184,20 @@ async def upload_file(
     }
     canonical_fields_list = sorted(list(CANONICAL_FIELDS))
 
-    # FULLY AUTOMATIC mapping: confident heuristics + best-effort AI pass are
-    # applied immediately — the file lands ready to consolidate ('mapped').
-    # The mapping UI stays available to review or adjust.
+    # FULLY AUTOMATIC pipeline, but OFF the request path: the AI mapping (slow on
+    # the free tier) + consolidation run in the BACKGROUND so the upload returns
+    # instantly. The file lands 'pending'; the background task maps it and
+    # consolidates. The frontend polls the run for progress.
     import_status = "pending"
-    try:
-        auto_mapping = build_auto_mapping(columns, sample_rows)
-        if auto_mapping:
-            supabase.table("uploaded_files").update({
-                "column_mapping": auto_mapping,
-                "import_status": "mapped",
-            }).eq("id", file_id).execute()
-            import_status = "mapped"
-            logger.info(
-                "Auto-mapped file %s: %d/%d columns", file_id, len(auto_mapping), len(columns)
-            )
-            # FULLY AUTOMATIC pipeline: as soon as the file is mapped, kick off a
-            # consolidation so the master list is (re)built and this file's people
-            # are fused with the other files — no manual step. Guarded so several
-            # files dropped together don't spawn concurrent runs.
-            try:
-                auto_run_id = consolidation_service.start_consolidation_if_idle(
-                    event_id, current_user["id"], supabase
-                )
-                if auto_run_id:
-                    background_tasks.add_task(
-                        consolidation_service.run_consolidation,
-                        event_id=event_id,
-                        run_id=auto_run_id,
-                        user_id=current_user["id"],
-                        supabase=supabase,
-                    )
-                    logger.info("Auto-consolidation started after upload: run=%s event=%s", auto_run_id, event_id)
-            except Exception as exc:
-                logger.warning("Auto-consolidation trigger failed (manual run still possible): %s", exc)
-    except Exception as exc:
-        logger.warning("Auto-mapping failed for file %s (manual mapping still possible): %s", file_id, exc)
+    background_tasks.add_task(
+        consolidation_service.auto_map_and_consolidate,
+        file_id=file_id,
+        event_id=event_id,
+        columns=columns,
+        sample_rows=sample_rows,
+        user_id=current_user["id"],
+        supabase=supabase,
+    )
 
     return FileUploadResponse(
         file_id=uuid.UUID(file_id),

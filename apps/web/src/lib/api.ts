@@ -704,8 +704,8 @@ export const api = {
     async getHotelNights(eventId: string): Promise<any[]> {
       return request<any[]>(`/api/events/${eventId}/reports/hotel-nights`)
     },
-    async getAnalysis(eventId: string): Promise<any> {
-      return request<any>(`/api/events/${eventId}/reports/analysis`)
+    async getAnalysis(eventId: string, aiSummary = false): Promise<any> {
+      return request<any>(`/api/events/${eventId}/reports/analysis${aiSummary ? '?ai_summary=true' : ''}`)
     },
   },
 
