@@ -18,6 +18,7 @@ from typing import Any, Optional
 
 from supabase import Client
 
+from services import geo
 from services.mapping_service import CANONICAL_FIELDS
 
 logger = logging.getLogger(__name__)
@@ -201,7 +202,9 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         flist = sorted(flights_by_p.get(pid, []), key=lambda f: str(f.get("departure_time") or ""))
         flight_lines = []
         for f in flist:
-            route = f"{f.get('departure_airport') or '?'}→{f.get('arrival_airport') or '?'}"
+            dep = geo.city_name(f.get('departure_airport')) or '?'
+            arr = geo.city_name(f.get('arrival_airport')) or '?'
+            route = f"{dep}→{arr}"
             times = f"{_fmt_dt(f.get('departure_time'))}→{_fmt_dt(f.get('arrival_time'))}".strip("→")
             airline = (f.get("airline") or "").strip()
             num = (f.get("flight_number") or "").strip()

@@ -11,6 +11,7 @@ from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, verify_event_access
 from models.schemas import FlightResponse, FlightUpdate, MessageResponse
+from services import geo
 from services.audit_service import log_change
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,11 @@ async def list_flights(
         item = row.copy()
         item.pop("participants", None)
         item["participant_name"] = part_name
+        # Show full city names instead of IATA codes (ALG → Algiers).
+        if item.get("departure_airport"):
+            item["departure_airport"] = geo.city_name(item["departure_airport"])
+        if item.get("arrival_airport"):
+            item["arrival_airport"] = geo.city_name(item["arrival_airport"])
         results.append(FlightResponse(**item))
 
     return results
