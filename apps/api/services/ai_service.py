@@ -9,7 +9,8 @@ Provider policy (first usable wins, automatic fallback on failure):
      (event posters) via ``meta/llama-3.2-90b-vision-instruct``.
      OpenAI-compatible endpoint.
   2. OpenAI (env ``OPENAI_API_KEY``, gpt-4o-mini) — vision-capable fallback.
-  3. Google Gemini (env ``GEMINI_API_KEY``, gemini-1.5-flash) — final fallback.
+  3. Google Gemini (env ``GEMINI_API_KEY``, gemini-2.5-flash) — final fallback,
+     handles images and PDFs natively.
 
 An invalid key is detected once (401/403) and that provider is skipped for the
 rest of the process — no added latency on later calls. A slow or too-large
@@ -45,6 +46,7 @@ _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _OPENAI_MODEL = "gpt-4o-mini"
 _openai_disabled = False
 
+_GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_AVAILABLE = False
 try:
     import google.generativeai as genai
@@ -156,7 +158,7 @@ def _gemini_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
     if not GEMINI_AVAILABLE:
         return None
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel(_GEMINI_MODEL)
         parts: list[Any] = [prompt]
         if image_bytes is not None:
             parts.append({"mime_type": mime_type or "image/png", "data": image_bytes})

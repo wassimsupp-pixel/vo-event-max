@@ -41,20 +41,28 @@ def _airports() -> dict:
     return _IATA
 
 
-def city_name(value) -> str:
+def place_name(value) -> str:
     """
-    Return the full city name for a 3-letter IATA code; otherwise return the
-    value unchanged (it is already a city name, or an unknown code).
+    Expand a 3-letter IATA code to a readable name:
+      - a metropolitan CITY code (NYC, LON, PAR…) → the city name;
+      - an AIRPORT code (CDG, JFK…) → the full airport name
+        ('Charles de Gaulle International Airport').
+    Anything that is not a code (already a city name, unknown code) is returned
+    unchanged.
     """
     if value is None:
         return value
     s = str(value).strip()
     if len(s) != 3 or not s.isalpha():
-        return s                      # already a city name / not a code
+        return s                      # already a name / not a code
     key = s.upper()
-    if key in _METRO:
+    if key in _METRO:                 # city/metro code → city name
         return _METRO[key]
     entry = _airports().get(key)
-    if entry and entry.get("city"):
-        return entry["city"]
+    if entry:                         # airport code → airport name (city fallback)
+        return entry.get("name") or entry.get("city") or s
     return s                          # unknown code — leave as-is
+
+
+# Backwards-compatible alias.
+city_name = place_name
