@@ -512,6 +512,40 @@ def _parse_night_columns(raw: dict[str, Any], year: int):
     return booked[0].isoformat(), (booked[-1] + timedelta(days=1)).isoformat()
 
 
+# Corporate org-unit / form-label vocabulary: a "name" made (almost) entirely
+# of these words is a department header or a Yes/No cell, never a person
+# ("Commercial Operations", "Supply Chain/Logistics/Procurement", "R&D", "No").
+_ORG_WORDS = {
+    "innovation", "country", "manager", "supply", "chain", "logistics",
+    "procurement", "comex", "it", "r&d", "rd", "r", "d", "regulatory",
+    "affairs", "bidding", "design", "administration", "office", "commercial",
+    "excellence", "operations", "operation", "demand", "planning", "technical",
+    "service", "services", "field", "clinical", "management", "general",
+    "marketing", "finance", "sales", "legal", "quality", "hr", "human",
+    "resources", "engineering", "medical", "customer", "corporate", "business",
+    "unit", "function", "department", "specialist", "director", "team",
+    "no", "yes", "na", "n/a", "tbc", "tbd",
+}
+
+
+def _is_junk_name(first: Any, last: Any, traveler: Any = "") -> bool:
+    """True when the 'name' is an org unit / role / form label, not a person."""
+    combined = f"{first or ''} {last or ''} {traveler or ''}".strip()
+    if not combined:
+        return False
+    if _re.fullmatch(r"[\d\s/.\-]+", combined):
+        return True            # purely numeric (subtotal row)
+    if _ROLE_NOISE.search(combined):
+        return True            # "… Total", "Percussion facilitator", …
+    tokens = [t for t in _re.split(r"[\s/,&\-]+", combined.lower()) if t]
+    if not tokens:
+        return False
+    org = sum(1 for t in tokens if t in _ORG_WORDS)
+    # All tokens are org vocabulary, or nearly all on multi-word labels
+    # ("Japan Management/General Affairs" → 3/4).
+    return org == len(tokens) or (len(tokens) >= 3 and org / len(tokens) >= 0.75)
+
+
 def _is_real_person(nd: dict[str, Any]) -> bool:
     """False for parasitic rows (subtotals, job-title labels, fully-empty)."""
     first = (nd.get("first_name") or "").strip()
@@ -520,13 +554,10 @@ def _is_real_person(nd: dict[str, Any]) -> bool:
     traveler = (nd.get("traveler_name") or "").strip()
     if not any([first, last, email, traveler]):
         return False           # no identity at all
+    if _is_junk_name(first, last, traveler):
+        return False           # a department label is not a person, email or not
     if email:
         return True            # a real email → trust it's a person
-    combined = f"{first} {last} {traveler}".strip()
-    if _re.fullmatch(r"[\d\s/.\-]+", combined):
-        return False           # purely numeric (subtotal row)
-    if _ROLE_NOISE.search(combined):
-        return False           # "… Total", "Percussion facilitator", …
     return True
 
 
@@ -592,6 +623,11 @@ async def run_consolidation(
 
         registrations: list[ParticipantRecord] = []
         fcm_records:   list[ParticipantRecord] = []
+        # Every record id (re)written THIS run + the files actually parsed:
+        # anything else in source_records is a stale copy from an earlier run
+        # (records used to be re-inserted with random UUIDs) and gets purged.
+        fresh_record_ids: set[str] = set()
+        parsed_file_ids: set[str] = set()
 
         # ---------------------------------------------------------------
         # 3. Parse files, insert source_records, build in-memory lists
@@ -636,8 +672,11 @@ async def run_consolidation(
                     event_id=event_id,
                     df_rows=raw_rows,
                     mapping=sheet_mapping,
+                    sheet_key=str(si),
                 )
                 stats["total_source_records"] += len(inserted_ids)
+                fresh_record_ids.update(inserted_ids)
+                parsed_file_ids.add(file_id)
                 if si == 0:
                     primary_ids = inserted_ids
 
@@ -867,6 +906,29 @@ async def run_consolidation(
             except Exception as exc:
                 logger.error("Failed to bulk insert duplicate email exceptions: %s", exc)
         stats["exceptions_count"] += dup_count
+
+        # ---------------------------------------------------------------
+        # 6a-1. Purge stale source-record copies from earlier runs (records
+        #       used to be re-inserted with random UUIDs each run — the stale
+        #       copies carried pre-repair data: junk passports, inflated
+        #       hotel counts). Participants were repointed in step 5.
+        # ---------------------------------------------------------------
+        try:
+            stats["stale_records_purged"] = cleanup_stale_source_records(
+                event_id, fresh_record_ids, parsed_file_ids, supabase
+            )
+        except Exception as exc:
+            logger.warning("Stale source-record cleanup failed: %s", exc)
+
+        # ---------------------------------------------------------------
+        # 6a-2. Purge junk-name participants ("Commercial Operations", "R&D")
+        #       created from department columns; their records are unlinked
+        #       and relinked to the right person (via email) in 6b.
+        # ---------------------------------------------------------------
+        try:
+            stats["junk_participants_purged"] = purge_junk_participants(event_id, supabase)
+        except Exception as exc:
+            logger.warning("Junk participant purge failed: %s", exc)
 
         # ---------------------------------------------------------------
         # 6a-bis. Sever contaminated links from earlier runs (junk codes,
@@ -1208,6 +1270,12 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             rec_first = parts[0]
             rec_last = parts[1]
 
+        # A department label mistaken for a name ("Commercial Operations",
+        # "R&D") is NOT an identity: ignore it entirely so the row's email can
+        # match its true owner, and no junk client is ever created from it.
+        if _is_junk_name(rec_first, rec_last, rec_traveler):
+            rec_first = rec_last = rec_traveler = ""
+
         # Order-insensitive matching downstream (token_sort_ratio) tolerates a
         # wrong first/last guess.
         rec_full_name = f"{rec_first} {rec_last}".strip()
@@ -1365,6 +1433,127 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
             logger.error("Failed to bulk update participant_id on source_records: %s", exc)
 
 
+def cleanup_stale_source_records(
+    event_id: str,
+    fresh_ids: set[str],
+    parsed_file_ids: set[str],
+    supabase: Client,
+) -> int:
+    """
+    Delete source_records NOT (re)written by this run. Earlier versions
+    re-INSERTED every row with a random UUID on each consolidation, so the table
+    stacked one full copy per run — stale copies kept pre-repair normalized_data
+    (junk passport_expiry…) and inflated every count. Runs after step 5 so
+    participants' registration_source_id already points at the fresh rows.
+    Only files parsed THIS run are touched. Stale exceptions referencing the
+    strays are dropped first (FK). Returns the number of records deleted.
+    """
+    if not fresh_ids or not parsed_file_ids:
+        return 0
+    strays: list[str] = []
+    offset = 0
+    while True:
+        try:
+            res = (
+                supabase.table("source_records")
+                .select("id, file_id")
+                .eq("event_id", event_id)
+                .range(offset, offset + 999)
+                .execute()
+            )
+        except Exception as exc:
+            logger.error("Failed to page source records for stale cleanup: %s", exc)
+            return 0
+        data = res.data or []
+        strays.extend(r["id"] for r in data if r["id"] not in fresh_ids and r.get("file_id") in parsed_file_ids)
+        if len(data) < 1000:
+            break
+        offset += 1000
+    if not strays:
+        return 0
+
+    deleted = 0
+    for i in range(0, len(strays), 100):
+        chunk = strays[i:i + 100]
+        try:
+            supabase.table("exceptions").delete().in_("source_record_id", chunk).execute()
+        except Exception as exc:
+            logger.warning("Failed to drop stale exceptions chunk: %s", exc)
+        try:
+            supabase.table("source_records").delete().in_("id", chunk).execute()
+            deleted += len(chunk)
+        except Exception:
+            # A row still FK-referenced must not keep the whole chunk alive.
+            for rid in chunk:
+                try:
+                    supabase.table("source_records").delete().eq("id", rid).execute()
+                    deleted += 1
+                except Exception as exc2:
+                    logger.warning("Stale record %s still referenced, kept: %s", rid, exc2)
+    logger.info("Purged %d stale source record(s) for event %s", deleted, event_id)
+    return deleted
+
+
+def purge_junk_participants(event_id: str, supabase: Client) -> int:
+    """
+    Delete participants whose 'name' is an org unit / form label ("Commercial
+    Operations", "R&D", "No") — created when a department column was mistaken
+    for a person name. Their child rows are unlinked (source_records) or
+    dropped (flights/nights/transfers/activities/exceptions) so the matcher can
+    relink the records to the right person via their email.
+    """
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        res = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, company, phone")
+            .eq("event_id", event_id)
+            .range(offset, offset + 999)
+            .execute()
+        )
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    junk = [
+        p["id"] for p in parts
+        if _is_junk_name(p.get("first_name"), p.get("last_name"))
+        and not (p.get("email") or "").strip()
+        and not (p.get("company") or "").strip()
+        and not (p.get("phone") or "").strip()
+    ]
+    if not junk:
+        return 0
+
+    deleted = 0
+    for i in range(0, len(junk), 100):
+        chunk = junk[i:i + 100]
+        try:
+            supabase.table("source_records").update({"participant_id": None}).in_("participant_id", chunk).execute()
+        except Exception as exc:
+            logger.warning("Unlink records of junk participants failed: %s", exc)
+        for table in ("flights", "hotel_nights", "transfers", "participant_activities", "exceptions", "communications"):
+            try:
+                supabase.table(table).delete().in_("participant_id", chunk).execute()
+            except Exception as exc:
+                logger.warning("Delete %s of junk participants failed: %s", table, exc)
+        try:
+            supabase.table("participants").delete().in_("id", chunk).execute()
+            deleted += len(chunk)
+        except Exception:
+            for pid in chunk:
+                try:
+                    supabase.table("participants").delete().eq("id", pid).execute()
+                    deleted += 1
+                except Exception as exc2:
+                    logger.warning("Delete junk participant %s failed: %s", pid, exc2)
+    logger.info("Purged %d junk-name participant(s) for event %s", deleted, event_id)
+    return deleted
+
+
 def sanitize_participant_links(event_id: str, supabase: Client) -> int:
     """
     Sever source_record → participant links that are clearly WRONG. Contaminated
@@ -1421,6 +1610,8 @@ def sanitize_participant_links(event_id: str, supabase: Client) -> int:
             if not info:
                 continue
             nd = rec.get("normalized_data") or {}
+            if _is_junk_name(nd.get("first_name"), nd.get("last_name"), nd.get("traveler_name")):
+                continue    # a department label contradicts nothing — the email link is right
             toks: set[str] = set()
             for k in ("first_name", "last_name", "traveler_name", "full_name", "name"):
                 v = nd.get(k)
@@ -1784,6 +1975,11 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     hotel_name = data.get("hotel_name")
                     if not hotel_name or str(hotel_name).strip().lower() in ("yes", "no", "oui", "non", "x", "1", "0", "true", "false"):
                         continue
+
+                    # A room assignment counts as "accommodation covered" even
+                    # when the roster gives no parsable dates (nights are only
+                    # created below when dates are known).
+                    participants_has_hotel.add(part_id)
 
                     # Check / Create Hotel Property
                     if hotel_name not in hotel_map:

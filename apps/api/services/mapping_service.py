@@ -172,6 +172,7 @@ def parse_and_insert_source_records(
     event_id: str,
     df_rows: list[dict[str, Any]],
     mapping: dict[str, str],
+    sheet_key: str = "0",
 ) -> list[str]:
     """
     Parse raw DataFrame rows, apply mapping + normalisation, and bulk-insert
@@ -201,8 +202,12 @@ def parse_and_insert_source_records(
         mapped = apply_mapping(cleaned_raw_row, mapping)
         normalised = normalise_fields(mapped)
         cleaned_normalised = clean_nans(normalised)
-        
-        record_id = str(uuid.uuid4())
+
+        # DETERMINISTIC id per (file, sheet, row): re-consolidations UPSERT the
+        # same rows instead of stacking a fresh full copy per run. Stale copies
+        # kept pre-repair normalized_data (junk passports…) and inflated every
+        # count. participant_id is NOT in the payload, so links survive updates.
+        record_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"vo-sr:{file_id}:{sheet_key}:{i}"))
         records_to_insert.append(
             {
                 "id": record_id,
@@ -214,23 +219,23 @@ def parse_and_insert_source_records(
             }
         )
 
-    # Batch insert in chunks to avoid Supabase request size limits
+    # Batch upsert in chunks to avoid Supabase request size limits
     chunk_size = 200
     inserted_ids: list[str] = []
     for chunk_start in range(0, len(records_to_insert), chunk_size):
         chunk = records_to_insert[chunk_start : chunk_start + chunk_size]
         try:
-            result = supabase.table("source_records").insert(chunk).execute()
+            result = supabase.table("source_records").upsert(chunk).execute()
             inserted_ids.extend(row["id"] for row in result.data)
         except Exception as exc:
             logger.error(
-                "Failed to insert source_records chunk [%d:%d] for file %s: %s",
+                "Failed to upsert source_records chunk [%d:%d] for file %s: %s",
                 chunk_start, chunk_start + chunk_size, file_id, exc,
             )
             raise
 
     logger.info(
-        "Inserted %d source_records for file_id=%s event_id=%s",
+        "Upserted %d source_records for file_id=%s event_id=%s",
         len(inserted_ids), file_id, event_id,
     )
     return inserted_ids
