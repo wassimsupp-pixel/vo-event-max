@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2, Plus, X } from 'lucide-react'
+import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2, Plus, X, ClipboardCheck } from 'lucide-react'
 import type { UploadedFile, FileUploadResponse } from '@/lib/api'
 import { api } from '@/lib/api'
 
@@ -286,6 +286,55 @@ export default function SourcesPage() {
     loadFiles()
   }, [loadFiles])
 
+  // While a file is still being auto-mapped in the background ('pending'), poll
+  // so the list reflects its next state (review / processed) without a manual
+  // refresh. Stops as soon as nothing is pending.
+  useEffect(() => {
+    const hasPending = importedFiles.some((f) => f.status === 'pending')
+    if (!hasPending) return
+    const timer = setInterval(loadFiles, 8000)
+    return () => clearInterval(timer)
+  }, [importedFiles, loadFiles])
+
+  const [reviewFileId, setReviewFileId] = useState<string | null>(null)
+
+  // Open the mapping editor for a file the engine flagged as a brand-new format
+  // ('review'): load its columns + auto-detected mapping so the user confirms it
+  // once. After confirmation the layout is memorised and never asked again.
+  const openReview = async (file: UploadedFile) => {
+    setReviewFileId(file.id)
+    setUploadError(null)
+    try {
+      const preview = await api.files.preview(file.id)
+      const synthetic: FileUploadResponse = {
+        file_id: file.id,
+        filename: file.filename,
+        row_count: preview.total_rows,
+        columns: preview.columns,
+        uploaded_at: file.uploaded_at,
+        import_status: 'review',
+        mapping_suggestions: preview.mapping_suggestions,
+        canonical_fields: preview.canonical_fields,
+      }
+      const initialMapping: Record<string, string> = {}
+      Object.entries(preview.mapping_suggestions || {}).forEach(([col, sug]) => {
+        if (sug.suggested_field && sug.confidence >= 0.5) initialMapping[col] = sug.suggested_field
+      })
+      setUploadingType(file.source_type)
+      setSelectedFile({ name: file.filename } as File)
+      setUploadResponse(synthetic)
+      setMapping(initialMapping)
+      setExtraColumns([])
+      setIsMappingMode(true)
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : 'Impossible de charger le fichier à valider.')
+    } finally {
+      setReviewFileId(null)
+    }
+  }
+
+  const reviewCount = importedFiles.filter((f) => f.status === 'review').length
+
   const handleDeleteFile = async (fileId: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce fichier ? cette action est irréversible.')) {
       return
@@ -444,6 +493,24 @@ export default function SourcesPage() {
             >
               <Upload className="h-4 w-4" /> Importer un fichier
             </button>
+          </div>
+        )}
+
+        {/* One-time review prompt: a brand-new file format needs its mapping
+            confirmed once. Recognised formats stay 100% automatic. */}
+        {!isMappingMode && reviewCount > 0 && (
+          <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-amber-300 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <ClipboardCheck className="h-5 w-5 flex-shrink-0 text-amber-600" />
+              <div>
+                <p className="text-sm font-semibold text-amber-900">
+                  {reviewCount} fichier{reviewCount > 1 ? 's' : ''} au format inédit à valider une fois
+                </p>
+                <p className="text-xs text-amber-800">
+                  Ce format n&apos;a jamais été vu : confirmez son mapping une seule fois, il sera ensuite reconnu automatiquement.
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -886,6 +953,10 @@ export default function SourcesPage() {
                                 <Badge className="bg-red-100 text-[var(--color-danger)] border-0 flex items-center gap-1 w-fit">
                                   <AlertTriangle className="h-3 w-3" /> Erreur
                                 </Badge>
+                              ) : file.status === 'review' ? (
+                                <Badge className="bg-amber-50 text-amber-700 border-0 flex items-center gap-1 w-fit">
+                                  <ClipboardCheck className="h-3 w-3" /> À valider
+                                </Badge>
                               ) : file.status === 'pending' ? (
                                 <Badge className="bg-yellow-50 text-yellow-700 border-0 flex items-center gap-1 w-fit">
                                   <Loader2 className="h-3 w-3 animate-spin" /> En attente
@@ -897,19 +968,36 @@ export default function SourcesPage() {
                               )}
                             </td>
                             <td className="py-3.5 text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="text-[var(--color-danger)] hover:text-[var(--color-danger)] hover:bg-red-50"
-                                onClick={() => handleDeleteFile(file.id)}
-                                disabled={deletingFileId === file.id}
-                              >
-                                {deletingFileId === file.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-4 w-4" />
+                              <div className="flex items-center justify-end gap-1">
+                                {file.status === 'review' && (
+                                  <Button
+                                    size="sm"
+                                    className="bg-amber-500 hover:bg-amber-600 text-white flex items-center gap-1"
+                                    onClick={() => openReview(file)}
+                                    disabled={reviewFileId === file.id}
+                                  >
+                                    {reviewFileId === file.id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <ClipboardCheck className="h-3.5 w-3.5" />
+                                    )}
+                                    Valider
+                                  </Button>
                                 )}
-                              </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-[var(--color-danger)] hover:text-[var(--color-danger)] hover:bg-red-50"
+                                  onClick={() => handleDeleteFile(file.id)}
+                                  disabled={deletingFileId === file.id}
+                                >
+                                  {deletingFileId === file.id ? (
+                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                  )}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

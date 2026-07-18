@@ -15,6 +15,7 @@ import {
   Bus,
   Mail,
   AlertTriangle,
+  GitMerge,
   BarChart3,
   Settings,
   Zap,
@@ -45,13 +46,14 @@ function getNavItems(eventId: string, locale: string, userRole: string, exceptio
     { key: 'transfers', href: `${base}/transfers`, icon: Bus },
     { key: 'communications', href: `${base}/communications`, icon: Mail },
     { key: 'exceptions', href: `${base}/exceptions`, icon: AlertTriangle, badge: exceptionCount > 0 ? String(exceptionCount) : undefined },
+    { key: 'matchReview', href: `${base}/match-review`, icon: GitMerge },
     { key: 'reports', href: `${base}/reports`, icon: BarChart3 },
     { key: 'settings', href: `/${locale}/settings`, icon: Settings },
   ]
 
   if (userRole.toLowerCase() === 'client') {
     // Hide sources, exceptions, settings, reports, and communications
-    return items.filter(item => !['sources', 'exceptions', 'settings', 'reports', 'communications'].includes(item.key))
+    return items.filter(item => !['sources', 'exceptions', 'matchReview', 'settings', 'reports', 'communications'].includes(item.key))
   }
   return items
 }

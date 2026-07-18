@@ -110,8 +110,34 @@ export interface UploadedFile {
   filename: string
   source_type: string
   row_count: number
-  status: 'imported' | 'pending' | 'error' | 'mapped'
+  status: 'imported' | 'pending' | 'error' | 'mapped' | 'review'
   uploaded_at: string
+}
+
+export interface MatchCandidateParty {
+  nom?: string
+  email?: string | null
+  telephone?: string | null
+  societe?: string | null
+  nationalite?: string | null
+}
+
+export interface MatchCandidate {
+  id: string
+  event_id: string
+  participant_a_id?: string | null
+  participant_b_id?: string | null
+  name_a?: string | null
+  name_b?: string | null
+  details_a?: MatchCandidateParty | null
+  details_b?: MatchCandidateParty | null
+  deterministic_score?: number | null
+  ai_recommendation?: 'fusionner' | 'separer' | 'incertain' | null
+  ai_justification?: string | null
+  ai_confidence?: number | null
+  human_decision?: string | null
+  status: string
+  created_at?: string | null
 }
 
 export interface ConsolidationRun {
@@ -847,6 +873,20 @@ export const api = {
     },
     async disconnect(eventId: string, provider: MailProvider): Promise<void> {
       await request(`/api/events/${eventId}/mail/disconnect${qs({ provider })}`, { method: 'POST' })
+    },
+  },
+
+  matching: {
+    async candidates(eventId: string, includeResolved = false): Promise<MatchCandidate[]> {
+      return request<MatchCandidate[]>(
+        `/api/events/${eventId}/match-candidates${qs({ include_resolved: includeResolved })}`
+      )
+    },
+    async resolve(candidateId: string, decision: 'fusionner' | 'separer'): Promise<{ status: string; message: string }> {
+      return request<{ status: string; message: string }>(`/api/match-candidates/${candidateId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ decision }),
+      })
     },
   },
 }
