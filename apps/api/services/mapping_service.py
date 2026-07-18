@@ -580,9 +580,10 @@ def ai_refine_mapping(
             "fields, and omit any column you are not confident about. Never map a column to "
             "'passport_expiry' or 'date_of_birth' unless its NAME clearly says so."
         )
-        # Bounded: heuristics + catch-all already produce a complete mapping;
-        # the AI only refines ambiguous columns, so it must not stall the run.
-        data = ai_service.ai_json(prompt, timeout_s=20.0)
+        # Runs in the background (upload returns instantly), so a reasoning model
+        # is fine here. 60s covers a ~28s mapping plus headroom for wide files;
+        # heuristics + catch-all already guarantee a complete mapping if it times out.
+        data = ai_service.ai_json(prompt, timeout_s=60.0)
         if not isinstance(data, dict):
             return {}
 

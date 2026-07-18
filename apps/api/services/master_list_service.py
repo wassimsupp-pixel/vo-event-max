@@ -405,9 +405,10 @@ def _ai_summary(total: int, score: int, dimensions: dict, recs: list[dict]) -> O
         Dimensions (%): {dimensions}
         Points d'attention: {[{'quoi': r['text'], 'nombre': r['count']} for r in recs]}
         """
-        # Short timeout: this runs on the interactive Reports page — a slow model
-        # must never hang it. No summary is better than a frozen page.
-        return ai_service.ai_text(prompt, timeout_s=15.0)
+        # Opt-in only (ai_summary=True): the page already rendered without it, so
+        # this is a deliberate, awaited request. 40s lets the reasoning model
+        # finish (~28s); still bounded so it can never hang indefinitely.
+        return ai_service.ai_text(prompt, timeout_s=40.0)
     except Exception as exc:
         logger.warning("AI quality summary failed: %s", exc)
         return None

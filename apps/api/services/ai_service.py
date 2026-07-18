@@ -32,11 +32,13 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-# Text model for mapping / fusion / analysis. Llama 3.3 70B is far stronger than
-# mistral-nemotron on structured extraction yet stays fast (~16s) and reliable
-# on JSON — the 675B/397B flagships time out, so they're unusable in the
-# upload-time mapping path. Override with NVIDIA_MODEL.
-_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
+# Text model for mapping / fusion / analysis / match arbitration. Nemotron-3
+# Ultra is an agentic reasoning model (its chain-of-thought lands in a separate
+# ``reasoning_content`` field, so ``content`` stays clean JSON). Despite being a
+# 550B flagship it uses speculative decoding and is ~2.7x faster than Llama 3.3
+# 70B on a real mapping prompt (~28s vs ~78s) while producing better-reasoned
+# fusion/arbitration decisions. Override with NVIDIA_MODEL.
+_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 # Vision model for event photo/PDF analysis (Pixtral is not available on the
 # integrate endpoint; Llama 3.2 90B Vision is and is confirmed working).
 _NVIDIA_VISION_MODEL = os.getenv("NVIDIA_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct")
@@ -96,7 +98,9 @@ def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
     else:
         content = prompt
         model = _NVIDIA_MODEL
-        timeout = timeout_s or 45.0
+        # Reasoning model: allow headroom for chain-of-thought on large mappings.
+        # Interactive paths still pass their own short timeout_s to stay snappy.
+        timeout = timeout_s or 90.0
 
     try:
         resp = httpx.post(
