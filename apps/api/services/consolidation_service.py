@@ -733,7 +733,7 @@ async def auto_map_and_consolidate(
       confirmation (does NOT consolidate yet). If the 'review' state isn't
       migrated, it stays fully automatic (no regression). Upload stays instant.
     """
-    from services.mapping_service import build_auto_mapping
+    from services.mapping_service import build_mapping_with_report
     try:
         # Respect a mapping the user may have confirmed in the meantime — only
         # auto-map while the file is still 'pending' (no mapping yet).
@@ -748,7 +748,7 @@ async def auto_map_and_consolidate(
             await start_and_run_consolidation(event_id, user_id, supabase)
             return
 
-        mapping = build_auto_mapping(columns, sample_rows)
+        mapping, report = build_mapping_with_report(columns, sample_rows)
         if not mapping:
             logger.warning("Auto-map produced no mapping for file %s", file_id)
             return
@@ -773,6 +773,14 @@ async def auto_map_and_consolidate(
                     "column_mapping": mapping,
                     "import_status": "review",
                 }).eq("id", file_id).execute()
+                # Store the per-column report for the review UI (column may not
+                # exist pre-migration — best-effort, never breaks the flow).
+                try:
+                    supabase.table("uploaded_files").update(
+                        {"mapping_report": report}
+                    ).eq("id", file_id).execute()
+                except Exception:
+                    pass
                 logger.info("New format for file %s — awaiting one-time mapping confirmation", file_id)
                 return  # wait for human confirmation before consolidating
             except Exception:

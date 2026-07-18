@@ -276,6 +276,10 @@ async def preview_file(
         sample_rows=sample_rows,
         mapping_suggestions=mapping_suggestions,
         canonical_fields=canonical_fields_list,
+        # Stored auto-mapping + per-column report (present once the background
+        # auto-map has run — i.e. exactly when the file is in 'review').
+        column_mapping=meta.get("column_mapping") or None,
+        mapping_report=meta.get("mapping_report") or None,
     )
 
 

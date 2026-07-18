@@ -550,15 +550,24 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
 # Fully automatic mapping (no human step)
 # ---------------------------------------------------------------------------
 
-def ai_refine_mapping(
+# Canonical fields that hold SEVERAL identities merged in one column and are
+# split downstream (first_name + last_name). Flagged as "needs split" so the
+# review UI can make the split transparent.
+_COMBINED_NAME_FIELDS = {"traveler_name"}
+_AI_FORBIDDEN_FIELDS = ("passport_expiry", "date_of_birth", "id", "participant_id")
+
+
+def ai_refine_mapping_detailed(
     columns: list[str],
     sample_rows: list[dict],
     already_mapped: dict[str, str],
-) -> dict[str, str]:
+) -> dict[str, dict]:
     """
-    Best-effort Gemini pass over the columns the heuristics could NOT identify.
-    Returns extra {column: canonical_field} entries. Silent no-op when the
-    GEMINI_API_KEY is absent or the call fails — the heuristic mapping stands.
+    Best-effort LLM pass over the columns the heuristics could NOT identify.
+    Returns ``{column: {"field": <canonical|None>, "confidence": 0-100,
+    "needs_split": bool}}``. Silent no-op ({}) when the AI is unavailable or the
+    call fails — the heuristic mapping stands. Identity/sensitive fields stay
+    heuristic-only. A field is never assigned to two columns.
     """
     from services import ai_service
 
@@ -576,30 +585,62 @@ def ai_refine_mapping(
             f"Available fields: {free_fields}\n"
             "Columns with sample values:\n"
             + "\n".join(f"- {c!r}: {v}" for c, v in samples.items())
-            + "\n\nReturn ONLY a JSON object {column: field} using EXCLUSIVELY the available "
-            "fields, and omit any column you are not confident about. Never map a column to "
-            "'passport_expiry' or 'date_of_birth' unless its NAME clearly says so."
+            + "\n\nFor EACH column give the single best field (or null if none fits), a "
+            "confidence 0-100, and needs_split=true when ONE column holds several "
+            "identities merged together — e.g. a full name 'Last First', 'Nom Prénom' or "
+            "'Last/First' that should be split into first_name + last_name. "
+            "Never assign the same field to two columns; if two could match one field, "
+            "pick the most likely and set the other to null. Never use 'passport_expiry' "
+            "or 'date_of_birth' unless the column NAME clearly says so.\n"
+            'Return ONLY JSON: {"columns":[{"column":"...","field":"<field|null>",'
+            '"confidence":0-100,"needs_split":true|false}]}'
         )
         # Runs in the background (upload returns instantly), so a reasoning model
         # is fine here. 60s covers a ~28s mapping plus headroom for wide files;
         # heuristics + catch-all already guarantee a complete mapping if it times out.
         data = ai_service.ai_json(prompt, timeout_s=60.0)
-        if not isinstance(data, dict):
+        items = data.get("columns") if isinstance(data, dict) else (data if isinstance(data, list) else None)
+        if not isinstance(items, list):
             return {}
 
-        out: dict[str, str] = {}
-        for col, field in data.items():
-            if col not in unmapped or field not in free_fields or field in out.values():
+        out: dict[str, dict] = {}
+        used = set(already_mapped.values())
+        for it in items:
+            if not isinstance(it, dict):
                 continue
-            if field in ("passport_expiry", "date_of_birth", "id", "participant_id"):
-                continue    # identity/sensitive fields stay heuristic-only
-            out[col] = field
-        if out:
-            logger.info("AI mapping refinement resolved %d extra column(s): %s", len(out), out)
+            col = it.get("column")
+            if col not in unmapped:
+                continue
+            try:
+                conf = max(0.0, min(100.0, float(it.get("confidence", 0) or 0)))
+            except (TypeError, ValueError):
+                conf = 0.0
+            entry = {"field": None, "confidence": conf, "needs_split": bool(it.get("needs_split"))}
+            field = it.get("field")
+            if (
+                isinstance(field, str) and field in free_fields
+                and field not in used and field not in _AI_FORBIDDEN_FIELDS
+            ):
+                entry["field"] = field
+                used.add(field)
+            out[col] = entry
+        mapped = {c: d for c, d in out.items() if d["field"]}
+        if mapped:
+            logger.info("AI mapping resolved %d extra column(s): %s", len(mapped), {c: d["field"] for c, d in mapped.items()})
         return out
     except Exception as exc:
         logger.warning("AI mapping refinement skipped: %s", exc)
         return {}
+
+
+def ai_refine_mapping(
+    columns: list[str],
+    sample_rows: list[dict],
+    already_mapped: dict[str, str],
+) -> dict[str, str]:
+    """Back-compat thin wrapper: {column: field} for the columns the LLM mapped."""
+    detailed = ai_refine_mapping_detailed(columns, sample_rows, already_mapped)
+    return {c: d["field"] for c, d in detailed.items() if d.get("field")}
 
 
 def _custom_field_key(col: str, used_targets: set[str]) -> Optional[str]:
@@ -626,24 +667,50 @@ def _custom_field_key(col: str, used_targets: set[str]) -> Optional[str]:
     return key
 
 
-def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, str]:
+def build_mapping_with_report(
+    columns: list[str], sample_rows: list[dict]
+) -> tuple[dict[str, str], dict[str, dict]]:
     """
-    Fully automatic A→Z column mapping. Confident heuristic suggestions
-    (suggest_mapping >= 0.5) are completed by a best-effort AI pass for the
-    ambiguous ones, then a CATCH-ALL preserves EVERY remaining column that
-    carries data as a custom field — so no information from any file is ever
-    lost from the master list. Returns {} only when nothing is identifiable.
+    Fully automatic A→Z column mapping PLUS a per-column report for the review UI.
+
+    Confident heuristic suggestions (suggest_mapping >= 0.5) are completed by a
+    best-effort AI pass for the ambiguous ones, then a CATCH-ALL preserves EVERY
+    remaining data-bearing column as a custom field — so no information is ever
+    lost. The report gives, per column: ``{field, confidence(0-100), source
+    ('heuristic'|'ai'|'custom'), needs_split}`` so the review screen can show the
+    LLM's confidence on AI-mapped columns and flag merged-name columns.
     """
     suggestions = suggest_mapping(columns, sample_rows)
-    mapping = {
-        col: s["suggested_field"]
-        for col, s in suggestions.items()
-        if s.get("suggested_field") and s.get("confidence", 0) >= 0.5
-    }
-    mapping.update(ai_refine_mapping(columns, sample_rows, mapping))
+    mapping: dict[str, str] = {}
+    report: dict[str, dict] = {}
+    for col, s in suggestions.items():
+        f = s.get("suggested_field")
+        conf = float(s.get("confidence", 0) or 0)
+        if f and conf >= 0.5:
+            mapping[col] = f
+            report[col] = {
+                "field": f, "confidence": round(conf * 100), "source": "heuristic",
+                "needs_split": f in _COMBINED_NAME_FIELDS,
+            }
 
-    # CATCH-ALL: every column with data that isn't mapped to a canonical field
-    # is kept as a custom field, so the master list shows all of its info.
+    # AI pass (with confidence + needs_split) for the columns still unmapped.
+    detailed = ai_refine_mapping_detailed(columns, sample_rows, mapping)
+    for col, d in detailed.items():
+        if d.get("field"):
+            mapping[col] = d["field"]
+            report[col] = {
+                "field": d["field"], "confidence": round(d.get("confidence") or 0),
+                "source": "ai", "needs_split": bool(d.get("needs_split")) or d["field"] in _COMBINED_NAME_FIELDS,
+            }
+        elif d.get("needs_split"):
+            # AI flagged a merged column it could not assign to a single field.
+            report.setdefault(col, {
+                "field": None, "confidence": round(d.get("confidence") or 0),
+                "source": "ai", "needs_split": True,
+            })
+
+    # CATCH-ALL: every remaining column with data is kept as a custom field, so
+    # the master list shows all of its info.
     used_targets: set[str] = set(mapping.values())
     for col in columns:
         if col in mapping:
@@ -654,4 +721,22 @@ def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str,
         if key:
             mapping[col] = key
             used_targets.add(key)
+            prev = report.get(col, {})
+            report[col] = {
+                "field": key, "confidence": prev.get("confidence", 0),
+                "source": "custom", "needs_split": prev.get("needs_split", False),
+            }
+
+    # Guarantee a report entry for every mapped column.
+    for col, f in mapping.items():
+        report.setdefault(col, {
+            "field": f, "confidence": 0, "source": "heuristic",
+            "needs_split": f in _COMBINED_NAME_FIELDS,
+        })
+    return mapping, report
+
+
+def build_auto_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, str]:
+    """Fully automatic A→Z column mapping (see build_mapping_with_report)."""
+    mapping, _ = build_mapping_with_report(columns, sample_rows)
     return mapping

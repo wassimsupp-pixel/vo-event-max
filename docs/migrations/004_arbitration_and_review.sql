@@ -71,3 +71,12 @@ ALTER TABLE uploaded_files ADD CONSTRAINT chk_import_status
 
 COMMENT ON COLUMN uploaded_files.import_status IS
     'Lifecycle: pending -> (review ->) mapped -> processed (or error). ''review'' = a brand-new format awaiting one-time mapping confirmation.';
+
+-- 3. Per-column mapping report ----------------------------------------------
+-- Feeds the review screen: {column: {field, confidence(0-100), source
+-- (heuristic|ai|custom), needs_split}}. Lets the UI show the LLM's confidence on
+-- AI-mapped columns and flag merged-name columns ("Nom complet" -> split).
+ALTER TABLE uploaded_files ADD COLUMN IF NOT EXISTS mapping_report JSONB;
+
+COMMENT ON COLUMN uploaded_files.mapping_report IS
+    'Per-column mapping metadata for the review UI (confidence, source, needs_split).';

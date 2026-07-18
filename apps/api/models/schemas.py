@@ -155,6 +155,11 @@ class FilePreviewResponse(ORMBase):
     sample_rows: list[dict[str, Any]]   # 10 rows
     mapping_suggestions: dict[str, ColumnMappingSuggestion]
     canonical_fields: list[str]
+    # The full auto-built mapping already stored on the file (every column,
+    # including catch-all custom fields) so the review confirms the COMPLETE
+    # mapping and never drops columns. Plus the per-column report.
+    column_mapping: Optional[dict[str, str]] = None
+    mapping_report: Optional[dict[str, Any]] = None
 
 
 class ColumnMappingRequest(BaseModel):
