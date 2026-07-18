@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2, Plus, X, ClipboardCheck } from 'lucide-react'
-import type { UploadedFile, FileUploadResponse } from '@/lib/api'
+import type { UploadedFile, FileUploadResponse, MappingReportEntry } from '@/lib/api'
 import { api } from '@/lib/api'
 
 const SOURCE_TYPES = [
@@ -297,10 +297,13 @@ export default function SourcesPage() {
   }, [importedFiles, loadFiles])
 
   const [reviewFileId, setReviewFileId] = useState<string | null>(null)
+  // Per-column report (confidence, source, needs_split) for the file under review.
+  const [mappingReport, setMappingReport] = useState<Record<string, MappingReportEntry>>({})
 
   // Open the mapping editor for a file the engine flagged as a brand-new format
-  // ('review'): load its columns + auto-detected mapping so the user confirms it
-  // once. After confirmation the layout is memorised and never asked again.
+  // ('review'): load its FULL auto-built mapping (every column, incl. custom
+  // fields) so confirming never drops anything, plus the per-column report so the
+  // user's attention goes to the uncertain columns. Memorised after confirmation.
   const openReview = async (file: UploadedFile) => {
     setReviewFileId(file.id)
     setUploadError(null)
@@ -309,21 +312,36 @@ export default function SourcesPage() {
       const synthetic: FileUploadResponse = {
         file_id: file.id,
         filename: file.filename,
-        row_count: preview.total_rows,
+        row_count: file.row_count,
         columns: preview.columns,
         uploaded_at: file.uploaded_at,
         import_status: 'review',
         mapping_suggestions: preview.mapping_suggestions,
         canonical_fields: preview.canonical_fields,
       }
-      const initialMapping: Record<string, string> = {}
-      Object.entries(preview.mapping_suggestions || {}).forEach(([col, sug]) => {
-        if (sug.suggested_field && sug.confidence >= 0.5) initialMapping[col] = sug.suggested_field
-      })
+      // Seed from the COMPLETE stored mapping (A→Z catch-all) so nothing is lost;
+      // fall back to confident suggestions only if the stored mapping is absent.
+      let initialMapping: Record<string, string> = {}
+      if (preview.column_mapping && Object.keys(preview.column_mapping).length > 0) {
+        initialMapping = { ...preview.column_mapping }
+      } else {
+        Object.entries(preview.mapping_suggestions || {}).forEach(([col, sug]) => {
+          if (sug.suggested_field && sug.confidence >= 0.5) initialMapping[col] = sug.suggested_field
+        })
+      }
+      // Custom (non-canonical) targets from the catch-all: surface them as
+      // options so those columns show as mapped ("Perso"), not "-- Ignorer --".
+      const customTargets = Object.values(initialMapping).filter(
+        (v) => v && !(v in CANONICAL_FIELD_LABELS)
+      )
+      if (customTargets.length > 0) {
+        setCustomFieldList((prev) => Array.from(new Set([...prev, ...customTargets])))
+      }
       setUploadingType(file.source_type)
       setSelectedFile({ name: file.filename } as File)
       setUploadResponse(synthetic)
       setMapping(initialMapping)
+      setMappingReport(preview.mapping_report || {})
       setExtraColumns([])
       setIsMappingMode(true)
     } catch (err) {
@@ -334,6 +352,36 @@ export default function SourcesPage() {
   }
 
   const reviewCount = importedFiles.filter((f) => f.status === 'review').length
+
+  // Small per-column confidence/source/split line shown under each column name in
+  // the review editor, driven by the backend mapping_report.
+  const SOURCE_LABEL: Record<string, string> = { ai: 'IA', heuristic: 'Auto', custom: 'Perso' }
+  const renderColMeta = (col: string) => {
+    const r = mappingReport[col]
+    if (!r) {
+      const s = uploadResponse?.mapping_suggestions?.[col]
+      if (!s?.suggested_field) return null
+      return (
+        <span className={`mt-0.5 text-[10px] font-medium ${s.confidence >= 0.7 ? 'text-emerald-600' : 'text-amber-600'}`}>
+          Suggéré — {Math.round(s.confidence * 100)}%
+        </span>
+      )
+    }
+    const conf = r.confidence
+    const confCls = r.source === 'custom' ? 'text-slate-500' : conf >= 90 ? 'text-emerald-600' : conf >= 60 ? 'text-amber-600' : 'text-rose-600'
+    return (
+      <span className="mt-0.5 flex flex-wrap items-center gap-1">
+        <span className={`text-[10px] font-semibold ${confCls}`}>
+          {SOURCE_LABEL[r.source] || 'Auto'}{r.source !== 'custom' ? ` — ${conf}%` : ''}
+        </span>
+        {r.needs_split && (
+          <span className="rounded bg-orange-100 px-1 py-0.5 text-[9px] font-bold text-orange-700" title="Cette colonne contient plusieurs identités (nom + prénom) — elle sera séparée automatiquement.">
+            à splitter
+          </span>
+        )}
+      </span>
+    )
+  }
 
   const handleDeleteFile = async (fileId: string) => {
     if (!confirm('Êtes-vous sûr de vouloir supprimer ce fichier ? cette action est irréversible.')) {
@@ -595,20 +643,13 @@ export default function SourcesPage() {
                 <div className="space-y-3 max-h-[350px] overflow-y-auto pr-2 border rounded-md p-4 bg-slate-50">
                   {uploadResponse.columns.map((col: string) => {
                     const colOptions = getSortedFieldsForColumn(col)
-                    const currentSuggestion = uploadResponse?.mapping_suggestions?.[col]
                     return (
                       <div key={col} className="grid grid-cols-12 items-center gap-3">
                         <div className="col-span-5 flex flex-col min-w-0">
                           <span className="text-sm font-medium text-[var(--color-text-primary)] truncate" title={col}>
                             {col}
                           </span>
-                          {currentSuggestion?.suggested_field && (
-                            <span className={`inline-flex items-center text-[10px] font-medium mt-0.5 ${
-                              currentSuggestion.confidence >= 0.7 ? 'text-emerald-600' : 'text-amber-600'
-                            }`}>
-                              Suggéré — {Math.round(currentSuggestion.confidence * 100)}%
-                            </span>
-                          )}
+                          {renderColMeta(col)}
                         </div>
                         <div className="col-span-7 space-y-1.5">
                           <select

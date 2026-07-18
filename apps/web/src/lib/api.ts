@@ -96,12 +96,21 @@ export interface FileUploadResponse {
   canonical_fields: string[]
 }
 
+export interface MappingReportEntry {
+  field: string | null
+  confidence: number
+  source: 'heuristic' | 'ai' | 'custom'
+  needs_split: boolean
+}
+
 export interface FilePreviewResponse {
   columns: string[]
   rows: Record<string, string>[]
   total_rows: number
   mapping_suggestions: Record<string, ColumnMappingSuggestion>
   canonical_fields: string[]
+  column_mapping?: Record<string, string> | null
+  mapping_report?: Record<string, MappingReportEntry> | null
 }
 
 export interface UploadedFile {
