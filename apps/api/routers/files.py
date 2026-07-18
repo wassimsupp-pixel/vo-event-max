@@ -291,6 +291,7 @@ async def preview_file(
 async def map_columns(
     file_id: str,
     body: ColumnMappingRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict[str, Any] = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client),
 ) -> ColumnMappingResponse:
@@ -298,11 +299,12 @@ async def map_columns(
     Save the column-to-field mapping for an uploaded file.
 
     **``confirmed`` must be ``true``** — this is a hard gate that enforces
-    human review of the mapping before it is persisted. The consolidation
-    engine will refuse to process files without a confirmed mapping.
+    human review of the mapping before it is persisted. Used to confirm a
+    brand-new format the first time it is seen (files in ``review`` status).
 
-    After a successful call, the file's ``import_status`` transitions from
-    ``pending`` → ``mapped``.
+    On success the file transitions to ``mapped``, the confirmed layout is
+    memorised org-wide so the SAME format is never reviewed again, and a
+    consolidation is kicked off in the background.
     """
     # The Pydantic validator already ensures confirmed=True, but double-check
     if not body.confirmed:
@@ -314,7 +316,7 @@ async def map_columns(
     # Load file metadata and check event access
     meta_resp = (
         supabase.table("uploaded_files")
-        .select("id, event_id, import_status")
+        .select("id, event_id, import_status, source_type")
         .eq("id", file_id)
         .single()
         .execute()
@@ -346,6 +348,26 @@ async def map_columns(
     logger.info(
         "Column mapping saved: file_id=%s user=%s fields=%s",
         file_id, current_user["id"], list(body.mapping.values()),
+    )
+
+    # Memorise this format org-wide so identical layouts skip review next time.
+    try:
+        org_id = consolidation_service._user_org_id(supabase, current_user["id"])
+        signature = consolidation_service.format_signature(
+            meta.get("source_type"), list(body.mapping.keys())
+        )
+        consolidation_service.remember_format(
+            supabase, org_id, meta.get("source_type"), signature, body.mapping, current_user["id"],
+        )
+    except Exception as exc:
+        logger.warning("Could not memorise format for file %s: %s", file_id, exc)
+
+    # Now that the mapping is confirmed, fuse the file into the master list.
+    background_tasks.add_task(
+        consolidation_service.start_and_run_consolidation,
+        event_id=meta["event_id"],
+        user_id=current_user["id"],
+        supabase=supabase,
     )
 
     return ColumnMappingResponse(

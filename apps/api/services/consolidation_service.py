@@ -18,6 +18,7 @@ Consolidation pipeline:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from collections import defaultdict
@@ -636,6 +637,87 @@ def _is_real_person(nd: dict[str, Any]) -> bool:
     return True
 
 
+def format_signature(source_type: Optional[str], columns: list) -> str:
+    """Stable fingerprint of a file's shape: its source type + the set of its
+    (normalised) column names. Two uploads with the same layout share it."""
+    norm = sorted({str(c).strip().lower() for c in (columns or []) if str(c).strip()})
+    basis = f"{source_type or ''}||" + "\x1f".join(norm)
+    return hashlib.sha1(basis.encode("utf-8")).hexdigest()
+
+
+def _user_org_id(supabase: Client, user_id: str) -> Optional[str]:
+    try:
+        r = supabase.table("users").select("org_id").eq("id", user_id).single().execute()
+        return (r.data or {}).get("org_id")
+    except Exception:
+        return None
+
+
+def known_format_mapping(supabase: Client, org_id: Optional[str], signature: str) -> Optional[dict]:
+    """The human-confirmed mapping for a previously-seen format, or None. Formats
+    are memorised org-wide in ``column_mapping_templates`` (template_name=signature)
+    so a layout confirmed once is never re-reviewed, in any event."""
+    if not org_id:
+        return None
+    try:
+        r = (
+            supabase.table("column_mapping_templates")
+            .select("mapping")
+            .eq("org_id", org_id)
+            .eq("template_name", signature)
+            .limit(1)
+            .execute()
+        )
+        rows = r.data or []
+        return rows[0].get("mapping") if rows else None
+    except Exception:
+        return None
+
+
+def remember_format(
+    supabase: Client, org_id: Optional[str], source_type: Optional[str],
+    signature: str, mapping: dict, user_id: str,
+) -> None:
+    """Memorise a confirmed format so future uploads of the same layout stay
+    100% automatic (no review). Best-effort; never raises."""
+    if not org_id or not mapping:
+        return
+    try:
+        existing = (
+            supabase.table("column_mapping_templates")
+            .select("id")
+            .eq("org_id", org_id)
+            .eq("template_name", signature)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            supabase.table("column_mapping_templates").update(
+                {"mapping": mapping}
+            ).eq("id", existing.data[0]["id"]).execute()
+        else:
+            supabase.table("column_mapping_templates").insert({
+                "org_id": org_id,
+                "source_type": source_type,
+                "template_name": signature,
+                "mapping": mapping,
+                "created_by": user_id,
+            }).execute()
+    except Exception as exc:
+        logger.warning("Failed to memorise format template: %s", exc)
+
+
+async def start_and_run_consolidation(event_id: str, user_id: str, supabase: Client) -> None:
+    """Kick a consolidation if none is already fresh-running. Used after a mapping
+    is confirmed (auto or human) so the file's people fuse into the master list."""
+    try:
+        run_id = start_consolidation_if_idle(event_id, user_id, supabase)
+        if run_id:
+            await run_consolidation(event_id, run_id, user_id, supabase)
+    except Exception as exc:
+        logger.error("Background consolidation failed for event %s: %s", event_id, exc)
+
+
 async def auto_map_and_consolidate(
     file_id: str,
     event_id: str,
@@ -645,35 +727,66 @@ async def auto_map_and_consolidate(
     supabase: Client,
 ) -> None:
     """
-    Background job kicked off right after upload: AI-map the file (slow on the
-    free tier — hence off the request path), mark it mapped, then consolidate so
-    its people fuse with the other files. Keeps the upload endpoint instant.
+    Background job kicked off right after upload. AI-maps the file, then either:
+    - recognised format (seen & confirmed before) → apply silently, consolidate;
+    - brand-new format → park the file in 'review' for a one-time mapping
+      confirmation (does NOT consolidate yet). If the 'review' state isn't
+      migrated, it stays fully automatic (no regression). Upload stays instant.
     """
     from services.mapping_service import build_auto_mapping
     try:
         # Respect a mapping the user may have confirmed in the meantime — only
         # auto-map while the file is still 'pending' (no mapping yet).
-        cur = supabase.table("uploaded_files").select("import_status").eq("id", file_id).single().execute()
-        if (cur.data or {}).get("import_status") in ("pending", None):
-            mapping = build_auto_mapping(columns, sample_rows)
-            if not mapping:
-                logger.warning("Auto-map produced no mapping for file %s", file_id)
-                return
+        cur = (
+            supabase.table("uploaded_files")
+            .select("import_status, source_type")
+            .eq("id", file_id).single().execute()
+        )
+        cur_data = cur.data or {}
+        if cur_data.get("import_status") not in ("pending", None):
+            # Already mapped/confirmed elsewhere — just make sure it consolidates.
+            await start_and_run_consolidation(event_id, user_id, supabase)
+            return
+
+        mapping = build_auto_mapping(columns, sample_rows)
+        if not mapping:
+            logger.warning("Auto-map produced no mapping for file %s", file_id)
+            return
+
+        source_type = cur_data.get("source_type")
+        org_id = _user_org_id(supabase, user_id)
+        signature = format_signature(source_type, columns)
+        known = known_format_mapping(supabase, org_id, signature)
+
+        if known:
+            # Recognised format: reuse the confirmed mapping, stay automatic.
             supabase.table("uploaded_files").update({
-                "column_mapping": mapping,
+                "column_mapping": known or mapping,
                 "import_status": "mapped",
             }).eq("id", file_id).execute()
-            logger.info("Auto-mapped file %s: %d/%d columns", file_id, len(mapping), len(columns))
+            logger.info("File %s matches a known format — auto-applied, no review", file_id)
+        else:
+            # Brand-new format: gate for a one-time confirmation IF the 'review'
+            # state exists; otherwise stay fully automatic (pre-migration).
+            try:
+                supabase.table("uploaded_files").update({
+                    "column_mapping": mapping,
+                    "import_status": "review",
+                }).eq("id", file_id).execute()
+                logger.info("New format for file %s — awaiting one-time mapping confirmation", file_id)
+                return  # wait for human confirmation before consolidating
+            except Exception:
+                supabase.table("uploaded_files").update({
+                    "column_mapping": mapping,
+                    "import_status": "mapped",
+                }).eq("id", file_id).execute()
+                logger.info("Auto-mapped file %s (review state unavailable): %d/%d cols",
+                            file_id, len(mapping), len(columns))
     except Exception as exc:
         logger.error("Background auto-mapping failed for file %s: %s", file_id, exc)
         return
 
-    try:
-        run_id = start_consolidation_if_idle(event_id, user_id, supabase)
-        if run_id:
-            await run_consolidation(event_id, run_id, user_id, supabase)
-    except Exception as exc:
-        logger.error("Background consolidation after upload failed: %s", exc)
+    await start_and_run_consolidation(event_id, user_id, supabase)
 
 
 def start_consolidation_if_idle(event_id: str, user_id: str, supabase: Client) -> Optional[str]:
@@ -1186,6 +1299,20 @@ async def run_consolidation(
             stats["exceptions_count"] += dup_count
         except Exception as exc:
             logger.warning("Duplicate-email detection failed: %s", exc)
+
+        # ---------------------------------------------------------------
+        # 6f. AI arbitration of the ambiguous middle band: similar-but-not-certain
+        #     participant pairs are arbitrated by the LLM — confident duplicates
+        #     are merged automatically, the rest queued in match_candidates for a
+        #     human to resolve side-by-side. Never blocks the run: it's fully
+        #     wrapped and degrades to a no-op if the AI or table is unavailable.
+        # ---------------------------------------------------------------
+        try:
+            arb = detect_ambiguous_duplicate_participants(event_id, run_id, user_id, supabase)
+            stats["ai_auto_merged"] = arb.get("auto_merged", 0)
+            stats["match_candidates"] = arb.get("candidates", 0)
+        except Exception as exc:
+            logger.warning("Ambiguous-duplicate arbitration failed: %s", exc)
 
         # ---------------------------------------------------------------
         # 7. Full exception detection
@@ -2087,6 +2214,189 @@ def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
 
     logger.info("Merged %d phantom duplicate participant(s) for event %s", deleted, event_id)
     return deleted
+
+
+_MERGE_CHILD_TABLES = (
+    "flights", "hotel_nights", "transfers", "participant_activities",
+    "source_records", "exceptions", "communications",
+)
+
+
+def _merge_participant_into(supabase: Client, loser_id: str, winner_id: str) -> bool:
+    """
+    Merge participant ``loser_id`` into ``winner_id``: backfill the winner's
+    empty identity fields from the loser (never overwrite), reassign every child
+    row (flights/hotels/transfers/activities/source_records/exceptions/comms and
+    any other match_candidates), then delete the loser. Returns True on delete.
+    Shared by the AI auto-merge step and the human "fusionner" dashboard action.
+    """
+    if not loser_id or not winner_id or loser_id == winner_id:
+        return False
+    try:
+        w = (supabase.table("participants").select(
+            "email, phone, company, nationality, has_flight, has_hotel, has_transfer, has_activities"
+        ).eq("id", winner_id).single().execute().data) or {}
+        l = (supabase.table("participants").select(
+            "email, phone, company, nationality, has_flight, has_hotel, has_transfer, has_activities"
+        ).eq("id", loser_id).single().execute().data) or {}
+        patch: dict = {}
+        for f in ("email", "phone", "company", "nationality"):
+            if not (w.get(f) or "").strip() and (l.get(f) or "").strip():
+                patch[f] = l[f]
+        for flag in ("has_flight", "has_hotel", "has_transfer", "has_activities"):
+            if l.get(flag):
+                patch[flag] = True
+        if patch:
+            supabase.table("participants").update(patch).eq("id", winner_id).execute()
+    except Exception as exc:
+        logger.warning("Merge backfill %s->%s failed: %s", loser_id, winner_id, exc)
+
+    for table in _MERGE_CHILD_TABLES:
+        try:
+            supabase.table(table).update({"participant_id": winner_id}).eq("participant_id", loser_id).execute()
+        except Exception as exc:
+            logger.warning("Reassign %s during merge failed: %s", table, exc)
+
+    # Repoint any other candidates that referenced the loser, then drop the
+    # self-referential ones this may create.
+    try:
+        supabase.table("match_candidates").update({"participant_a_id": winner_id}).eq("participant_a_id", loser_id).execute()
+        supabase.table("match_candidates").update({"participant_b_id": winner_id}).eq("participant_b_id", loser_id).execute()
+    except Exception:
+        pass
+
+    try:
+        supabase.table("participants").delete().eq("id", loser_id).execute()
+        return True
+    except Exception as exc:
+        logger.warning("Delete merged participant %s failed: %s", loser_id, exc)
+        return False
+
+
+def _order_winner_loser(a: dict, b: dict) -> tuple[dict, dict]:
+    """Pick which of two duplicate fiches survives: prefer the registered one,
+    then the one with an email, then the richer fiche, then a stable id order."""
+    def rank(p: dict) -> tuple:
+        return (
+            1 if p.get("registration_source_id") else 0,
+            1 if (p.get("email") or "").strip() else 0,
+            sum(1 for f in ("phone", "company", "nationality") if (p.get(f) or "").strip()),
+        )
+    ra, rb = rank(a), rank(b)
+    if ra != rb:
+        return (a, b) if ra > rb else (b, a)
+    return (a, b) if str(a.get("id")) <= str(b.get("id")) else (b, a)
+
+
+def detect_ambiguous_duplicate_participants(
+    event_id: str, run_id: str, user_id: str, supabase: Client
+) -> dict:
+    """
+    Step 6f — AI arbitration of the ambiguous middle band. Find participant pairs
+    whose names are similar enough to be suspicious but not certain (rapidfuzz
+    ~78-93), skip the ones the data already settles (two different non-empty
+    emails = two people), and let the reasoning LLM arbitrate the rest. Confident
+    "fusionner" verdicts are merged on the spot; everything else becomes a
+    ``match_candidates`` row for side-by-side human review. Bounded by
+    ``MAX_ARBITRATIONS_PER_RUN``. Returns ``{"auto_merged", "candidates"}``.
+    """
+    from services import arbitration_service as ARB
+
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        res = (
+            supabase.table("participants")
+            .select(
+                "id, first_name, last_name, email, phone, company, nationality, "
+                "has_flight, has_hotel, has_transfer, has_activities, registration_source_id"
+            )
+            .eq("event_id", event_id)
+            .range(offset, offset + 999)
+            .execute()
+        )
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    if len(parts) < 2:
+        return {"auto_merged": 0, "candidates": 0}
+
+    def _name(p: dict) -> str:
+        return f"{_norm_name(p.get('first_name'))} {_norm_name(p.get('last_name'))}".strip()
+
+    # Blocking: only compare fiches sharing the first 3 letters of the collapsed
+    # last name (falls back to first name). Turns an O(n^2) sweep over the whole
+    # event into a handful of small buckets.
+    blocks: dict[str, list[int]] = {}
+    for idx, p in enumerate(parts):
+        if not _name(p):
+            continue
+        last_c = _norm_name(p.get("last_name")).replace(" ", "")
+        key = (last_c or _norm_name(p.get("first_name")).replace(" ", ""))[:3]
+        if key:
+            blocks.setdefault(key, []).append(idx)
+
+    scored_pairs: list[tuple[float, int, int]] = []
+    for members in blocks.values():
+        for x in range(len(members)):
+            i = members[x]
+            ni = _name(parts[i])
+            for y in range(x + 1, len(members)):
+                j = members[y]
+                score = fuzz.token_set_ratio(ni, _name(parts[j]))
+                if ARB.AMBIGUOUS_MIN <= score < ARB.AMBIGUOUS_MAX:
+                    scored_pairs.append((float(score), i, j))
+    scored_pairs.sort(key=lambda t: -t[0])
+
+    auto_merged = 0
+    candidates = 0
+    merged_ids: set = set()
+    calls = 0
+    for score, i, j in scored_pairs:
+        if calls >= ARB.MAX_ARBITRATIONS_PER_RUN:
+            break
+        a, b = parts[i], parts[j]
+        if a["id"] in merged_ids or b["id"] in merged_ids:
+            continue
+        ea = (a.get("email") or "").strip().lower()
+        eb = (b.get("email") or "").strip().lower()
+        # Two different real emails settle it deterministically: different people.
+        if ea and eb and ea != eb:
+            continue
+
+        calls += 1
+        verdict = ARB.arbitrate_pair(a, b, score)
+        winner, loser = _order_winner_loser(a, b)
+
+        if verdict["decision"] == "fusionner" and verdict["confidence"] >= 75:
+            if _merge_participant_into(supabase, loser["id"], winner["id"]):
+                merged_ids.add(loser["id"])
+                auto_merged += 1
+                try:
+                    log_change(
+                        supabase=supabase, event_id=event_id, user_id=user_id,
+                        entity_type="participant", entity_id=winner["id"],
+                        field_name="merge", old_value=loser["id"], new_value=winner["id"],
+                        reason="ai_arbitration",
+                    )
+                except Exception:
+                    pass
+        elif verdict["decision"] == "separer":
+            continue
+        else:
+            # 'incertain' or a low-confidence 'fusionner' -> human review.
+            if ARB.create_candidate(supabase, event_id, run_id, loser, winner, score, verdict):
+                candidates += 1
+
+    if auto_merged or candidates:
+        logger.info(
+            "Ambiguous-duplicate arbitration event=%s: %d auto-merged, %d queued (from %d AI calls)",
+            event_id, auto_merged, candidates, calls,
+        )
+    return {"auto_merged": auto_merged, "candidates": candidates}
 
 
 def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
