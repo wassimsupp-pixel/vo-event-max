@@ -212,13 +212,36 @@ async def auto_group_shuttles(
     if not flights_res.data:
         return MessageResponse(message="No flight records found to group.")
 
+    # Preserve transfers that came from an imported transfer file. Those rows are
+    # NOT linked to a flight (flight_id IS NULL), whereas calculated shuttles always
+    # carry a flight_id. If a participant already has a file-imported transfer, we
+    # keep it as-is and never overwrite it with a computed shuttle.
+    existing_res = (
+        supabase.table("transfers")
+        .select("participant_id, flight_id")
+        .eq("event_id", event_id)
+        .execute()
+    )
+    imported_participants = {
+        row["participant_id"]
+        for row in (existing_res.data or [])
+        if row.get("participant_id") and not row.get("flight_id")
+    }
+
     # Parse and group by window
     grouped_transfers = 0
+    preserved_imported = 0
     # Group flights by rounded arrival time window
     # We round to nearest block of window_minutes
     for flight in flights_res.data:
         part_id = flight["participant_id"]
         if not part_id:
+            continue
+
+        # This participant already has a real transfer from the imported file —
+        # keep it, do not compute (and do not duplicate) a shuttle for them.
+        if part_id in imported_participants:
+            preserved_imported += 1
             continue
 
         arr_time_str = flight["arrival_time"]
@@ -262,4 +285,11 @@ async def auto_group_shuttles(
         supabase.table("participants").update({"has_transfer": True}).eq("id", part_id).execute()
         grouped_transfers += 1
 
+    if preserved_imported:
+        return MessageResponse(
+            message=(
+                f"Successfully auto-grouped {grouped_transfers} passengers into shuttle windows. "
+                f"{preserved_imported} imported transfer(s) were kept as-is."
+            )
+        )
     return MessageResponse(message=f"Successfully auto-grouped {grouped_transfers} passengers into shuttle windows.")
