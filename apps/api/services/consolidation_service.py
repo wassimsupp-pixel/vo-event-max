@@ -2318,6 +2318,28 @@ def _order_winner_loser(a: dict, b: dict) -> tuple[dict, dict]:
     return (a, b) if str(a.get("id")) <= str(b.get("id")) else (b, a)
 
 
+def _fallback_duplicate_exception(supabase: Client, run_id: str, event_id: str, a: dict, b: dict, score: float) -> None:
+    """Surface a same-name/different-email duplicate as a POSSIBLE_DUPLICATE
+    exception when the match_candidates table isn't migrated yet."""
+    try:
+        na = f"{a.get('first_name', '')} {a.get('last_name', '')}".strip()
+        nb = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip()
+        supabase.table("exceptions").insert({
+            "run_id": run_id, "event_id": event_id,
+            "exception_type": "POSSIBLE_DUPLICATE", "severity": "warning",
+            "message": f"Doublon possible : « {na} » ({a.get('email')}) et « {nb} » ({b.get('email')}) — même nom, emails différents.",
+            "participant_id": a.get("id"),
+            "context_data": {
+                "participant_a_id": a.get("id"), "participant_b_id": b.get("id"),
+                "name_a": na, "name_b": nb, "email_a": a.get("email"), "email_b": b.get("email"),
+                "score": float(score),
+            },
+            "resolved": False,
+        }).execute()
+    except Exception as exc:
+        logger.warning("Fallback duplicate exception insert failed: %s", exc)
+
+
 def detect_ambiguous_duplicate_participants(
     event_id: str, run_id: str, user_id: str, supabase: Client
 ) -> dict:
@@ -2377,29 +2399,57 @@ def detect_ambiguous_duplicate_participants(
             for y in range(x + 1, len(members)):
                 j = members[y]
                 score = fuzz.token_set_ratio(ni, _name(parts[j]))
-                if ARB.AMBIGUOUS_MIN <= score < ARB.AMBIGUOUS_MAX:
+                if score >= ARB.AMBIGUOUS_MIN:
                     scored_pairs.append((float(score), i, j))
     scored_pairs.sort(key=lambda t: -t[0])
+
+    # (Near-)identical name (>= this) means it's very likely the SAME person even
+    # when the two fiches carry different emails (a personal + a corporate address,
+    # or a coordinator's) — those go to the review dashboard, never auto-merged.
+    # Kept high (not 90) so real surname variants like Martin/Martan with distinct
+    # emails stay treated as different people.
+    SAME_PERSON_NAME = 97
+    MAX_CANDIDATES = 100
 
     auto_merged = 0
     candidates = 0
     merged_ids: set = set()
     calls = 0
     for score, i, j in scored_pairs:
-        if calls >= ARB.MAX_ARBITRATIONS_PER_RUN:
+        if candidates >= MAX_CANDIDATES:
             break
         a, b = parts[i], parts[j]
         if a["id"] in merged_ids or b["id"] in merged_ids:
             continue
         ea = (a.get("email") or "").strip().lower()
         eb = (b.get("email") or "").strip().lower()
-        # Two different real emails settle it deterministically: different people.
-        if ea and eb and ea != eb:
-            continue
+        diff_email = bool(ea and eb and ea != eb)
+        winner, loser = _order_winner_loser(a, b)
 
+        # Same (near-exact) name but DIFFERENT emails: almost certainly ONE person
+        # recorded under two addresses. The data can't settle it, so queue it for
+        # one-click confirmation in "Fusions à vérifier" — never auto-merge (could
+        # be true homonyms). Falls back to a POSSIBLE_DUPLICATE exception if the
+        # match_candidates table isn't migrated yet.
+        if diff_email:
+            if score >= SAME_PERSON_NAME:
+                verdict = {
+                    "decision": "incertain",
+                    "justification": "Même nom, deux emails différents — à confirmer.",
+                    "confidence": 0.0,
+                }
+                if not ARB.create_candidate(supabase, event_id, run_id, loser, winner, score, verdict):
+                    _fallback_duplicate_exception(supabase, run_id, event_id, winner, loser, score)
+                candidates += 1
+            continue  # different emails + only a fuzzy name match => different people
+
+        # Same or missing email:
+        if score >= ARB.AMBIGUOUS_MAX:
+            continue  # near-exact duplicate — left to the phantom-merge pass
+        if calls >= ARB.MAX_ARBITRATIONS_PER_RUN:
+            continue  # AI budget spent; low-band pairs wait for the next run
         calls += 1
         verdict = ARB.arbitrate_pair(a, b, score)
-        winner, loser = _order_winner_loser(a, b)
 
         if verdict["decision"] == "fusionner" and verdict["confidence"] >= 75:
             if _merge_participant_into(supabase, loser["id"], winner["id"]):
@@ -2817,12 +2867,17 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     # 4. Transfers Extraction (any record exposing pickup/dropoff)
     try:
         if all_records:
-            # Load existing transfers
-            existing_trans = supabase.table("transfers").select("id, participant_id, pickup_time").eq("event_id", event_id).execute()
+            # Load existing transfers. Only EXTRACTED transfers (flight_id IS NULL)
+            # are managed here; calculated shuttles (flight_id set, from the
+            # dispatcher) are left untouched. Keeping the full list lets us delete
+            # stale extracted rows so re-runs don't pile up duplicates.
+            existing_trans = supabase.table("transfers").select("id, participant_id, pickup_time, flight_id").eq("event_id", event_id).execute()
+            existing_trans_rows = existing_trans.data or []
             existing_trans_map = {
-                (t["participant_id"], t["pickup_time"]): t["id"] for t in (existing_trans.data or [])
+                (t["participant_id"], t["pickup_time"]): t["id"]
+                for t in existing_trans_rows if not t.get("flight_id")
             }
-            
+
             trans_payloads = {}
             participants_has_transfer = set()
 
@@ -2848,15 +2903,25 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     if pickup_loc or dropoff_loc or pickup_time_val or transfer_type_val:
                         dep_airport = (data.get("departure_airport") or "").strip()
                         arr_airport = (data.get("arrival_airport") or "").strip()
-                        pu = pickup_loc or dep_airport or event_city or "À préciser"
-                        do = dropoff_loc or arr_airport or event_city or dep_airport or "À préciser"
+                        transfer_type = transfer_type_val or "arrival"
+                        pu = pickup_loc or dep_airport or arr_airport or event_city or "À préciser"
+                        do = dropoff_loc or arr_airport or event_city or "À préciser"
+                        # Avoid a meaningless X→X (both endpoints fell back to the
+                        # same airport): an arrival goes airport→hotel, a departure
+                        # hotel→airport. The hotel side is the event city if known.
+                        if pu == do:
+                            airport = dep_airport or arr_airport or pu
+                            hotel = event_city or "Hôtel"
+                            if str(transfer_type).lower().startswith("depart"):
+                                pu, do = hotel, airport
+                            else:
+                                pu, do = airport, hotel
 
                         pickup_time_str = combine_to_iso_timestamp(
                             data.get("pickup_date") or data.get("departure_date") or data.get("date"),
                             pickup_time_val or data.get("departure_time"),
                             default_date
                         )
-                        transfer_type = transfer_type_val or "arrival"
                         vehicle_type = data.get("vehicle_type") or "shuttle"
 
                         payload = {
@@ -2886,7 +2951,21 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             if payload_list:
                 for i in range(0, len(payload_list), 100):
                     supabase.table("transfers").upsert(payload_list[i:i+100]).execute()
-                    
+
+            # Delete STALE extracted transfers (flight_id NULL) not regenerated
+            # this run — otherwise every re-consolidation stacks another copy
+            # (the "MFM→MFM ×3" duplication). Calculated shuttles are untouched.
+            kept_ids = {p["id"] for p in trans_payloads.values()}
+            stale_ids = [
+                t["id"] for t in existing_trans_rows
+                if not t.get("flight_id") and t["id"] not in kept_ids
+            ]
+            for i in range(0, len(stale_ids), 100):
+                try:
+                    supabase.table("transfers").delete().in_("id", stale_ids[i:i+100]).execute()
+                except Exception as exc:
+                    logger.warning("Stale transfer delete failed: %s", exc)
+
             # Bulk update participants
             if participants_has_transfer:
                 part_ids = list(participants_has_transfer)

@@ -112,7 +112,9 @@ def detect_all(
     _detect_invalid_formats(event_id, run_id, supabase, exceptions_to_insert)
     _detect_date_incoherence(event_id, run_id, supabase, event_start_date, event_end_date, exceptions_to_insert)
     _detect_data_conflicts(event_id, run_id, supabase, exceptions_to_insert)
-    _detect_possible_duplicates(event_id, run_id, supabase, exceptions_to_insert)
+    # Possible duplicates now go to the "Fusions à vérifier" dashboard
+    # (match_candidates) via the consolidation arbitration step — no longer
+    # flooded here as exceptions.
     _detect_name_mismatches_between_sources(event_id, run_id, supabase, exceptions_to_insert)
     # Per-participant "missing info in the master list" alerts (feedback §14),
     # gated on the relevant source file having been imported.
