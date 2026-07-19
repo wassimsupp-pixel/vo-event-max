@@ -69,6 +69,24 @@ export default function ParticipantDetailPage() {
     if (participantId) load()
   }, [participantId])
 
+  // Deep-link from the "Champs manquants" exceptions: ?field=email focuses and
+  // highlights that input so the user lands right on the field to fill.
+  useEffect(() => {
+    if (!participant) return
+    const field = new URLSearchParams(window.location.search).get('field')
+    if (!field) return
+    const timer = setTimeout(() => {
+      const el = document.querySelector(`input[name="${field}"]`) as HTMLInputElement | null
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.focus()
+        el.classList.add('ring-2', 'ring-[var(--color-accent)]')
+        setTimeout(() => el.classList.remove('ring-2', 'ring-[var(--color-accent)]'), 2500)
+      }
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [participant])
+
   const handleToggleLock = async (field: string) => {
     if (!participant) return
     const isLocked = lockedFields[field]

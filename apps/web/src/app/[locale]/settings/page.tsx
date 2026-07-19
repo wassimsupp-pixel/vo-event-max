@@ -3,8 +3,9 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { AppLayout } from '@/components/layout/AppLayout'
-import { Settings, User, Shield, Globe, Save, CheckCircle2, Loader2 } from 'lucide-react'
+import { Settings, User, Shield, Globe, Save, CheckCircle2, Loader2, GitMerge, MapPin, Users, Star, AlertTriangle } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
+import { api, type EventMergeSuggestion } from '@/lib/api'
 
 export default function SettingsPage() {
   const { locale } = useParams() as { locale: string }
@@ -18,6 +19,44 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
+
+  // Similar-event merge suggestions (org-level, non-destructive until confirmed)
+  const [suggestions, setSuggestions] = useState<EventMergeSuggestion[]>([])
+  const [loadingSug, setLoadingSug] = useState(true)
+  const [mergingId, setMergingId] = useState<string | null>(null)
+  const [mergeMsg, setMergeMsg] = useState<string | null>(null)
+
+  const loadSuggestions = async () => {
+    setLoadingSug(true)
+    try {
+      setSuggestions(await api.eventGrouping.suggestions())
+    } catch {
+      /* endpoint may be unavailable — show nothing */
+    } finally {
+      setLoadingSug(false)
+    }
+  }
+
+  useEffect(() => {
+    loadSuggestions()
+  }, [])
+
+  const handleMerge = async (s: EventMergeSuggestion) => {
+    const mergeIds = s.events.map((e) => e.id).filter((id) => id !== s.canonical_event_id)
+    const canonicalName = s.events.find((e) => e.id === s.canonical_event_id)?.name || 'cet événement'
+    if (!confirm(`Fusionner ${mergeIds.length} événement(s) dans « ${canonicalName} » ? Cette action est irréversible.`)) return
+    setMergingId(s.canonical_event_id)
+    setMergeMsg(null)
+    try {
+      const res = await api.eventGrouping.merge(s.canonical_event_id, mergeIds)
+      setMergeMsg(res.message)
+      await loadSuggestions()
+    } catch (err) {
+      setMergeMsg(err instanceof Error ? err.message : 'Erreur lors de la fusion.')
+    } finally {
+      setMergingId(null)
+    }
+  }
 
   useEffect(() => {
     async function loadUser() {
@@ -197,6 +236,94 @@ export default function SettingsPage() {
             </div>
           </form>
         )}
+
+        {/* Similar-event merge — org-level, non-destructive until confirmed */}
+        <div className="rounded-[var(--radius-card)] border bg-white p-6 shadow-sm">
+          <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+            <GitMerge className="h-4 w-4 text-[var(--color-accent)]" />
+            Événements similaires à regrouper
+          </h3>
+          <p className="mb-4 text-xs text-[var(--color-text-secondary)]">
+            L&apos;IA détecte les événements au nom proche (ex. « Innovation Summit » / « 2026 Global Innovation Summit »).
+            Vérifiez, puis fusionnez-les en un seul — toutes les données sont déplacées vers l&apos;événement conservé.
+          </p>
+
+          {mergeMsg && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg bg-[var(--color-accent-light)] px-3 py-2 text-xs font-medium text-[var(--color-text-primary)]">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--color-accent)]" />
+              {mergeMsg}
+            </div>
+          )}
+
+          {loadingSug ? (
+            <div className="flex items-center justify-center py-8 text-sm text-[var(--color-text-secondary)]">
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Analyse des événements…
+            </div>
+          ) : suggestions.length === 0 ? (
+            <p className="rounded-lg bg-slate-50 px-3 py-4 text-center text-xs text-[var(--color-text-secondary)]">
+              Aucun groupe d&apos;événements similaires détecté.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              {suggestions.map((s) => (
+                <div key={s.canonical_event_id} className="rounded-lg border border-amber-200 bg-amber-50/40 p-4">
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 font-semibold text-amber-700 border border-amber-200">
+                      <AlertTriangle className="h-3 w-3" /> {s.events.length} événements proches
+                    </span>
+                    <span className="text-[var(--color-text-secondary)]">Similarité min. {Math.round(s.min_similarity)}%</span>
+                    {s.ai_confirmed === true && (
+                      <span className="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-700">IA : même événement</span>
+                    )}
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {s.events.map((ev) => {
+                      const isCanonical = ev.id === s.canonical_event_id
+                      return (
+                        <div
+                          key={ev.id}
+                          className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-xs ${
+                            isCanonical ? 'border-[var(--color-accent)] bg-white' : 'border-slate-200 bg-white/60'
+                          }`}
+                        >
+                          {isCanonical ? (
+                            <span className="inline-flex items-center gap-1 font-semibold text-[var(--color-accent)]">
+                              <Star className="h-3.5 w-3.5" /> À conserver
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-rose-600">sera fusionné →</span>
+                          )}
+                          <span className="font-semibold text-[var(--color-text-primary)]">{ev.name}</span>
+                          <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
+                            <Users className="h-3 w-3" /> {ev.participant_count}
+                          </span>
+                          {ev.location_city && (
+                            <span className="inline-flex items-center gap-1 text-[var(--color-text-secondary)]">
+                              <MapPin className="h-3 w-3" /> {ev.location_city}
+                            </span>
+                          )}
+                          {ev.start_date && <span className="text-[var(--color-text-secondary)]">{ev.start_date}</span>}
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      onClick={() => handleMerge(s)}
+                      disabled={mergingId === s.canonical_event_id}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--color-accent)] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[var(--color-accent)]/90 disabled:opacity-50"
+                    >
+                      {mergingId === s.canonical_event_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <GitMerge className="h-3.5 w-3.5" />}
+                      Fusionner ces événements
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </AppLayout>
   )

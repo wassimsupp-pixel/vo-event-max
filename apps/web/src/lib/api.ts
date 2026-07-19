@@ -123,6 +123,21 @@ export interface UploadedFile {
   uploaded_at: string
 }
 
+export interface EventMergeEvent {
+  id: string
+  name: string
+  start_date?: string | null
+  location_city?: string | null
+  participant_count: number
+}
+
+export interface EventMergeSuggestion {
+  canonical_event_id: string
+  events: EventMergeEvent[]
+  ai_confirmed?: boolean | null
+  min_similarity: number
+}
+
 export interface MatchCandidateParty {
   nom?: string
   email?: string | null
@@ -185,7 +200,7 @@ export interface Export {
 export interface Exception {
   id: string
   event_id: string
-  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage'
+  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field'
   exception_type?: string
   severity: 'critical' | 'warning' | 'info'
   participant_id?: string
@@ -198,6 +213,7 @@ export interface Exception {
   source_b?: string
   resolved: boolean
   created_at: string
+  context_data?: Record<string, unknown>
 }
 
 export interface EmailProposal {
@@ -304,7 +320,9 @@ function mapException(exc: any): Exception {
     PARTICIPANT_NO_FLIGHT: 'coverage', PARTICIPANT_NO_HOTEL: 'coverage',
     PARTICIPANT_NO_TRANSFER: 'coverage', PARTICIPANT_NO_DIETARY: 'coverage',
   }
-  const category: Exception['type'] = ctx.aggregate
+  const category: Exception['type'] = ctx.category === 'missing_field'
+    ? 'missing_field'
+    : ctx.aggregate
     ? 'coverage'
     : (EXC_CATEGORY[exc.exception_type as string] || EXC_CATEGORY[exc.type as string] || 'to_verify')
 
@@ -882,6 +900,18 @@ export const api = {
     },
     async disconnect(eventId: string, provider: MailProvider): Promise<void> {
       await request(`/api/events/${eventId}/mail/disconnect${qs({ provider })}`, { method: 'POST' })
+    },
+  },
+
+  eventGrouping: {
+    async suggestions(): Promise<EventMergeSuggestion[]> {
+      return request<EventMergeSuggestion[]>(`/api/org/event-merge-suggestions`)
+    },
+    async merge(canonicalEventId: string, mergeEventIds: string[]): Promise<{ merged: number; message: string }> {
+      return request<{ merged: number; message: string }>(`/api/events/merge`, {
+        method: 'POST',
+        body: JSON.stringify({ canonical_event_id: canonicalEventId, merge_event_ids: mergeEventIds }),
+      })
     },
   },
 

@@ -12,6 +12,7 @@ import { ConcernedParticipants, type CohortRow } from '@/components/ui/Concerned
 
 interface Flight {
   id: string
+  participant_id?: string
   pnr_code?: string
   airline?: string
   flight_number: string
@@ -22,6 +23,13 @@ interface Flight {
   baggage_info?: string
   status: string
   participant_name?: string
+}
+
+interface PassengerFlights {
+  key: string
+  participant_id?: string
+  participant_name: string
+  segments: Flight[]
 }
 
 export default function FlightsPage() {
@@ -80,6 +88,32 @@ export default function FlightsPage() {
     const matchesStatus = statusFilter === 'all' ? true : f.status === statusFilter
     return matchesSearch && matchesStatus
   })
+
+  // Group segments by passenger: a round trip = outbound + return = ONE row,
+  // not two. Keeps every segment but shows one line per participant.
+  const groupedPassengers: PassengerFlights[] = (() => {
+    const map = new Map<string, PassengerFlights>()
+    for (const f of filteredFlights) {
+      const key = f.participant_id || f.participant_name || f.id
+      let g = map.get(key)
+      if (!g) {
+        g = { key, participant_id: f.participant_id, participant_name: f.participant_name || 'N/A', segments: [] }
+        map.set(key, g)
+      }
+      g.segments.push(f)
+    }
+    const arr = Array.from(map.values())
+    arr.forEach(g => g.segments.sort((a, b) => String(a.departure_time || '').localeCompare(String(b.departure_time || ''))))
+    arr.sort((a, b) => a.participant_name.localeCompare(b.participant_name))
+    return arr
+  })()
+
+  const segmentLabel = (count: number, idx: number) => {
+    if (count < 2) return null
+    if (idx === 0) return 'Aller'
+    if (idx === count - 1) return 'Retour'
+    return `Vol ${idx + 1}`
+  }
 
   const missingFlightsCount = flights.filter(f => f.status === 'cancelled').length
   const withoutFlight = masterRows.filter(r => !r.has_flight)
@@ -184,59 +218,71 @@ export default function FlightsPage() {
               <thead>
                 <tr className="border-b bg-[var(--color-bg-subtle)] text-[var(--color-text-secondary)] font-medium">
                   <th className="p-4">{t('tablePassenger')}</th>
-                  <th className="p-4">{t('tableFlight')}</th>
+                  <th className="p-4">Vols (aller / retour)</th>
                   <th className="p-4">{t('tablePnr')}</th>
-                  <th className="p-4">{t('tableRoute')}</th>
-                  <th className="p-4">{t('tableDeparture')}</th>
-                  <th className="p-4">{t('tableArrival')}</th>
                   <th className="p-4">{t('tableStatus')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y text-[var(--color-text-primary)]">
                 {loading ? (
-                  <TableSkeleton cols={7} rows={4} />
-                ) : filteredFlights.length === 0 ? (
+                  <TableSkeleton cols={4} rows={4} />
+                ) : groupedPassengers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="p-8 text-center text-[var(--color-text-secondary)]">
+                    <td colSpan={4} className="p-8 text-center text-[var(--color-text-secondary)]">
                       {t('noFlights')}
                     </td>
                   </tr>
                 ) : (
-                  filteredFlights.map((flight) => (
-                    <tr key={flight.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="p-4 font-semibold">{flight.participant_name || 'N/A'}</td>
-                      <td className="p-4">
-                        <span className="font-mono bg-slate-100 rounded px-1.5 py-0.5 text-xs text-slate-800">
-                          {flight.flight_number}
-                        </span>
-                      </td>
-                      <td className="p-4 font-mono text-xs">{flight.pnr_code || '-'}</td>
-                      <td className="p-4">
-                        {flight.departure_airport} ➔ {flight.arrival_airport}
-                      </td>
-                      <td className="p-4 text-xs">
-                        {new Date(flight.departure_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
-                          dateStyle: 'short',
-                          timeStyle: 'short',
-                        })}
-                      </td>
-                      <td className="p-4 text-xs">
-                        {new Date(flight.arrival_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
-                          dateStyle: 'short',
-                          timeStyle: 'short',
-                        })}
-                      </td>
-                      <td className="p-4">
-                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
-                          flight.status === 'confirmed'
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                            : 'bg-rose-50 text-rose-700 border border-rose-200'
-                        }`}>
-                          {flight.status === 'confirmed' ? t('statusConfirmed') : t('statusCancelled')}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
+                  groupedPassengers.map((pax) => {
+                    const anyCancelled = pax.segments.some(s => s.status === 'cancelled')
+                    const pnrs = Array.from(new Set(pax.segments.map(s => s.pnr_code).filter(Boolean)))
+                    return (
+                      <tr key={pax.key} className="hover:bg-slate-50 transition-colors align-top">
+                        <td className="p-4 font-semibold whitespace-nowrap">
+                          {pax.participant_name}
+                          {pax.segments.length > 1 && (
+                            <span className="ml-2 rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">
+                              {pax.segments.length} vols
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-4">
+                          <div className="flex flex-col gap-1.5">
+                            {pax.segments.map((s, idx) => {
+                              const label = segmentLabel(pax.segments.length, idx)
+                              return (
+                                <div key={s.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                                  {label && (
+                                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${idx === 0 ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'}`}>
+                                      {label}
+                                    </span>
+                                  )}
+                                  <span className="font-mono bg-slate-100 rounded px-1.5 py-0.5 text-slate-800">{s.flight_number}</span>
+                                  <span className="font-medium">{s.departure_airport} ➔ {s.arrival_airport}</span>
+                                  <span className="text-[var(--color-text-secondary)]">
+                                    {new Date(s.departure_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}
+                                  </span>
+                                  {s.status === 'cancelled' && (
+                                    <span className="text-[10px] font-semibold text-rose-600">(annulé)</span>
+                                  )}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </td>
+                        <td className="p-4 font-mono text-xs whitespace-nowrap">{pnrs.length > 0 ? pnrs.join(', ') : '-'}</td>
+                        <td className="p-4">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            !anyCancelled
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}>
+                            {!anyCancelled ? t('statusConfirmed') : t('statusCancelled')}
+                          </span>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
               </tbody>
             </table>

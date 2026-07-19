@@ -1,14 +1,23 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles, Loader2 } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles, Loader2, Mail, Phone, Globe, Utensils, Plus, ChevronDown, ChevronRight, ClipboardList } from 'lucide-react'
 import { api, type Exception } from '@/lib/api'
+
+// Sub-categories of "Champs manquants" — the actionable editable fiche fields.
+const MISSING_FIELD_META: Record<string, { label: string; icon: React.ElementType }> = {
+  email: { label: 'Email', icon: Mail },
+  phone: { label: 'Téléphone', icon: Phone },
+  nationality: { label: 'Nationalité', icon: Globe },
+  dietary_requirements: { label: 'Régime alimentaire', icon: Utensils },
+}
+const MISSING_FIELD_ORDER = ['email', 'phone', 'nationality', 'dietary_requirements']
 
 const EXC_TYPE_LABELS: Record<string, string> = {
   conflict: 'Conflit de données',
@@ -35,6 +44,7 @@ const excTypeLabel = (t: string) => EXC_TYPE_LABELS[t] || t
 
 export default function ExceptionsPage() {
   const params = useParams()
+  const router = useRouter()
   const locale = params.locale as string
   const eventId = params.eventId as string
 
@@ -43,9 +53,10 @@ export default function ExceptionsPage() {
 
   // Optional deep-link filter, e.g. /exceptions?type=conflict from the dashboard.
   // Read from window on mount to avoid a static-prerender bail-out on useSearchParams.
-  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage'
-  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify', 'coverage']
+  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field'
+  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify', 'coverage', 'missing_field']
   const [typeFilter, setTypeFilter] = useState<ExceptionType | null>(null)
+  const [openSubs, setOpenSubs] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     const rawType = new URLSearchParams(window.location.search).get('type')
@@ -63,6 +74,7 @@ export default function ExceptionsPage() {
     not_found: tExc('notFound'),
     to_verify: tExc('toCheck'),
     coverage: tExc('coverage'),
+    missing_field: 'Champs manquants',
   }
 
   const [exceptions, setExceptions] = useState<Exception[]>([])
@@ -158,6 +170,21 @@ export default function ExceptionsPage() {
     ? exceptions.filter((e) => e.type === typeFilter)
     : exceptions
 
+  // "Champs manquants" get a dedicated grouped-by-field rendering (one row per
+  // participant with an "Ajouter" button). Everything else stays a flat list.
+  const missingFieldExcs = filteredExceptions.filter((e) => e.type === 'missing_field')
+  const flatExcs = filteredExceptions.filter((e) => e.type !== 'missing_field')
+  const missingBySub: Record<string, Exception[]> = {}
+  for (const f of MISSING_FIELD_ORDER) missingBySub[f] = []
+  for (const e of missingFieldExcs) {
+    const mf = (e.context_data?.missing_fields as string[] | undefined) || []
+    for (const f of mf) if (missingBySub[f]) missingBySub[f].push(e)
+  }
+  const goToParticipant = (pid?: string, field?: string) => {
+    if (!pid) return
+    router.push(`/${locale}/events/${eventId}/participants/${pid}${field ? `?field=${field}` : ''}`)
+  }
+
   return (
     <AppLayout
       eventId={eventId}
@@ -232,7 +259,61 @@ export default function ExceptionsPage() {
                 <p className="text-xs text-[var(--color-text-secondary)]">Aucune anomalie ou conflit de données n&apos;est en attente.</p>
               </Card>
             ) : (
-              filteredExceptions.map((exc) => (
+              <>
+              {/* Champs manquants — grouped by field, each with an "Ajouter" button */}
+              {missingFieldExcs.length > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <ClipboardList className="h-5 w-5 text-[var(--color-accent)]" />
+                    <h2 className="text-sm font-bold text-[var(--color-text-primary)]">Champs manquants</h2>
+                    <span className="text-xs text-[var(--color-text-secondary)]">
+                      — cliquez « Ajouter » pour compléter la fiche du participant
+                    </span>
+                  </div>
+                  {MISSING_FIELD_ORDER.filter((f) => missingBySub[f].length > 0).map((f) => {
+                    const meta = MISSING_FIELD_META[f]
+                    const Icon = meta.icon
+                    const items = missingBySub[f]
+                    const open = openSubs[f] ?? true
+                    return (
+                      <Card key={f} className="overflow-hidden border-[var(--color-border)] shadow-[var(--shadow-card)] bg-white p-0">
+                        <button
+                          onClick={() => setOpenSubs((s) => ({ ...s, [f]: !(s[f] ?? true) }))}
+                          className="flex w-full items-center justify-between px-5 py-3 hover:bg-slate-50"
+                        >
+                          <span className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
+                            <Icon className="h-4 w-4 text-[var(--color-accent)]" />
+                            {meta.label}
+                            <Badge className="bg-[var(--color-accent-light)] text-[var(--color-accent)] border-0">{items.length}</Badge>
+                          </span>
+                          {open ? <ChevronDown className="h-4 w-4 text-[var(--color-text-secondary)]" /> : <ChevronRight className="h-4 w-4 text-[var(--color-text-secondary)]" />}
+                        </button>
+                        {open && (
+                          <div className="divide-y border-t">
+                            {items.map((e) => (
+                              <div key={e.id} className="flex items-center justify-between gap-3 px-5 py-2.5">
+                                <span className="text-sm text-[var(--color-text-primary)] truncate">
+                                  {e.participant_name || (e.context_data?.participant_name as string) || '—'}
+                                </span>
+                                <Button
+                                  size="sm"
+                                  className="h-8 shrink-0 bg-[var(--color-accent)] text-white hover:bg-[var(--color-accent)]/90 text-xs"
+                                  onClick={() => goToParticipant(e.participant_id, f)}
+                                >
+                                  <Plus className="mr-1 h-3.5 w-3.5" /> Ajouter
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </Card>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* Flat list for all other exception types */}
+              {flatExcs.map((exc) => (
                 <Card
                   key={exc.id}
                   className="p-5 border-[var(--color-border)] shadow-[var(--shadow-card)] hover:border-slate-300 transition-all bg-white flex items-start gap-4"
@@ -287,7 +368,8 @@ export default function ExceptionsPage() {
                     </div>
                   </div>
                 </Card>
-              ))
+              ))}
+              </>
             )}
           </div>
 
