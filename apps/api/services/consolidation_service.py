@@ -1498,17 +1498,39 @@ def combine_to_iso_timestamp(date_val: Any, time_val: Any, default_date: str = "
         else: # YYYY-MM-DD
             target_date = raw_date
             
-    # Extract time (HH:MM or HH:MM:SS)
-    time_pattern = re.compile(r"(\d{2}:\d{2}(:\d{2})?)")
+    # Extract time — supports 24h ("16:50"), 1-digit hours ("9:00") and 12-hour
+    # AM/PM ("4:50 PM", "11:45 AM"). The old pattern required a 2-digit hour and
+    # ignored AM/PM, so every "4:50 PM" silently became 00:00.
+    time_pattern = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp][Mm])?")
     match_t = time_pattern.search(t_str) or time_pattern.search(d_str)
-    
+
     target_time = "00:00:00"
     if match_t:
-        target_time = match_t.group(1)
-        if len(target_time.split(":")) == 2:
-            target_time += ":00"
-            
+        hh = int(match_t.group(1))
+        mm = match_t.group(2)
+        ss = match_t.group(3) or "00"
+        ampm = (match_t.group(4) or "").lower()
+        if ampm == "pm" and hh < 12:
+            hh += 12
+        elif ampm == "am" and hh == 12:
+            hh = 0
+        if 0 <= hh <= 23:
+            target_time = f"{hh:02d}:{mm}:{ss}"
+
     return f"{target_date}T{target_time}Z"
+
+
+def _clean_flight_number(raw: Any) -> str:
+    """
+    Normalise a flight number so duplicates collapse: strip the Excel float
+    artifact ('4777.0' -> '4777') and pull the flight code out of a value that
+    also carries the airline name ('TURKISH AIRLINES INC. 4777.0' -> '4777',
+    'VIETNAM AIRLINES 143.0' -> '143'). Keeps IATA-style codes ('TK4777').
+    """
+    s = str(raw or "").strip().upper()
+    s = _re.sub(r"\.0+$", "", s)            # '4777.0' -> '4777'
+    codes = _re.findall(r"[A-Z]{0,3}\d{1,4}[A-Z]?", s)
+    return codes[-1] if codes else s
 
 
 def _token_name_match(name_toks: list[str], p_tokens: set[str]) -> bool:
@@ -2521,14 +2543,19 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     if flight_num and (dep_apt or arr_apt or has_time_signal):
                         dep_apt = dep_apt or "-"
                         arr_apt = arr_apt or "-"
-                        flight_num_clean = str(flight_num).strip().upper()
+                        flight_num_clean = _clean_flight_number(flight_num)
+                        # Only pass real DATE fields as the date part — never a
+                        # time value (that made the date fall back to default_date,
+                        # i.e. the corrupted "2025-11-10" arrival). When the file
+                        # has no arrival date, the flight lands the same day it
+                        # departs, so fall back to the departure date.
                         dep_ts = combine_to_iso_timestamp(
-                            data.get("departure_date") or data.get("departure_time"),
+                            data.get("departure_date"),
                             data.get("departure_time"),
                             default_date
                         )
                         arr_ts = combine_to_iso_timestamp(
-                            data.get("return_date") or data.get("arrival_date") or data.get("arrival_time"),
+                            data.get("arrival_date") or data.get("return_date") or data.get("departure_date"),
                             data.get("arrival_time"),
                             default_date
                         )

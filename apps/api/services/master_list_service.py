@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from supabase import Client
@@ -220,8 +220,14 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         if night_dates:
             row["hotel_name"] = _first_non_empty([hotel_names.get(n.get("hotel_id")) for n in nl]) or ""
             row["hotel_checkin"] = _fmt_date(night_dates[0])
-            # departure = morning after the last booked night
-            row["hotel_checkout"] = _fmt_date(night_dates[-1])
+            # Check-out = the morning AFTER the last night slept. hotel_nights
+            # stores the nights actually occupied (check-in .. check-out-1), so
+            # the departure date is the last night + 1 day (was off by -1).
+            try:
+                _last = date.fromisoformat(str(night_dates[-1])[:10])
+                row["hotel_checkout"] = _fmt_date((_last + timedelta(days=1)).isoformat())
+            except Exception:
+                row["hotel_checkout"] = _fmt_date(night_dates[-1])
             row["hotel_nights_count"] = len(night_dates)
             row["hotel_room_type"] = _first_non_empty([n.get("room_type") for n in nl]) or ""
         else:
