@@ -130,8 +130,9 @@ def detect_all(
             flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
             message_fr="{count} participant(s) n'ont pas encore de transfert — voir la master list (filtre « Sans transfert »).",
         )
-    _detect_missing_dietary(event_id, run_id, supabase, exceptions_to_insert)
-    _detect_missing_contact(event_id, run_id, supabase, exceptions_to_insert)
+    # Actionable per-participant missing profile fields (email/phone/nationality/
+    # dietary) → the "Champs manquants" category with per-field sub-categories.
+    _detect_missing_profile_fields(event_id, run_id, supabase, exceptions_to_insert)
 
     total = len(exceptions_to_insert)
     
@@ -271,12 +272,15 @@ def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client, 
 
 def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
-    MISSING_REQUIRED_FIELD — participants where first_name, last_name, or email is absent.
+    MISSING_REQUIRED_FIELD — participants where the IDENTITY fields first_name or
+    last_name are absent (critical). Contact/profile fields (email, phone,
+    nationality, dietary) are handled by _detect_missing_profile_fields so they
+    land in the actionable "Champs manquants" category.
     """
     try:
         result = (
             supabase.table("participants")
-            .select("id, first_name, last_name, email")
+            .select("id, first_name, last_name")
             .eq("event_id", event_id)
             .execute()
         )
@@ -289,7 +293,6 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
         missing = []
         if not p.get("first_name"): missing.append("first_name")
         if not p.get("last_name"):  missing.append("last_name")
-        if not p.get("email"):      missing.append("email")
 
         if missing:
             _insert_exception(
@@ -297,8 +300,8 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
                 run_id=run_id,
                 event_id=event_id,
                 exception_type="MISSING_REQUIRED_FIELD",
-                severity="critical" if "last_name" in missing else "warning",
-                message=f"Participant {p['id']} is missing required fields: {', '.join(missing)}.",
+                severity="critical",
+                message=f"Participant {p['id']} is missing required identity fields: {', '.join(missing)}.",
                 participant_id=p["id"],
                 context_data={"missing_fields": missing},
                 exceptions_list=exceptions_list,
@@ -306,6 +309,59 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
             count += 1
 
     logger.debug("MISSING_REQUIRED_FIELD: %d exceptions", count)
+    return count
+
+
+# Profile fields surfaced in the actionable "Champs manquants" category, each an
+# editable field on the participant fiche so the "Ajouter" button can fill it.
+_MISSING_PROFILE_FIELDS = ("email", "phone", "nationality", "dietary_requirements")
+
+
+def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+    """
+    MISSING_FIELD ("Champs manquants") — ONE exception per participant that is
+    missing any of the actionable profile fields (email, phone, nationality,
+    dietary). context_data.missing_fields lets the UI sort each person into the
+    right sub-category (Email / Téléphone / Nationalité / Régime), each with an
+    "Ajouter" button that opens their fiche. One exception per person (not per
+    field) keeps the volume sane.
+    """
+    try:
+        result = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, phone, nationality, dietary_requirements")
+            .eq("event_id", event_id)
+            .execute()
+        )
+    except Exception as exc:
+        logger.error("MISSING_FIELD query failed: %s", exc)
+        return 0
+
+    count = 0
+    for p in result.data or []:
+        missing = [f for f in _MISSING_PROFILE_FIELDS if not (p.get(f) or "").strip()]
+        if not missing:
+            continue
+        name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() or p["id"]
+        _insert_exception(
+            supabase=supabase,
+            run_id=run_id,
+            event_id=event_id,
+            # ENUM-valid; the "missing_field" category marker lives in context_data.
+            exception_type="MISSING_REQUIRED_FIELD",
+            severity="info",
+            message=f"Fiche de « {name} » incomplète — champ(s) manquant(s) : {', '.join(missing)}.",
+            participant_id=p["id"],
+            context_data={
+                "category": "missing_field",
+                "missing_fields": missing,
+                "participant_name": name,
+            },
+            exceptions_list=exceptions_list,
+        )
+        count += 1
+
+    logger.debug("MISSING_FIELD: %d exceptions", count)
     return count
 
 

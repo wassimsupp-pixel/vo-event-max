@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 import config
-from routers import events, files, participants, consolidation, exports, flights, hotels, transfers, activities, reports, global_participants, email_agent, mail_connection, communications, sharing, matching
+from routers import events, files, participants, consolidation, exports, flights, hotels, transfers, activities, reports, global_participants, email_agent, mail_connection, communications, sharing, matching, event_grouping
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +112,7 @@ app.include_router(mail_connection.router,     prefix=API_PREFIX, tags=["Mail Co
 app.include_router(communications.router,      prefix=API_PREFIX, tags=["Communications"])
 app.include_router(sharing.router,              prefix=API_PREFIX, tags=["Sharing"])
 app.include_router(matching.router,             prefix=API_PREFIX, tags=["Matching"])
+app.include_router(event_grouping.router,       prefix=API_PREFIX, tags=["Event Grouping"])
 
 
 
