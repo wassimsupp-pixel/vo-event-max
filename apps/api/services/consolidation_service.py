@@ -2802,37 +2802,53 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
             for record in all_records:
                 try:
                     part_id = record["participant_id"]
+                    if not part_id:
+                        continue
                     data = record["normalized_data"] or record["raw_data"] or {}
-                    
-                    pickup_loc = data.get("pickup_location") or data.get("pickup")
-                    dropoff_loc = data.get("dropoff_location") or data.get("dropoff")
-                    
-                    if pickup_loc and dropoff_loc:
+
+                    pickup_loc = (data.get("pickup_location") or data.get("pickup") or "").strip()
+                    dropoff_loc = (data.get("dropoff_location") or data.get("dropoff") or "").strip()
+                    pickup_time_val = data.get("pickup_time")
+                    transfer_type_val = data.get("transfer_type")
+
+                    # A transfer row is anything carrying a transfer-specific signal:
+                    # a pickup/dropoff location, a pickup time, or a transfer type.
+                    # Real transfer files are often PARTIAL (only a destination, or
+                    # only an airport + time), so we fall the missing endpoint back to
+                    # the airport / event city instead of dropping the transfer — the
+                    # transfers table requires both locations NOT NULL. Mirrors the
+                    # flight partial-route fallback.
+                    if pickup_loc or dropoff_loc or pickup_time_val or transfer_type_val:
+                        dep_airport = (data.get("departure_airport") or "").strip()
+                        arr_airport = (data.get("arrival_airport") or "").strip()
+                        pu = pickup_loc or dep_airport or event_city or "À préciser"
+                        do = dropoff_loc or arr_airport or event_city or dep_airport or "À préciser"
+
                         pickup_time_str = combine_to_iso_timestamp(
-                            data.get("pickup_time") or data.get("departure_time") or data.get("pickup_date"),
-                            data.get("pickup_time") or data.get("departure_time"),
+                            data.get("pickup_date") or data.get("departure_date") or data.get("date"),
+                            pickup_time_val or data.get("departure_time"),
                             default_date
                         )
-                        transfer_type = data.get("transfer_type") or "arrival"
+                        transfer_type = transfer_type_val or "arrival"
                         vehicle_type = data.get("vehicle_type") or "shuttle"
-                        
+
                         payload = {
                             "id": str(uuid.uuid4()),
                             "event_id": event_id,
                             "participant_id": part_id,
                             "transfer_type": transfer_type,
-                            "pickup_location": pickup_loc,
-                            "dropoff_location": dropoff_loc,
+                            "pickup_location": pu,
+                            "dropoff_location": do,
                             "pickup_time": pickup_time_str,
                             "vehicle_type": vehicle_type,
                             "status": "scheduled"
                         }
-                        
-                        # Add primary key ID if it exists
+
+                        # Reuse the existing row id (same participant + pickup time).
                         existing_id = existing_trans_map.get((part_id, pickup_time_str))
                         if existing_id:
                             payload["id"] = existing_id
-                            
+
                         trans_payloads[(part_id, pickup_time_str)] = payload
                         participants_has_transfer.add(part_id)
                 except Exception as record_exc:
