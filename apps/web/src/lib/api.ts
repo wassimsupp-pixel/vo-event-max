@@ -921,10 +921,14 @@ export const api = {
         `/api/events/${eventId}/match-candidates${qs({ include_resolved: includeResolved })}`
       )
     },
-    async resolve(candidateId: string, decision: 'fusionner' | 'separer'): Promise<{ status: string; message: string }> {
+    async resolve(
+      candidateId: string,
+      decision: 'fusionner' | 'separer',
+      keep?: Record<string, string>
+    ): Promise<{ status: string; message: string }> {
       return request<{ status: string; message: string }>(`/api/match-candidates/${candidateId}`, {
         method: 'PUT',
-        body: JSON.stringify({ decision }),
+        body: JSON.stringify(keep ? { decision, keep } : { decision }),
       })
     },
   },

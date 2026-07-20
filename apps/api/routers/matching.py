@@ -44,8 +44,16 @@ class MatchCandidate(BaseModel):
     created_at: Optional[str] = None
 
 
+# Fields the user can pick a side for when merging two fiches.
+MERGE_SELECTABLE_FIELDS = ("first_name", "last_name", "email", "phone", "company", "nationality")
+
+
 class DecisionRequest(BaseModel):
     decision: str  # 'fusionner' | 'separer'
+    # Optional per-field choice: {"email": "a@x.com", "phone": "+33..."}. Any
+    # field left out keeps the default merge behaviour (the surviving fiche's
+    # value, backfilled from the other one when empty).
+    keep: Optional[dict[str, Any]] = None
 
 
 class DecisionResponse(BaseModel):
@@ -147,6 +155,27 @@ async def resolve_match_candidate(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Merge failed. The participants may have changed — refresh and retry.",
             )
+
+        # Apply the user's per-field choices on the surviving fiche. Only the
+        # selectable identity fields are writable, and an empty choice is ignored
+        # so a merge can never blank a field that had a value.
+        if body.keep:
+            patch = {
+                f: str(v).strip()
+                for f, v in body.keep.items()
+                if f in MERGE_SELECTABLE_FIELDS and v is not None and str(v).strip()
+            }
+            if patch:
+                try:
+                    supabase.table("participants").update(patch).eq("id", winner_id).execute()
+                    for _f, _v in patch.items():
+                        log_change(
+                            supabase=supabase, event_id=event_id, user_id=current_user["id"],
+                            entity_type="participant", entity_id=winner_id,
+                            field_name=_f, old_value="", new_value=_v, reason="human_arbitration",
+                        )
+                except Exception as exc:
+                    logger.warning("Could not apply merge field choices: %s", exc)
         try:
             log_change(
                 supabase=supabase, event_id=event_id, user_id=current_user["id"],

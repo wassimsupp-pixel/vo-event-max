@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { GitMerge, Loader2, CheckCircle2, Users, ArrowRight, Sparkles, ShieldQuestion, Mail, Phone, Building2, Globe } from 'lucide-react'
+import { GitMerge, Loader2, CheckCircle2, Users, ArrowRight, Sparkles, ShieldQuestion, Mail, Phone, Building2, Globe, Check } from 'lucide-react'
 import { api, type MatchCandidate, type MatchCandidateParty } from '@/lib/api'
 
 const REC_STYLE: Record<string, { label: string; cls: string; icon: React.ElementType }> = {
@@ -14,27 +14,16 @@ const REC_STYLE: Record<string, { label: string; cls: string; icon: React.Elemen
   incertain: { label: 'IA : incertain — à trancher', cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: ShieldQuestion },
 }
 
-function Party({ p, fallbackName }: { p?: MatchCandidateParty | null; fallbackName?: string | null }) {
-  const rows: { icon: React.ElementType; value?: string | null }[] = [
-    { icon: Mail, value: p?.email },
-    { icon: Phone, value: p?.telephone },
-    { icon: Building2, value: p?.societe },
-    { icon: Globe, value: p?.nationalite },
-  ]
-  return (
-    <div className="flex-1 rounded-lg border border-[var(--color-border)] bg-white p-4">
-      <p className="text-sm font-bold text-[var(--color-text-primary)]">{p?.nom || fallbackName || '—'}</p>
-      <ul className="mt-2 space-y-1.5">
-        {rows.map((r, i) => (
-          <li key={i} className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-            <r.icon className="h-3.5 w-3.5 shrink-0 opacity-70" />
-            <span className={r.value ? '' : 'italic opacity-50'}>{r.value || 'non renseigné'}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
+// Fields the user can pick a side for. `api` is the participant column name.
+const CHOOSABLE = [
+  { key: 'email', api: 'email', label: 'Email', icon: Mail },
+  { key: 'telephone', api: 'phone', label: 'Téléphone', icon: Phone },
+  { key: 'societe', api: 'company', label: 'Société', icon: Building2 },
+  { key: 'nationalite', api: 'nationality', label: 'Nationalité', icon: Globe },
+] as const
+
+const partyVal = (p: MatchCandidateParty | null | undefined, key: string): string =>
+  ((p as Record<string, unknown> | null | undefined)?.[key] as string | null | undefined)?.trim() || ''
 
 export default function MatchReviewPage() {
   const { eventId, locale } = useParams() as { eventId: string; locale: string }
@@ -42,6 +31,18 @@ export default function MatchReviewPage() {
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [statusMsg, setStatusMsg] = useState('')
+  // Per-candidate, per-field side choice: { [candidateId]: { email: 'a' | 'b' } }
+  const [choices, setChoices] = useState<Record<string, Record<string, 'a' | 'b'>>>({})
+
+  // Default side for a field: the surviving fiche (b) when it has a value,
+  // otherwise the other one — i.e. exactly what a plain merge would keep.
+  const sideFor = (c: MatchCandidate, key: string): 'a' | 'b' => {
+    const explicit = choices[c.id]?.[key]
+    if (explicit) return explicit
+    return partyVal(c.details_b, key) ? 'b' : 'a'
+  }
+  const pick = (candId: string, key: string, side: 'a' | 'b') =>
+    setChoices((prev) => ({ ...prev, [candId]: { ...(prev[candId] || {}), [key]: side } }))
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -61,7 +62,18 @@ export default function MatchReviewPage() {
     setBusyId(c.id)
     setStatusMsg('')
     try {
-      const res = await api.matching.resolve(c.id, decision)
+      // Send the chosen value for every field the user could pick a side for.
+      let keep: Record<string, string> | undefined
+      if (decision === 'fusionner') {
+        keep = {}
+        for (const f of CHOOSABLE) {
+          const side = sideFor(c, f.key)
+          const val = partyVal(side === 'a' ? c.details_a : c.details_b, f.key)
+          if (val) keep[f.api] = val
+        }
+        if (Object.keys(keep).length === 0) keep = undefined
+      }
+      const res = await api.matching.resolve(c.id, decision, keep)
       setCandidates(prev => prev.filter(x => x.id !== c.id))
       setStatusMsg(res.message || (decision === 'fusionner' ? 'Fiches fusionnées.' : 'Fiches conservées séparées.'))
     } catch (err) {
@@ -82,6 +94,7 @@ export default function MatchReviewPage() {
           </h1>
           <p className="text-sm text-[var(--color-text-secondary)]">
             Paires de participants que le moteur n&apos;a pas pu trancher seul. L&apos;IA a donné un avis ; à vous de confirmer la fusion ou de garder les fiches séparées.
+            Quand les deux fiches diffèrent sur un champ, <strong>cliquez la valeur à conserver</strong> avant de fusionner.
           </p>
         </div>
 
@@ -129,12 +142,65 @@ export default function MatchReviewPage() {
                     </p>
                   )}
 
-                  <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center">
-                    <Party p={c.details_a} fallbackName={c.name_a} />
-                    <div className="flex shrink-0 items-center justify-center text-[var(--color-text-secondary)]">
-                      <span className="rounded-full border px-2 py-1 text-xs font-bold">= ?</span>
+                  <div className="overflow-hidden rounded-lg border border-[var(--color-border)]">
+                    <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-px bg-[var(--color-border)]">
+                      <div className="truncate bg-slate-100 px-3 py-2 text-sm font-bold text-[var(--color-text-primary)]">
+                        {c.details_a?.nom || c.name_a || '—'}
+                      </div>
+                      <div className="truncate bg-slate-100 px-3 py-2 text-sm font-bold text-[var(--color-text-primary)]">
+                        {c.details_b?.nom || c.name_b || '—'}
+                      </div>
                     </div>
-                    <Party p={c.details_b} fallbackName={c.name_b} />
+
+                    {CHOOSABLE.map((f) => {
+                      const va = partyVal(c.details_a, f.key)
+                      const vb = partyVal(c.details_b, f.key)
+                      if (!va && !vb) return null
+                      const side = sideFor(c, f.key)
+                      const bothDiffer = !!va && !!vb && va !== vb
+                      const Icon = f.icon
+                      const cell = (val: string, mine: 'a' | 'b') => {
+                        const selected = side === mine && !!val
+                        const selectable = !!val && bothDiffer
+                        return (
+                          <button
+                            type="button"
+                            disabled={!selectable}
+                            onClick={() => selectable && pick(c.id, f.key, mine)}
+                            className={`flex items-start gap-2 px-3 py-2 text-left text-xs transition-colors ${
+                              !val
+                                ? 'bg-white italic text-slate-400'
+                                : selected
+                                ? 'bg-[var(--color-accent-light)] font-semibold text-[var(--color-text-primary)] ring-1 ring-inset ring-[var(--color-accent)]'
+                                : 'bg-white text-[var(--color-text-secondary)] hover:bg-slate-50'
+                            } ${selectable ? 'cursor-pointer' : 'cursor-default'}`}
+                          >
+                            {selected ? (
+                              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-accent)]" />
+                            ) : (
+                              <span className="w-3.5 shrink-0" />
+                            )}
+                            <span className="break-all">{val || 'non renseigné'}</span>
+                          </button>
+                        )
+                      }
+                      return (
+                        <div key={f.key}>
+                          <div className="flex items-center gap-1.5 bg-slate-50/70 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+                            <Icon className="h-3 w-3" /> {f.label}
+                            {bothDiffer && (
+                              <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[9px] font-bold text-amber-700">
+                                à choisir
+                              </span>
+                            )}
+                          </div>
+                          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-px bg-[var(--color-border)]">
+                            {cell(va, 'a')}
+                            {cell(vb, 'b')}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
 
                   <div className="flex flex-wrap items-center justify-end gap-3 border-t pt-4">
