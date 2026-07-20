@@ -1624,6 +1624,33 @@ def combine_to_iso_timestamp(date_val: Any, time_val: Any, default_date: str = "
     return f"{target_date}T{target_time}Z"
 
 
+# Same two patterns combine_to_iso_timestamp uses to recognise a real calendar
+# date — shared here so a caller can ask "would this actually parse?" BEFORE
+# committing to build a row, instead of after the fact.
+_REAL_DATE_ISO_RE = _re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+_REAL_DATE_RE = _re.compile(r"(\d{4}[-/]\d{2}[-/]\d{2})|(\d{2}[-/]\d{2}[-/]\d{4})")
+
+
+def _has_real_date(data: dict[str, Any], *fields: str) -> bool:
+    """
+    True when at least one of ``fields`` actually spells out a calendar date —
+    either on its own (``departure_date: "2026-02-03"``) or embedded in a
+    datetime (``departure_time: "2026-02-03 18:30"``).
+
+    Used to gate flight/transfer row creation: a lone reference code with no
+    date anywhere is not evidence of a booked segment, and letting it through
+    only forces ``combine_to_iso_timestamp`` to invent one (the fixed
+    "2025-11-10" fallback, since no event in production has ``start_date``
+    set) — a fabricated date presented as if it were real. Refusing to create
+    the row is not "losing" data: nothing usable was there to begin with.
+    """
+    for f in fields:
+        v = str(data.get(f) or "")
+        if v and (_REAL_DATE_ISO_RE.search(v) or _REAL_DATE_RE.search(v)):
+            return True
+    return False
+
+
 def _clean_flight_number(raw: Any) -> str:
     """
     Normalise a flight number so duplicates collapse: strip the Excel float
@@ -2799,10 +2826,26 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     has_time_signal = any(
                         data.get(k) for k in ("departure_time", "departure_date", "arrival_time", "arrival_date")
                     )
+                    # A flight number with NO date anywhere is not evidence of a
+                    # booked segment — it is very often a reference/preference
+                    # column on a registration or transfer file ("TK 81" typed
+                    # as a preferred carrier, a quoted itinerary). Letting it
+                    # through created a "ghost" flight AND forced the fallback
+                    # below to fabricate a date, since no event has start_date
+                    # set. Requiring a real date keeps every genuine FCM/
+                    # masterfile row (which always carries one) and drops only
+                    # the fabricated ones.
+                    has_real_date = _has_real_date(
+                        data, "departure_date", "arrival_date", "departure_time", "arrival_time"
+                    )
 
-                    if flight_num and (dep_apt or arr_apt or has_time_signal):
-                        dep_apt = dep_apt or "-"
-                        arr_apt = arr_apt or "-"
+                    if flight_num and has_real_date and (dep_apt or arr_apt or has_time_signal):
+                        # A genuinely missing endpoint (common: a "flights to
+                        # <event city>" list has no arrival column because
+                        # everyone lands there) is left BLANK, not stamped with
+                        # a literal "-" that reads as if it were a real code.
+                        dep_apt = dep_apt or ""
+                        arr_apt = arr_apt or ""
                         flight_num_clean = _clean_flight_number(flight_num)
                         # Only pass real DATE fields as the date part — never a
                         # time value (that made the date fall back to default_date,
@@ -3110,9 +3153,22 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     # the airport / event city instead of dropping the transfer — the
                     # transfers table requires both locations NOT NULL. Mirrors the
                     # flight partial-route fallback.
-                    if pickup_loc or dropoff_loc or pickup_time_val or transfer_type_val:
-                        dep_airport = (data.get("departure_airport") or "").strip()
-                        arr_airport = (data.get("arrival_airport") or "").strip()
+                    #
+                    # BUT ``transfer_type_val`` alone is not enough: a registration
+                    # form's "Do you require a transfer on arrival?" Yes/No question
+                    # is routinely mapped to that field, and answering "Yes" is not a
+                    # location. Without an actual pickup/dropoff/airport AND a real
+                    # date, this created a phantom transfer to "À préciser" stamped
+                    # with the fabricated 2025-11-10 fallback — pure noise, not data.
+                    dep_airport = (data.get("departure_airport") or "").strip()
+                    arr_airport = (data.get("arrival_airport") or "").strip()
+                    has_location_signal = bool(pickup_loc or dropoff_loc or dep_airport or arr_airport)
+                    has_real_date = _has_real_date(
+                        data, "pickup_date", "departure_date", "arrival_date", "date",
+                        "pickup_time", "departure_time",
+                    )
+                    if (pickup_loc or dropoff_loc or pickup_time_val or transfer_type_val) \
+                            and has_location_signal and has_real_date:
                         transfer_type = transfer_type_val or "arrival"
                         pu = pickup_loc or dep_airport or arr_airport or event_city or "À préciser"
                         do = dropoff_loc or arr_airport or event_city or "À préciser"
@@ -3127,8 +3183,15 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                             else:
                                 pu, do = airport, hotel
 
+                        # ARRIVAL_date matters here as much as departure_date: on an
+                        # "Arrivee" row the transfer file's own date column IS the
+                        # arrival date (a "Depart" row carries departure_date). Missing
+                        # arrival_date from this chain was the direct cause of every
+                        # arrival transfer silently landing on the fabricated fallback
+                        # date instead of its real one.
                         pickup_time_str = combine_to_iso_timestamp(
-                            data.get("pickup_date") or data.get("departure_date") or data.get("date"),
+                            data.get("pickup_date") or data.get("departure_date")
+                            or data.get("arrival_date") or data.get("date"),
                             pickup_time_val or data.get("departure_time"),
                             default_date
                         )
