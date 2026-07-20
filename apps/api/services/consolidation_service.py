@@ -2893,6 +2893,28 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     part_id = record["participant_id"]
                     data = record["normalized_data"] or record["raw_data"] or {}
 
+                    # A record that ALSO carries transfer-specific fields is a
+                    # transfer row, not a flight booking — even when it has a
+                    # flight_number. Transfer files legitimately carry
+                    # "Numéro de vol lié" (linking the transfer to a flight,
+                    # mapped to flight_number for exactly that reason), and
+                    # their "Aeroport"/pickup-time/"Date" columns can ALSO map
+                    # onto arrival_airport/departure_time/arrival_date by
+                    # coincidence of naming — together a complete-looking
+                    # flight signal, so every transfer row spawned a SECOND,
+                    # ghost flight next to the real one from the FCM file: same
+                    # flight number, but no real departure side (a transfer
+                    # row never carries one), so it fell to the hardcoded
+                    # "2025-11-10" fallback below. has_real_date alone could
+                    # not catch this — the transfer row DOES carry one genuine
+                    # date (its own transfer date). Presence of pickup/dropoff/
+                    # vehicle/transfer-type fields is the one signal a real FCM
+                    # or combined-masterfile flight record never has.
+                    if any(data.get(k) for k in (
+                        "pickup_location", "dropoff_location", "vehicle_type", "transfer_type", "pickup_time",
+                    )):
+                        continue
+
                     flight_num = data.get("flight_number") or data.get("passenger_flight")
                     if flight_num and str(flight_num).strip().lower() in (
                         "yes", "no", "oui", "non", "true", "false", "x", "-", "n/a", "na", "tbc", "tbd"

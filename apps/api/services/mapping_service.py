@@ -52,6 +52,28 @@ CANONICAL_FIELDS = {
 
 _BOOLEAN_VALUES = {"yes", "no", "oui", "non", "y", "n", "true", "false", "1", "0", "x", "✓", "✗"}
 
+# A bare "Type" header (no synonym recognizes it — SYNONYMS["transfer_type"]
+# only lists "transfertype"/"shuttletype"/"typenavette") is how real transfer
+# files actually label the arrival/departure column. Left unrecognized, the
+# extraction step falls back to "arrival" for every row regardless of what the
+# file said — a departure transfer silently became a duplicate arrival one.
+# Detecting it from VALUES ("Arrivee"/"Depart"/"Retour"…) rather than from the
+# single generic word "Type" avoids colliding with room_type/vehicle_type,
+# which use the same header but hold completely different values.
+_TRANSFER_DIR_VALUES = {
+    "arrivee", "arrival", "arrivees", "arrivals", "arrivee groupe",
+    "depart", "departure", "departs", "departures",
+    "retour", "return", "retours", "returns",
+    "aller", "outbound", "outbound transfer", "inbound", "inbound transfer",
+}
+
+
+def _strip_accents_lower(s: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", s.strip().lower())
+        if unicodedata.category(c) != "Mn"
+    )
+
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DATE_FORMATS = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y"]
 
@@ -459,6 +481,7 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         # Content match indicators
         is_email = is_date = is_flight = False
         is_phone = is_pnr = is_iata = is_time = is_passport = is_boolean = False
+        is_transfer_dir = False
 
         if vals:
             n = len(vals)
@@ -472,6 +495,7 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             is_passport = (sum(1 for v in vals if _PASSPORT_RE.match(v)) / n) > 0.5
             is_iata = (sum(1 for v in vals if v.isupper() and _IATA_RE.match(v)) / n) > 0.5
             is_time = (sum(1 for v in vals if _TIME_RE.match(v)) / n) > 0.5
+            is_transfer_dir = (sum(1 for v in vals if _strip_accents_lower(v) in _TRANSFER_DIR_VALUES) / n) > 0.5
 
         # 2. Evaluate name-based scores for each canonical field (skipped when the
         #    header is generic/absent — then only content signals decide).
@@ -527,6 +551,11 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
                 if f in date_fields:
                     field_scores[f] = max(field_scores[f], 0.95) if field_scores[f] > 0.0 else 0.5
                 else:
+                    field_scores[f] *= 0.1
+        elif is_transfer_dir:
+            field_scores["transfer_type"] = max(field_scores.get("transfer_type", 0.0), 0.9)
+            for f in field_scores:
+                if f != "transfer_type":
                     field_scores[f] *= 0.1
 
         # 4. Weaker content signals — only *raise* scores (used mainly to deduce
@@ -774,7 +803,7 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
     """
     fixed = 0
     try:
-        files = supabase.table("uploaded_files").select("id, column_mapping").eq("event_id", event_id).execute().data or []
+        files = supabase.table("uploaded_files").select("id, source_type, column_mapping").eq("event_id", event_id).execute().data or []
     except Exception as exc:
         logger.warning("Could not load files for mapping repair: %s", exc)
         return 0
@@ -805,6 +834,37 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
             if tgt in ("last_name", "first_name", "traveler_name") and _HOTEL_HDR_RE.search(str(col)):
                 new[col] = "hotel_name" if "hotel_name" not in set(new.values()) else str(col)
                 changed = True
+
+        # 4. A transfer file's direction column, header-named just "Type" (no
+        #    synonym recognizes a bare "Type" — see _TRANSFER_DIR_VALUES), was
+        #    left unmapped and fell into the custom-field catch-all. Every
+        #    transfer then silently defaulted to "arrival" regardless of what
+        #    the file actually said, so a departure transfer duplicated as a
+        #    second, wrongly-directioned arrival one. Detect it from the
+        #    ALREADY-IMPORTED rows' values, the same way suggest_mapping now
+        #    does for new imports.
+        if f.get("source_type") == "transfer" and "transfer_type" not in set(new.values()):
+            try:
+                sample = (
+                    supabase.table("source_records")
+                    .select("raw_data")
+                    .eq("file_id", f["id"])
+                    .limit(20)
+                    .execute()
+                    .data or []
+                )
+                for col in list(new.keys()):
+                    vals = [
+                        str(r["raw_data"][col]).strip()
+                        for r in sample
+                        if r.get("raw_data") and r["raw_data"].get(col) not in (None, "")
+                    ]
+                    if vals and sum(1 for v in vals if _strip_accents_lower(v) in _TRANSFER_DIR_VALUES) / len(vals) > 0.5:
+                        new[col] = "transfer_type"
+                        changed = True
+                        break
+            except Exception as exc:
+                logger.warning("Transfer-direction mapping repair failed for file %s: %s", f["id"], exc)
 
         if changed:
             try:
