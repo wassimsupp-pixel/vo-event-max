@@ -2329,6 +2329,27 @@ def _order_winner_loser(a: dict, b: dict) -> tuple[dict, dict]:
     return (a, b) if str(a.get("id")) <= str(b.get("id")) else (b, a)
 
 
+def _same_person_name(a: str, b: str) -> bool:
+    """
+    Strict identity test used for the "same name, different emails" rule.
+
+    rapidfuzz's token_set_ratio returns 100 whenever one token SET is contained
+    in the other, so "Lin Lin" (which dedups to the single token {lin}) scored
+    100% against "Chenyang Lin" — two different people. We therefore require the
+    token sets to be equal, or one to be contained in the other with AT LEAST two
+    tokens ("Melcy Romero" ⊂ "Melcy Romero Trujillo" is the same person, while a
+    single-token name never is).
+    """
+    ta = {t for t in _norm_name(a).split() if t}
+    tb = {t for t in _norm_name(b).split() if t}
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    small, big = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
+    return len(small) >= 2 and small < big
+
+
 def _fallback_duplicate_exception(supabase: Client, run_id: str, event_id: str, a: dict, b: dict, score: float) -> None:
     """Surface a same-name/different-email duplicate as a POSSIBLE_DUPLICATE
     exception when the match_candidates table isn't migrated yet."""
@@ -2414,13 +2435,16 @@ def detect_ambiguous_duplicate_participants(
                     scored_pairs.append((float(score), i, j))
     scored_pairs.sort(key=lambda t: -t[0])
 
-    # (Near-)identical name (>= this) means it's very likely the SAME person even
-    # when the two fiches carry different emails (a personal + a corporate address,
-    # or a coordinator's) — those go to the review dashboard, never auto-merged.
-    # Kept high (not 90) so real surname variants like Martin/Martan with distinct
-    # emails stay treated as different people.
-    SAME_PERSON_NAME = 97
     MAX_CANDIDATES = 100
+
+    # Pending candidates are re-derived from the CURRENT participants on every
+    # run, exactly like exceptions: without this, a pair that is no longer a
+    # duplicate (or was queued by an older, buggier rule) stays in the dashboard
+    # for ever. Resolved candidates are never touched.
+    try:
+        supabase.table("match_candidates").delete().eq("event_id", event_id).eq("status", "pending").execute()
+    except Exception as exc:
+        logger.warning("Could not clear pending match candidates: %s", exc)
 
     auto_merged = 0
     candidates = 0
@@ -2443,7 +2467,7 @@ def detect_ambiguous_duplicate_participants(
         # be true homonyms). Falls back to a POSSIBLE_DUPLICATE exception if the
         # match_candidates table isn't migrated yet.
         if diff_email:
-            if score >= SAME_PERSON_NAME:
+            if _same_person_name(_name(a), _name(b)):
                 verdict = {
                     "decision": "incertain",
                     "justification": "Même nom, deux emails différents — à confirmer.",
