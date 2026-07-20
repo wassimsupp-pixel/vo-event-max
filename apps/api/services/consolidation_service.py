@@ -1206,24 +1206,15 @@ async def run_consolidation(
         for i in range(0, len(upsert_rows), 100):
             supabase.table("participants").upsert(upsert_rows[i:i + 100]).execute()
 
-        # Link source_records → participant. match_decision/score/signals are
-        # identical for every one of these (registration-sourced) links — only
-        # participant_id varies per record — so batch ALL of them together in
-        # one chunked stream of partial upserts instead of one .update() call
-        # per participant. On a 300-participant event this alone used to be
-        # ~300 sequential HTTP round trips (a large share of a 3+ minute run);
-        # partial-column upsert only touches the columns present in the
-        # payload, so raw_data/normalized_data/file_id/etc. on these existing
-        # rows are untouched — verified against e2e_singlefile/e2e_masterfile.
-        link_rows = [
-            {
-                "id": sr_id, "participant_id": pid, "match_decision": "certain",
-                "match_score": 100.0, "match_signals": {"source": "registration"},
-            }
-            for pid, sr_ids in links.items() for sr_id in sr_ids
-        ]
-        for i in range(0, len(link_rows), 100):
-            supabase.table("source_records").upsert(link_rows[i:i + 100]).execute()
+        # Link source_records → participant, grouped by participant (same signals).
+        for pid, sr_ids in links.items():
+            for i in range(0, len(sr_ids), 100):
+                supabase.table("source_records").update({
+                    "participant_id": pid,
+                    "match_decision": "certain",
+                    "match_score": 100.0,
+                    "match_signals": {"source": "registration"},
+                }).in_("id", sr_ids[i:i + 100]).execute()
 
         # Bulk-insert the batched merge change-log entries (chunked).
         if merge_change_rows:
@@ -1238,34 +1229,23 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         match_results = match_sources(registrations, fcm_records)
 
-        # Collect every write instead of issuing it inline: for an event with a
-        # few hundred flight records this loop used to make TWO sequential HTTP
-        # calls each (participants + source_records), one match at a time — by
-        # far the largest single contributor to a multi-minute consolidation.
-        # Semantics preserved exactly: when a participant has several matched
-        # segments (aller + retour), the LAST one processed still ends up as
-        # their has_flight/fcm_source_id, same as the old sequential .update()
-        # calls each overwriting the previous — verified in e2e_hasflag
-        # (two segments, same participant).
-        flight_participant_updates: list[dict] = []
-        flight_source_record_updates: list[dict] = []
-
         for mr in match_results:
             if mr.decision in ("certain", "probable") and mr.reg_record:
                 p_id = participant_id_map.get(mr.reg_record.source_record_id)
                 if p_id:
-                    flight_participant_updates.append({
-                        "id": p_id,
+                    # Update participant: mark has_flight = True
+                    supabase.table("participants").update({
                         "has_flight": True,
                         "fcm_source_id": mr.fcm_record.source_record_id,
-                    })
-                    flight_source_record_updates.append({
-                        "id": mr.fcm_record.source_record_id,
+                    }).eq("id", p_id).execute()
+
+                    # Link FCM source_record
+                    supabase.table("source_records").update({
                         "participant_id": p_id,
                         "match_decision": mr.decision,
                         "match_score": mr.score,
                         "match_signals": mr.signals,
-                    })
+                    }).eq("id", mr.fcm_record.source_record_id).execute()
 
                     if mr.decision == "certain":
                         stats["matched_certain"] += 1
@@ -1295,11 +1275,6 @@ async def run_consolidation(
                 stats["to_verify"] += 1
             else:
                 stats["not_found"] += 1
-
-        for i in range(0, len(flight_participant_updates), 100):
-            supabase.table("participants").upsert(flight_participant_updates[i:i + 100]).execute()
-        for i in range(0, len(flight_source_record_updates), 100):
-            supabase.table("source_records").upsert(flight_source_record_updates[i:i + 100]).execute()
 
         # ---------------------------------------------------------------
         # 6a-1. Purge stale source-record copies from earlier runs (records
