@@ -482,12 +482,25 @@ def _detect_date_incoherence(
     return count
 
 
+_LEGAL_SUFFIX_RE = re.compile(
+    r"\b(inc|llc|ltd|limited|corp|corporation|co|sa|sas|sarl|gmbh|bv|nv|plc|ag|spa|srl|pty|group|holding|hldg)\b",
+    re.I,
+)
+
+
+def _norm_org(v: Any) -> str:
+    """Company/organisation name reduced to its meaningful core: no punctuation,
+    no legal suffix, no case — 'LivaNova Inc.' == 'LIVANOVA'."""
+    s = re.sub(r"[^a-z0-9 ]", " ", str(v or "").lower())
+    s = _LEGAL_SUFFIX_RE.sub(" ", s)
+    return " ".join(s.split())
+
+
 def _values_conflict(field: str, a: Any, b: Any) -> bool:
     """
-    True when two source values genuinely disagree. Phone numbers are compared on
-    digits only and on their last 9 digits, so the SAME number written nationally
-    and internationally ('+1 513 376 1196' vs '5133761196') is not a conflict —
-    only a real difference is.
+    True only when two source values GENUINELY disagree — formatting differences
+    never count. Phones compare on digits / last 9 (so '+1 513 376 1196' ==
+    '5133761196'); organisations ignore case, punctuation and legal suffixes.
     """
     sa, sb = str(a or "").strip(), str(b or "").strip()
     if not sa or not sb:
@@ -499,6 +512,13 @@ def _values_conflict(field: str, a: Any, b: Any) -> bool:
             return False
         tail = min(len(na), len(nb), 9)
         return na[-tail:] != nb[-tail:]
+    if field in ("company", "nationality"):
+        ca, cb = _norm_org(sa), _norm_org(sb)
+        if not ca or not cb:
+            return False
+        # One being a prefix/subset of the other ("LivaNova" vs "LivaNova France")
+        # is a refinement, not a contradiction.
+        return not (ca == cb or ca in cb or cb in ca)
     return sa.lower() != sb.lower()
 
 
@@ -542,7 +562,14 @@ def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client, excepti
         logger.error("Failed to load source_records for DATA_CONFLICT: %s", exc)
         return 0
 
-    conflict_fields = ["company", "nationality", "phone"]
+    # `phone` is deliberately NOT a conflict field: a registration form and a
+    # travel agency routinely hold two different (both valid) numbers for the same
+    # person — mobile vs office, personal vs corporate. That is extra contact
+    # info, not a data error, and flagging it produced hundreds of unactionable
+    # cards. Both numbers stay visible in the participant's source data.
+    # company/nationality are kept: a real divergence there can reveal a WRONG
+    # merge, which is genuinely worth a look.
+    conflict_fields = ["company", "nationality"]
     count = 0
 
     for p in result.data:
