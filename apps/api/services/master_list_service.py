@@ -214,11 +214,32 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         row["flight_summary"] = "\n".join(flight_lines)
         row["flight_count"] = len(flist)
 
-        # Hotel nights → check-in / check-out / nights
+        # Hotel nights → check-in / check-out / nights.
+        #
+        # A participant can have nights across SEVERAL distinct properties (a
+        # pre-event villa, then the main conference hotel) — two real, separate
+        # bookings. Flattening every night's date into one min/max span mixed
+        # them into a single fabricated stay: wrong property name (picked at
+        # random), a date range that included nights nobody actually slept
+        # (the gap between the two bookings), and a night COUNT that
+        # contradicted the span shown. Group by hotel_id first and only ever
+        # summarise nights that belong to the SAME property.
         nl = nights_by_p.get(pid, [])
-        night_dates = sorted([str(n.get("night_date")) for n in nl if n.get("night_date")])
-        if night_dates:
-            row["hotel_name"] = _first_non_empty([hotel_names.get(n.get("hotel_id")) for n in nl]) or ""
+        by_hotel: dict[Any, list[dict]] = {}
+        for n in nl:
+            if n.get("night_date"):
+                by_hotel.setdefault(n.get("hotel_id"), []).append(n)
+
+        if by_hotel:
+            # The stay with the most nights is the primary one shown in the
+            # scalar columns (earliest check-in breaks a tie) — never a mix.
+            stay_groups = sorted(
+                by_hotel.values(),
+                key=lambda g: (-len(g), min(str(x["night_date"]) for x in g)),
+            )
+            primary = stay_groups[0]
+            night_dates = sorted(str(n["night_date"]) for n in primary)
+            row["hotel_name"] = _first_non_empty([hotel_names.get(n.get("hotel_id")) for n in primary]) or ""
             row["hotel_checkin"] = _fmt_date(night_dates[0])
             # Check-out = the morning AFTER the last night slept. hotel_nights
             # stores the nights actually occupied (check-in .. check-out-1), so
@@ -229,7 +250,13 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
             except Exception:
                 row["hotel_checkout"] = _fmt_date(night_dates[-1])
             row["hotel_nights_count"] = len(night_dates)
-            row["hotel_room_type"] = _first_non_empty([n.get("room_type") for n in nl]) or ""
+            row["hotel_room_type"] = _first_non_empty([n.get("room_type") for n in primary]) or ""
+            # Additional distinct properties exist: say so rather than dropping
+            # them silently — the full detail remains on the hotels page.
+            extra = len(stay_groups) - 1
+            if extra > 0:
+                other_nights = sum(len(g) for g in stay_groups[1:])
+                row["hotel_name"] = f"{row['hotel_name']} (+{extra} hébergement(s), {other_nights} nuit(s))"
         else:
             row["hotel_name"] = ""
             row["hotel_checkin"] = ""

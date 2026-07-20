@@ -1402,6 +1402,20 @@ async def run_consolidation(
             logger.warning("Phantom duplicate merge failed: %s", exc)
 
         # ---------------------------------------------------------------
+        # 6d-bis. Exact duplicates: same email AND matching identity, neither
+        #     side "thin" enough for the phantom-merge pass above. This is the
+        #     shape an event merge produces — the same person fully registered
+        #     in each of the merged events survives as two complete fiches
+        #     otherwise, invisibly (arbitration explicitly defers score>=93
+        #     pairs here; skipping this step makes that deferral a lie).
+        # ---------------------------------------------------------------
+        try:
+            exact_merged = merge_exact_duplicate_participants(event_id, supabase)
+            stats["exact_duplicates_merged"] = exact_merged
+        except Exception as exc:
+            logger.warning("Exact-duplicate merge failed: %s", exc)
+
+        # ---------------------------------------------------------------
         # 6e. Duplicate emails — computed on the FINAL participants (after
         #     merges), one exception per email. Six rows of the same person
         #     across six files are ONE participant, not six alerts.
@@ -2459,6 +2473,75 @@ def merge_duplicate_participants(event_id: str, supabase: Client) -> int:
     return deleted
 
 
+def merge_exact_duplicate_participants(event_id: str, supabase: Client) -> int:
+    """
+    Merge participants that are the SAME PERSON beyond reasonable doubt: an
+    identical (normalised) email shared by fiches whose names also match
+    (``_same_person_name`` — the strict identity test, not a fuzzy score).
+
+    This exists for a case ``merge_duplicate_participants`` above deliberately
+    does NOT cover: two fully-populated fiches (both have email, company,
+    phone — neither is a "thin" travel stub). That shape is produced by
+    ``event_grouping_service.merge_events``, whose re-consolidation is the only
+    thing standing between "two look-alike events merged" and "every shared
+    attendee now has two permanent fiches" — silently, since
+    ``detect_ambiguous_duplicate_participants`` explicitly skips near-exact
+    (score >= 93) pairs on the assumption a later pass merges them. This IS
+    that pass.
+
+    A shared email with a NON-matching name is left alone (a booking contact
+    address reused across different travellers is common — see
+    ``email_is_contact`` elsewhere in this file); it stays visible as a
+    DUPLICATE_EMAIL exception instead of being force-merged.
+    """
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        res = (
+            supabase.table("participants")
+            .select("id, first_name, last_name, email, phone, company, nationality, registration_source_id")
+            .eq("event_id", event_id)
+            .range(offset, offset + 999)
+            .execute()
+        )
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    by_email: dict[str, list[dict]] = {}
+    for p in parts:
+        email = (p.get("email") or "").strip().lower()
+        if email:
+            by_email.setdefault(email, []).append(p)
+
+    def _pname(p: dict) -> str:
+        return f"{p.get('first_name') or ''} {p.get('last_name') or ''}"
+
+    merged = 0
+    for email, members in by_email.items():
+        if len(members) < 2:
+            continue
+        # Fold to the richest fiche (registered > has email > most secondary
+        # fields) — it survives; everyone else merges into it.
+        winner = members[0]
+        for m in members[1:]:
+            winner, _ = _order_winner_loser(winner, m)
+        winner_name = _pname(winner)
+        for m in members:
+            if m["id"] == winner["id"]:
+                continue
+            if not _same_person_name(winner_name, _pname(m)):
+                continue  # same email, unrelated name — a shared contact, not a duplicate
+            if _merge_participant_into(supabase, m["id"], winner["id"]):
+                merged += 1
+
+    if merged:
+        logger.info("Merged %d exact-duplicate participant(s) for event %s", merged, event_id)
+    return merged
+
+
 _MERGE_CHILD_TABLES = (
     "flights", "hotel_nights", "transfers", "participant_activities",
     "source_records", "exceptions", "communications",
@@ -2682,7 +2765,12 @@ def detect_ambiguous_duplicate_participants(
 
         # Same or missing email:
         if score >= ARB.AMBIGUOUS_MAX:
-            continue  # near-exact duplicate — left to the phantom-merge pass
+            # Near-exact duplicate. If the email matches too, it was already
+            # merged upstream by merge_exact_duplicate_participants (step
+            # 6d-bis) — this pair surviving to here means the identity check
+            # there disagreed (different name despite the fuzzy name score),
+            # so it is correctly left alone rather than force-merged.
+            continue
         if calls >= ARB.MAX_ARBITRATIONS_PER_RUN:
             continue  # AI budget spent; low-band pairs wait for the next run
         calls += 1
