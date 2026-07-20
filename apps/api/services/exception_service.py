@@ -482,6 +482,26 @@ def _detect_date_incoherence(
     return count
 
 
+def _values_conflict(field: str, a: Any, b: Any) -> bool:
+    """
+    True when two source values genuinely disagree. Phone numbers are compared on
+    digits only and on their last 9 digits, so the SAME number written nationally
+    and internationally ('+1 513 376 1196' vs '5133761196') is not a conflict —
+    only a real difference is.
+    """
+    sa, sb = str(a or "").strip(), str(b or "").strip()
+    if not sa or not sb:
+        return False
+    if field == "phone":
+        na = re.sub(r"\D", "", sa)
+        nb = re.sub(r"\D", "", sb)
+        if not na or not nb or na == nb:
+            return False
+        tail = min(len(na), len(nb), 9)
+        return na[-tail:] != nb[-tail:]
+    return sa.lower() != sb.lower()
+
+
 def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
     DATA_CONFLICT — same participant has conflicting values between registration and FCM.
@@ -533,7 +553,7 @@ def _detect_data_conflicts(event_id: str, run_id: str, supabase: Client, excepti
         for field in conflict_fields:
             reg_val = reg_data.get(field)
             fcm_val = fcm_data.get(field)
-            if reg_val and fcm_val and reg_val.strip().lower() != fcm_val.strip().lower():
+            if reg_val and fcm_val and _values_conflict(field, reg_val, fcm_val):
                 conflicts.append({
                     "field": field,
                     "registration_value": reg_val,

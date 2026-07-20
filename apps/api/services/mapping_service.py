@@ -441,6 +441,11 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
                     score = max(score, _fuzzy_name_score(norm_col, field))
             field_scores[field] = score
 
+        # Header-only scores, kept before the content boosts below so a column
+        # whose NAME actually designates the field can outrank one that merely
+        # LOOKS like it by content (see the header-priority bonus in step 4b).
+        name_scores = dict(field_scores)
+
         # 3. Content-based adjustments/boosts (strong, mutually-exclusive signals)
         if is_email:
             field_scores["email"] = max(field_scores.get("email", 0.0), 0.95)
@@ -493,11 +498,37 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             field_scores["id"] = 0.0
             field_scores["participant_id"] = 0.0
 
+        # 4b. HEADER PRIORITY — a column whose name actually designates the field
+        # must outrank a column that only LOOKS like it by content. Without this,
+        # a "Conf #" of 9 digits scored 0.92 as a phone (content) and TIED with the
+        # real "Telephone" column (0.90 name → 0.92), so the raw column order
+        # decided: the confirmation number stole `phone`, the real phone fell into
+        # a custom field, and every participant present in two files raised a
+        # DATA_CONFLICT on phone.
+        for _f, _ns in name_scores.items():
+            if _ns >= 0.6 and field_scores.get(_f, 0.0) > 0.0:
+                field_scores[_f] = min(1.0, field_scores[_f] + 0.06)
+
         # Identity-critical date fields require HEADER evidence — they must
         # never be deduced from date-looking content alone, or a leftover date
         # column ("Depart Date6") falls back onto passport_expiry and poisons
         # every participant with fake expired passports.
         _col_l = str(col).lower()
+
+        # A confirmation / booking reference is a bare digit string that matches
+        # the phone shape but is NOT a phone number.
+        if re.search(r"\b(conf|booking|reserv|dossier|folio|voucher|r[ée]f)", _col_l) and not re.search(
+            r"\b(phone|t[ée]l|mobile|gsm|portable)", _col_l
+        ):
+            field_scores["phone"] = 0.0
+
+        # "Nom de l'hôtel" / "Nom de la chambre" / "Nom compagnie": the generic
+        # synonym "nom" ties with the specific field, and the raw column order
+        # would decide — putting the HOTEL name into the participant's surname.
+        # A header naming another entity is never the person's name.
+        if re.search(r"h[oô]tel|chambre|\broom\b|compagnie|airline|agence", _col_l):
+            for _pf in ("last_name", "first_name", "traveler_name", "badge_name"):
+                field_scores[_pf] = 0.0
         if "passport_expiry" in field_scores and not re.search(r"pass|expir|valid", _col_l):
             field_scores["passport_expiry"] = 0.0
         if "date_of_birth" in field_scores and not re.search(r"birth|dob|naiss|n[ée] le", _col_l):
@@ -665,6 +696,69 @@ def _custom_field_key(col: str, used_targets: set[str]) -> Optional[str]:
         key = f"{base} ({i})"
         i += 1
     return key
+
+
+# Word-anchored on purpose: an unanchored "tel" also matches "ho-TEL", which would
+# remap the hotel column onto `phone` and wipe the hotel data.
+_CONF_HDR_RE = re.compile(r"\b(conf|booking|reserv|dossier|folio|voucher|r[ée]f)", re.I)
+_PHONE_HDR_RE = re.compile(r"\b(phone|t[ée]l|mobile|gsm|portable)", re.I)
+_HOTEL_HDR_RE = re.compile(r"h[oô]tel", re.I)
+
+
+def repair_stored_mappings(event_id: str, supabase) -> int:
+    """
+    Self-heal mis-mappings already baked into a file's stored ``column_mapping``.
+    Those are reused verbatim on every consolidation, so fixing the heuristics
+    alone would never clear them. Repairs:
+      1. a confirmation/reference column holding ``phone`` (a "Conf #" of 9 digits
+         looked like a phone and stole the field from the real "Telephone"
+         column — the cause of the DATA_CONFLICT flood);
+      2. gives ``phone`` back to the column actually named phone/téléphone;
+      3. a hotel-name column sitting on the participant's name.
+    Returns the number of files repaired.
+    """
+    fixed = 0
+    try:
+        files = supabase.table("uploaded_files").select("id, column_mapping").eq("event_id", event_id).execute().data or []
+    except Exception as exc:
+        logger.warning("Could not load files for mapping repair: %s", exc)
+        return 0
+
+    for f in files:
+        cm = f.get("column_mapping")
+        if not isinstance(cm, dict) or not cm:
+            continue
+        new = dict(cm)
+        changed = False
+
+        # 1. A confirmation / reference column is not a phone number.
+        for col, tgt in list(new.items()):
+            if tgt == "phone" and _CONF_HDR_RE.search(str(col)) and not _PHONE_HDR_RE.search(str(col)):
+                new[col] = str(col)          # keep its data as a custom field
+                changed = True
+
+        # 2. Hand `phone` back to the column that actually names it.
+        if "phone" not in set(new.values()):
+            for col, tgt in list(new.items()):
+                if _PHONE_HDR_RE.search(str(col)) and tgt != "phone":
+                    new[col] = "phone"
+                    changed = True
+                    break
+
+        # 3. A hotel-name column must never sit on the person's name.
+        for col, tgt in list(new.items()):
+            if tgt in ("last_name", "first_name", "traveler_name") and _HOTEL_HDR_RE.search(str(col)):
+                new[col] = "hotel_name" if "hotel_name" not in set(new.values()) else str(col)
+                changed = True
+
+        if changed:
+            try:
+                supabase.table("uploaded_files").update({"column_mapping": new}).eq("id", f["id"]).execute()
+                fixed += 1
+                logger.info("Repaired stored column_mapping for file %s", f["id"])
+            except Exception as exc:
+                logger.warning("Mapping repair failed for file %s: %s", f["id"], exc)
+    return fixed
 
 
 def build_mapping_with_report(

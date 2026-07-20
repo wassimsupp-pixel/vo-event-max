@@ -880,6 +880,17 @@ async def run_consolidation(
 
     try:
         # ---------------------------------------------------------------
+        # 0. Self-heal mis-mappings baked into stored column_mapping (e.g. a
+        #    "Conf #" holding `phone`, which made every dual-source participant
+        #    raise a DATA_CONFLICT). Must run BEFORE the files are re-parsed.
+        # ---------------------------------------------------------------
+        try:
+            from services.mapping_service import repair_stored_mappings
+            stats["mappings_repaired"] = repair_stored_mappings(event_id, supabase)
+        except Exception as exc:
+            logger.warning("Stored-mapping repair failed: %s", exc)
+
+        # ---------------------------------------------------------------
         # 1. Load event metadata (for date incoherence checks)
         # ---------------------------------------------------------------
         event_resp = supabase.table("events").select("start_date, end_date").eq("id", event_id).single().execute()
