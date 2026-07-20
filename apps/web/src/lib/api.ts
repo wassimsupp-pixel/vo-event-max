@@ -603,8 +603,8 @@ export const api = {
       })
     },
 
-    async getDownloadUrl(exportId: string): Promise<{ signed_url: string; expires_at: string }> {
-      return request<{ signed_url: string; expires_at: string }>(
+    async getDownloadUrl(exportId: string): Promise<{ signed_url: string; expires_at: string; filename: string }> {
+      return request<{ signed_url: string; expires_at: string; filename: string }>(
         `/api/exports/${exportId}/download`
       )
     },

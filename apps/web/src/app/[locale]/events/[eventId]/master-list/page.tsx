@@ -158,12 +158,28 @@ export default function MasterListPage() {
 
   const handleExport = async () => {
     setIsExporting(true)
+    setError(null)
     try {
       const exp = await api.exports.create(eventId, '')
-      const { signed_url } = await api.exports.getDownloadUrl(exp.id)
-      window.open(signed_url, '_blank')
-    } catch {
-      console.warn('Export not available - API not configured')
+      const { signed_url, filename } = await api.exports.getDownloadUrl(exp.id)
+      // NOT window.open(): by the time these two awaits resolve, the browser
+      // no longer treats this as a direct response to the click — popup
+      // blockers silently swallow window.open() here (no console error, no
+      // visible feedback: exactly "j'appuie, ça charge, puis rien"). A
+      // programmatic <a download> click is recognised as a file download
+      // rather than a popup and is not blocked the same way.
+      const a = document.createElement('a')
+      a.href = signed_url
+      a.download = filename || 'master-list.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Échec de l'export : ${err.message}`
+          : "Échec de l'export. Réessayez, ou relancez une consolidation si aucune n'a encore été validée."
+      )
     } finally {
       setIsExporting(false)
     }

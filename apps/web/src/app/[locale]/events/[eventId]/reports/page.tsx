@@ -79,15 +79,30 @@ export default function ReportsPage() {
   }, [eventId])
 
   const [isExporting, setIsExporting] = useState(false)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const handleExport = async () => {
     setIsExporting(true)
+    setExportError(null)
     try {
       const exp = await api.exports.create(eventId, '')
-      const { signed_url } = await api.exports.getDownloadUrl(exp.id)
-      window.open(signed_url, '_blank')
-    } catch {
-      console.warn('Export not available - API not configured')
+      const { signed_url, filename } = await api.exports.getDownloadUrl(exp.id)
+      // NOT window.open(): after two awaited network calls the browser no
+      // longer treats this as a direct click response and silently blocks
+      // the popup — no error, no download, nothing. A programmatic
+      // <a download> click is recognised as a file download and isn't.
+      const a = document.createElement('a')
+      a.href = signed_url
+      a.download = filename || 'master-list.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+    } catch (err) {
+      setExportError(
+        err instanceof Error
+          ? `Échec de l'export : ${err.message}`
+          : "Échec de l'export. Réessayez, ou relancez une consolidation si aucune n'a encore été validée."
+      )
     } finally {
       setIsExporting(false)
     }
@@ -338,6 +353,12 @@ export default function ReportsPage() {
             {isExporting ? t('generating') : t('exportButton')}
           </button>
         </div>
+        {exportError && (
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] px-4 py-2.5 text-sm text-[var(--color-danger)]">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{exportError}</span>
+          </div>
+        )}
       </div>
     </AppLayout>
   )
