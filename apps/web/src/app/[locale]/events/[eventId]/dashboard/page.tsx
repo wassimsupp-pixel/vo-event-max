@@ -26,6 +26,10 @@ import {
   ShieldCheck,
   Sparkles,
   Lightbulb,
+  Plane,
+  Hotel,
+  Bus,
+  PartyPopper,
 } from 'lucide-react'
 import { api, type Participant, type UploadedFile, type Exception, type ConsolidationRun } from '@/lib/api'
 
@@ -167,11 +171,26 @@ export default function DashboardPage() {
     { type: 'activity', name: 'Activités', subtitle: 'Programme des activités', icon: '🎯' },
   ]
 
-  // Distribution chart dynamic percentages
-  const flightsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_flight).length / totalParticipants) * 100) : 0
-  const hotelsPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_hotel).length / totalParticipants) * 100) : 0
-  const transfersPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_transfer).length / totalParticipants) * 100) : 0
-  const activitiesPct = totalParticipants > 0 ? Math.round((participants.filter((p) => p.has_activities).length / totalParticipants) * 100) : 0
+  // Raw "sans X" counts (MVP feedback §14) come from `analysis`
+  // (api.reports.getAnalysis → build_analysis), which scans EVERY participant
+  // of the event. The `participants` array above is capped at 5 rows
+  // (page_size: 5, it only feeds the "recent participants" preview table) —
+  // computing coverage from it would silently show counts for 5 people out of
+  // however many are actually in the event. Each tile links straight to the
+  // master list pre-filtered to exactly those participants (master-list/
+  // page.tsx already reads ?missing= from the URL), not just to the general
+  // page for that category.
+  const withoutFlightCount = analysis?.without_flight ?? (totalParticipants > 0 ? participants.filter((p) => !p.has_flight).length : 0)
+  const withoutHotelCount = analysis?.without_hotel ?? (totalParticipants > 0 ? participants.filter((p) => !p.has_hotel).length : 0)
+  const withoutTransferCount = analysis?.without_transfer ?? (totalParticipants > 0 ? participants.filter((p) => !p.has_transfer).length : 0)
+  const withoutActivitiesCount = analysis?.without_activities ?? (totalParticipants > 0 ? participants.filter((p) => !p.has_activities).length : 0)
+  const masterListBase = `/${locale}/events/${eventId}/master-list`
+
+  // Distribution chart percentages — same full-event source as above.
+  const flightsPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutFlightCount) / totalParticipants) * 100) : 0
+  const hotelsPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutHotelCount) / totalParticipants) * 100) : 0
+  const transfersPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutTransferCount) / totalParticipants) * 100) : 0
+  const activitiesPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutActivitiesCount) / totalParticipants) * 100) : 0
   const commsPct = totalParticipants > 0 ? 90 : 0
 
   const distributionData = [
@@ -283,6 +302,49 @@ export default function DashboardPage() {
             href={`/${locale}/events/${eventId}/exceptions`}
           />
         </div>
+
+        {/* Couverture — raw counts, click-through to the exact concerned
+            participants on the master list (MVP feedback §14). */}
+        {totalParticipants > 0 && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <KPICard
+              label="Sans vol"
+              value={withoutFlightCount}
+              delta={withoutFlightCount === 0 ? 'Tous couverts' : undefined}
+              deltaPositive={withoutFlightCount === 0}
+              icon={<Plane className="h-5 w-5" />}
+              accentColor="var(--color-warning)"
+              href={`${masterListBase}?missing=flight`}
+            />
+            <KPICard
+              label="Sans hébergement"
+              value={withoutHotelCount}
+              delta={withoutHotelCount === 0 ? 'Tous couverts' : undefined}
+              deltaPositive={withoutHotelCount === 0}
+              icon={<Hotel className="h-5 w-5" />}
+              accentColor="var(--color-warning)"
+              href={`${masterListBase}?missing=hotel`}
+            />
+            <KPICard
+              label="Sans transfert"
+              value={withoutTransferCount}
+              delta={withoutTransferCount === 0 ? 'Tous couverts' : undefined}
+              deltaPositive={withoutTransferCount === 0}
+              icon={<Bus className="h-5 w-5" />}
+              accentColor="var(--color-warning)"
+              href={`${masterListBase}?missing=transfer`}
+            />
+            <KPICard
+              label="Sans activité"
+              value={withoutActivitiesCount}
+              delta={withoutActivitiesCount === 0 ? 'Tous couverts' : undefined}
+              deltaPositive={withoutActivitiesCount === 0}
+              icon={<PartyPopper className="h-5 w-5" />}
+              accentColor="var(--color-warning)"
+              href={`${masterListBase}?missing=activities`}
+            />
+          </div>
+        )}
 
         {/* Intelligent data-quality analysis (same engine as Rapports §15) */}
         {analysis && analysis.total > 0 && (

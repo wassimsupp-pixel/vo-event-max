@@ -34,8 +34,16 @@ RICH_FIELDS = [
 CORE_FIELDS = [
     "id", "first_name", "last_name", "email", "company", "phone", "nationality",
     "dietary_requirements", "completeness_status",
-    "has_flight", "has_hotel", "has_transfer", "has_activities",
+    "has_flight", "has_hotel", "has_transfer", "has_activities", "updated_at",
 ]
+
+# Labels for uploaded_files.source_type, used in the "sources used" data-quality
+# column — kept in one place so the export and the API agree.
+_SOURCE_TYPE_LABELS = {
+    "registration": "Inscription", "fcm": "Vols (FCM)", "hotel": "Hébergement",
+    "transfer": "Transfert", "activity": "Activité", "email": "Email", "other": "Autre",
+    "masterfile": "Fichier maître",
+}
 
 GEMINI_AVAILABLE = False
 try:
@@ -133,7 +141,7 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
     """
     try:
         participants = _paginate(supabase, "participants", ", ".join(CORE_FIELDS), event_id)
-        source_rows = _paginate(supabase, "source_records", "participant_id, normalized_data", event_id, extra_not_null="participant_id")
+        source_rows = _paginate(supabase, "source_records", "participant_id, file_id, normalized_data", event_id, extra_not_null="participant_id")
     except Exception as exc:
         logger.error("Failed to build master rows for %s: %s", event_id, exc)
         return []
@@ -146,6 +154,43 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         pid = sr.get("participant_id")
         if pid:
             by_participant.setdefault(pid, []).append(sr.get("normalized_data") or {})
+
+    # --- Which source FILE TYPES fed each participant ("sources used", §11 §8) ---
+    files_by_p: dict[str, set[str]] = {}
+    try:
+        file_ids = sorted({sr["file_id"] for sr in source_rows if sr.get("file_id")})
+        file_type_by_id: dict[str, str] = {}
+        if file_ids:
+            for f in _fetch_in_chunks(supabase, "uploaded_files", "id, source_type", "id", file_ids):
+                file_type_by_id[f["id"]] = f.get("source_type") or ""
+        for sr in source_rows:
+            pid = sr.get("participant_id")
+            ftype = file_type_by_id.get(sr.get("file_id"))
+            if pid and ftype:
+                files_by_p.setdefault(pid, set()).add(ftype)
+    except Exception as exc:
+        logger.warning("Master list source-type enrichment partial for %s: %s", event_id, exc)
+
+    # --- Open exceptions per participant (§11 §8 "Qualité des données") ---
+    exceptions_by_p: dict[str, list[dict[str, Any]]] = {}
+    try:
+        exc_rows = _paginate(supabase, "exceptions", "participant_id, severity, resolved", event_id)
+        for e in exc_rows:
+            pid = e.get("participant_id")
+            if pid and not e.get("resolved"):
+                exceptions_by_p.setdefault(pid, []).append(e)
+    except Exception as exc:
+        logger.warning("Master list exception enrichment partial for %s: %s", event_id, exc)
+
+    # --- Communications (§11 §7) — table may not exist yet (migration 002) ---
+    comms_by_p: dict[str, list[dict[str, Any]]] = {}
+    try:
+        comms = _fetch_in_chunks(supabase, "communications",
+                                  "participant_id, type, status, sent_at, updated_at",
+                                  "participant_id", participant_ids)
+        comms_by_p = _index_by_participant(comms)
+    except Exception as exc:
+        logger.debug("Communications not available for master list %s: %s", event_id, exc)
 
     # --- Travel details (best-effort; never block the master list) ---
     flights_by_p: dict[str, list[dict[str, Any]]] = {}
@@ -214,6 +259,33 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         row["flight_summary"] = "\n".join(flight_lines)
         row["flight_count"] = len(flist)
 
+        # Outbound / return as their own columns (§11 blocs 2-3). Same positional
+        # convention already shown to users on the Flights page (segmentLabel):
+        # sorted by departure, the FIRST segment is the outbound leg, the LAST is
+        # the return — a direct round trip has exactly two segments either way,
+        # and a connecting itinerary's outer legs are still the meaningful ones.
+        # Nothing is lost for 3+-segment trips: flight_summary above keeps every
+        # leg, this just surfaces the two that matter for a Vol Aller/Retour view.
+        def _flight_cols(f: Optional[dict[str, Any]]) -> dict[str, Any]:
+            if not f:
+                return {"airline": "", "flight_number": "", "departure_airport": "",
+                        "arrival_airport": "", "departure_time": "", "arrival_time": "", "status": ""}
+            return {
+                "airline": f.get("airline") or "",
+                "flight_number": f.get("flight_number") or "",
+                "departure_airport": geo.city_name(f.get("departure_airport")) or f.get("departure_airport") or "",
+                "arrival_airport": geo.city_name(f.get("arrival_airport")) or f.get("arrival_airport") or "",
+                "departure_time": _fmt_dt(f.get("departure_time")),
+                "arrival_time": _fmt_dt(f.get("arrival_time")),
+                "status": f.get("status") or "",
+            }
+        outbound = flist[0] if flist else None
+        inbound = flist[-1] if len(flist) >= 2 else None
+        for k, v in _flight_cols(outbound).items():
+            row[f"outbound_{k}"] = v
+        for k, v in _flight_cols(inbound).items():
+            row[f"return_{k}"] = v
+
         # Hotel nights → check-in / check-out / nights.
         #
         # A participant can have nights across SEVERAL distinct properties (a
@@ -276,17 +348,110 @@ def build_master_rows(supabase: Client, event_id: str) -> list[dict[str, Any]]:
         row["transfer_summary"] = "\n".join(transfer_lines)
         row["transfer_count"] = len(tlist)
 
-        # Activities → name · day & time
-        alist = acts_by_p.get(pid, [])
+        # Transfert Arrivée / Transfert Retour as their own columns (§11 bloc 5).
+        # Bucketed the same way the extraction step already classifies a
+        # transfer's direction (consolidation_service: transfer_type starting
+        # with "depart" is the return leg, everything else is arrival) — so a
+        # transfer imported as "Departure"/"Retour"/"Départ" always lands on the
+        # same side here as it did when it was created.
+        arr_bucket = [t for t in tlist if not str(t.get("transfer_type") or "").lower().startswith("depart")]
+        ret_bucket = [t for t in tlist if str(t.get("transfer_type") or "").lower().startswith("depart")]
+
+        def _transfer_cols(t: Optional[dict[str, Any]]) -> dict[str, Any]:
+            if not t:
+                return {"type": "", "route": "", "time": "", "vehicle": "", "status": ""}
+            return {
+                "type": t.get("transfer_type") or "",
+                "route": f"{t.get('pickup_location') or '?'}→{t.get('dropoff_location') or '?'}",
+                "time": _fmt_dt(t.get("pickup_time")),
+                "vehicle": t.get("vehicle_type") or "",
+                "status": t.get("status") or "",
+            }
+        # Earliest arrival transfer (the first leg of the trip), latest return
+        # transfer (the last leg) — the representative one when several exist;
+        # the rest stay visible in transfer_summary above.
+        for k, v in _transfer_cols(arr_bucket[0] if arr_bucket else None).items():
+            row[f"transfer_arrival_{k}"] = v
+        for k, v in _transfer_cols(ret_bucket[-1] if ret_bucket else None).items():
+            row[f"transfer_return_{k}"] = v
+
+        # Activities → name · day & time, chronological (was insertion order).
+        alist = sorted(acts_by_p.get(pid, []),
+                       key=lambda pa: str((activity_info.get(pa.get("activity_id"), {}) or {}).get("date_time") or ""))
         act_lines = []
+        act_details: list[dict[str, Any]] = []
         for pa in alist:
             info = activity_info.get(pa.get("activity_id"), {})
             name = (info.get("name") or "").strip()
             when = _fmt_dt(info.get("date_time"))
             if name:
                 act_lines.append(f"{name}{(' · ' + when) if when else ''}")
+                act_details.append({
+                    "name": name, "when": when,
+                    "location": info.get("location") or "", "status": pa.get("status") or "",
+                })
         row["activities_summary"] = "\n".join(act_lines)
         row["activities_count"] = len(act_lines)
+
+        # Activité 1 / Activité 2 as their own columns (§11 bloc 6). A 3rd+
+        # activity is not dropped — it stays in activities_summary above.
+        for slot in (1, 2):
+            d = act_details[slot - 1] if len(act_details) >= slot else None
+            row[f"activity_{slot}_name"] = d["name"] if d else ""
+            row[f"activity_{slot}_when"] = d["when"] if d else ""
+            row[f"activity_{slot}_location"] = d["location"] if d else ""
+            row[f"activity_{slot}_status"] = d["status"] if d else ""
+
+        # Communications (§11 bloc 7) — best-effort, table optional (migration 002).
+        clist = comms_by_p.get(pid, [])
+        confirmations = [c for c in clist if c.get("type") == "confirmation"]
+        sent_confirmations = [c for c in confirmations if c.get("status") == "sent"]
+        row["comm_confirmation_prepared"] = len(confirmations) > 0
+        row["comm_confirmation_sent"] = len(sent_confirmations) > 0
+        row["comm_sent_date"] = _fmt_date(
+            max((c.get("sent_at") for c in sent_confirmations if c.get("sent_at")), default="")
+        ) if sent_confirmations else ""
+        row["comm_needs_update"] = any(c.get("status") == "outdated" for c in clist)
+        latest = max(clist, key=lambda c: str(c.get("updated_at") or ""), default=None)
+        row["comm_last_activity"] = (
+            f"{latest.get('type') or ''} · {_fmt_date(latest.get('updated_at'))}".strip(" ·")
+            if latest else ""
+        )
+
+        # Data quality (§11 bloc 8) — computed from what is already known about
+        # this row; nothing here is invented, only summarised.
+        missing_fields = [
+            label for field, label in (
+                ("first_name", "prénom"), ("email", "email"), ("phone", "téléphone"),
+                ("nationality", "nationalité"), ("dietary_requirements", "régime"),
+            ) if not str(row.get(field) or "").strip()
+        ]
+        open_excs = exceptions_by_p.get(pid, [])
+        has_critical = any(e.get("severity") == "critical" for e in open_excs)
+        is_conflict = row.get("completeness_status") == "conflict"
+        row["dq_complete"] = row.get("completeness_status") == "complete" and not open_excs
+        row["dq_missing_fields"] = ", ".join(missing_fields)
+        row["dq_open_exceptions"] = len(open_excs)
+        row["dq_conflict"] = is_conflict
+        row["dq_priority"] = (
+            "critique" if (has_critical or is_conflict)
+            else "attention" if (open_excs or missing_fields)
+            else "ok"
+        )
+        row["dq_sources_used"] = ", ".join(
+            _SOURCE_TYPE_LABELS.get(t, t) for t in sorted(files_by_p.get(pid, set()))
+        )
+        row["dq_last_updated"] = _fmt_date(row.get("updated_at"))
+        if is_conflict:
+            row["dq_action_needed"] = "Arbitrer le conflit de données"
+        elif has_critical:
+            row["dq_action_needed"] = "Résoudre l'exception critique"
+        elif missing_fields:
+            row["dq_action_needed"] = f"Compléter : {', '.join(missing_fields)}"
+        elif open_excs:
+            row["dq_action_needed"] = "Vérifier les exceptions ouvertes"
+        else:
+            row["dq_action_needed"] = ""
 
         rows.append(row)
     return rows
@@ -347,6 +512,7 @@ def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = F
     without_flight = sum(1 for r in rows if not r.get("has_flight"))
     without_hotel = sum(1 for r in rows if not r.get("has_hotel"))
     without_transfer = sum(1 for r in rows if not r.get("has_transfer"))
+    without_activities = sum(1 for r in rows if not r.get("has_activities"))
     conflicts = sum(1 for r in rows if r.get("completeness_status") == "conflict")
 
     # Passport validity
@@ -398,6 +564,7 @@ def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = F
     rec("warning", "participant(s) sans vol renseigné — à relancer auprès de FCM.", without_flight)
     rec("warning", "participant(s) sans hébergement — vérifier la rooming list.", without_hotel)
     rec("info", "participant(s) sans transfert planifié.", without_transfer)
+    rec("info", "participant(s) sans activité inscrite.", without_activities)
     rec("info", "participant(s) sans régime alimentaire renseigné.", missing["dietary_requirements"])
     rec("critical", "conflit(s) de données non résolu(s) — à arbitrer dans Exceptions.", conflicts)
     rec("critical", "passeport(s) expiré(s) — bloquant pour le voyage.", passport_expired)
@@ -412,6 +579,7 @@ def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = F
         "without_flight": without_flight,
         "without_hotel": without_hotel,
         "without_transfer": without_transfer,
+        "without_activities": without_activities,
         "conflicts": conflicts,
         "passport_expired": passport_expired,
         "passport_expiring": passport_expiring,

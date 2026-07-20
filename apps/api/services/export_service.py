@@ -92,13 +92,37 @@ def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custo
     ws.freeze_panes = "A2"
     custom_fields = custom_fields or []
 
+    # Bloc headers (MVP feedback §11): the existing multi-line summary columns
+    # (Flights/Transfers/Activities) are kept EXACTLY as they were — nothing
+    # that already worked changes — these are ADDED alongside them so a 3+-leg
+    # itinerary or a 3rd activity is never lost, only additionally summarised
+    # in the two-column form the spec asks for.
     headers = [
         "Last Name", "First Name", "Email", "Company", "Phone", "Nationality",
         "Region", "Category", "Dietary Requirements", "Food / Allergy",
-        "Flights (airline · route · times)", "Hotel", "Check-in", "Check-out",
-        "Nights", "Room", "Transfers", "Activities (name · day/time)", "Status",
+        "Flights (airline · route · times)",
+        "Outbound Airline", "Outbound Flight #", "Outbound From", "Outbound To",
+        "Outbound Departure", "Outbound Arrival", "Outbound Status",
+        "Return Airline", "Return Flight #", "Return From", "Return To",
+        "Return Departure", "Return Arrival", "Return Status",
+        "Hotel", "Check-in", "Check-out", "Nights", "Room",
+        "Transfers",
+        "Arrival Transfer Type", "Arrival Transfer Route", "Arrival Transfer Time",
+        "Arrival Transfer Vehicle", "Arrival Transfer Status",
+        "Return Transfer Type", "Return Transfer Route", "Return Transfer Time",
+        "Return Transfer Vehicle", "Return Transfer Status",
+        "Activities (name · day/time)",
+        "Activity 1", "Activity 1 When", "Activity 1 Location", "Activity 1 Status",
+        "Activity 2", "Activity 2 When", "Activity 2 Location", "Activity 2 Status",
+        "Status",
+        "Confirmation Prepared", "Confirmation Sent", "Sent Date", "Needs Update", "Last Communication",
+        "Data Complete", "Missing Fields", "Open Exceptions", "Priority",
+        "Sources Used", "Last Updated", "Action Needed",
     ] + list(custom_fields)
     _write_header_row(ws, headers)
+
+    def _yn(v: Any) -> str:
+        return "Oui" if v else "Non"
 
     for row_idx, p in enumerate(rows, start=2):
         custom = p.get("custom") or {}
@@ -114,14 +138,33 @@ def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custo
             p.get("dietary_requirements"),
             p.get("food_allergy_info"),
             p.get("flight_summary"),
+            p.get("outbound_airline"), p.get("outbound_flight_number"),
+            p.get("outbound_departure_airport"), p.get("outbound_arrival_airport"),
+            p.get("outbound_departure_time"), p.get("outbound_arrival_time"), p.get("outbound_status"),
+            p.get("return_airline"), p.get("return_flight_number"),
+            p.get("return_departure_airport"), p.get("return_arrival_airport"),
+            p.get("return_departure_time"), p.get("return_arrival_time"), p.get("return_status"),
             p.get("hotel_name"),
             p.get("hotel_checkin"),
             p.get("hotel_checkout"),
             p.get("hotel_nights_count") or "",
             p.get("hotel_room_type"),
             p.get("transfer_summary"),
+            p.get("transfer_arrival_type"), p.get("transfer_arrival_route"),
+            p.get("transfer_arrival_time"), p.get("transfer_arrival_vehicle"), p.get("transfer_arrival_status"),
+            p.get("transfer_return_type"), p.get("transfer_return_route"),
+            p.get("transfer_return_time"), p.get("transfer_return_vehicle"), p.get("transfer_return_status"),
             p.get("activities_summary"),
+            p.get("activity_1_name"), p.get("activity_1_when"),
+            p.get("activity_1_location"), p.get("activity_1_status"),
+            p.get("activity_2_name"), p.get("activity_2_when"),
+            p.get("activity_2_location"), p.get("activity_2_status"),
             p.get("completeness_status", "incomplete"),
+            _yn(p.get("comm_confirmation_prepared")), _yn(p.get("comm_confirmation_sent")),
+            p.get("comm_sent_date"), _yn(p.get("comm_needs_update")), p.get("comm_last_activity"),
+            _yn(p.get("dq_complete")), p.get("dq_missing_fields"),
+            p.get("dq_open_exceptions") or 0, p.get("dq_priority"),
+            p.get("dq_sources_used"), p.get("dq_last_updated"), p.get("dq_action_needed"),
         ] + [custom.get(cf) for cf in custom_fields]
 
         # Determine row colour

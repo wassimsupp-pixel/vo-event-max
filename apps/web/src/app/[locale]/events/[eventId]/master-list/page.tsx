@@ -74,14 +74,14 @@ export default function MasterListPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
-  const [missingFilter, setMissingFilter] = useState<'flight' | 'hotel' | 'transfer' | null>(null)
+  const [missingFilter, setMissingFilter] = useState<'flight' | 'hotel' | 'transfer' | 'activities' | null>(null)
   const [page, setPage] = useState(1)
   const [isExporting, setIsExporting] = useState(false)
   const [consolidating, setConsolidating] = useState(false)
 
   useEffect(() => {
     const m = new URLSearchParams(window.location.search).get('missing')
-    if (m === 'flight' || m === 'hotel' || m === 'transfer') setMissingFilter(m)
+    if (m === 'flight' || m === 'hotel' || m === 'transfer' || m === 'activities') setMissingFilter(m)
   }, [])
 
   const loadMasterList = useCallback(async () => {
@@ -143,6 +143,7 @@ export default function MasterListPage() {
       if (missingFilter === 'flight' && r.has_flight) return false
       if (missingFilter === 'hotel' && r.has_hotel) return false
       if (missingFilter === 'transfer' && r.has_transfer) return false
+      if (missingFilter === 'activities' && r.has_activities) return false
       if (!q) return true
       return [r.first_name, r.last_name, r.email, r.company, r.region, r.attendee_category, r.country, r.job_title, r.phone, ...Object.values(r.custom || {})]
         .some((v) => (v || '').toString().toLowerCase().includes(q))
@@ -236,7 +237,7 @@ export default function MasterListPage() {
         {missingFilter && (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-warning)]/30 bg-[var(--color-warning-light)] px-4 py-2.5 text-sm">
             <span className="font-medium text-[var(--color-text-primary)]">
-              Filtre : participants {missingFilter === 'flight' ? 'sans vol' : missingFilter === 'hotel' ? 'sans hôtel' : 'sans transfert'} ({total})
+              Filtre : participants {missingFilter === 'flight' ? 'sans vol' : missingFilter === 'hotel' ? 'sans hôtel' : missingFilter === 'transfer' ? 'sans transfert' : 'sans activité'} ({total})
             </span>
             <button
               onClick={() => { setMissingFilter(null); window.history.replaceState({}, '', window.location.pathname) }}
