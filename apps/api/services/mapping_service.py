@@ -55,6 +55,49 @@ _BOOLEAN_VALUES = {"yes", "no", "oui", "non", "y", "n", "true", "false", "1", "0
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DATE_FORMATS = ["%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y"]
 
+# Values that LOOK like data but mean "there is no data here". Travel agencies
+# redact PII in their exports (FCM writes "SECURED DATA" in the email and phone
+# columns), and rosters are full of "N/A" / "TBC" / "-".
+#
+# Treating them as real values is actively harmful, not just cosmetic:
+#   * the identity engine deduplicates by email, so two different travellers both
+#     carrying "secured data" would be merged into ONE fiche;
+#   * every one of them raises a bogus "Format invalide" exception.
+# Mapping them to None is not a modification of the client's data — it is
+# refusing to mistake a redaction marker for a value. The field then shows up
+# where it belongs: in "Champs manquants".
+_PLACEHOLDER_VALUES = {
+    "secured data", "secured", "data secured", "confidential", "confidentiel",
+    "masked", "redacted", "hidden", "protected", "private", "restricted",
+    "not available", "not provided", "not applicable", "non disponible",
+    "non communique", "non communiqué", "n/a", "n.a.", "na", "nil", "none",
+    "null", "unknown", "inconnu", "tbc", "tba", "tbd", "to be confirmed",
+    "a definir", "à définir", "-", "--", "---", "?", "??", "x", "xx", "xxx",
+    "xxxx", "no email", "noemail", "no phone", "sans email", "sans mail",
+}
+
+# Deliberately narrow. Only fields where a placeholder does real damage — they
+# key the identity engine or trip the format validator — and where no legitimate
+# value collides with the list above.
+#
+# `nationality` is EXCLUDED on purpose: "NA" is the ISO code for Namibia, so
+# scrubbing it would silently erase a real nationality. Same reasoning for
+# `company` and any free-text note. Better a harmless "N/A" left visible than a
+# genuine value destroyed — the engine must never lose client data.
+_PLACEHOLDER_SENSITIVE_FIELDS = {
+    "email", "phone", "first_name", "last_name", "traveler_name", "badge_name",
+}
+
+
+def is_placeholder(value: Any) -> bool:
+    """True when a cell means 'no data' despite being non-empty."""
+    s = str(value or "").strip().lower()
+    if not s:
+        return False
+    # Collapse inner whitespace/punctuation noise ("SECURED  DATA", "N / A").
+    s = re.sub(r"\s+", " ", s)
+    return s in _PLACEHOLDER_VALUES or re.sub(r"[\s./]", "", s) in _PLACEHOLDER_VALUES
+
 
 def apply_mapping(raw_row: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
     """
@@ -116,6 +159,11 @@ def normalise_fields(mapped_row: dict[str, Any]) -> dict[str, Any]:
         # matching on such a shared value collapses everyone onto one participant
         # and contaminates their flights/hotels. Drop it.
         if field in ("id", "participant_id") and str(value or "").strip().lower() in _BOOLEAN_VALUES:
+            value = None
+        # A redaction marker ("SECURED DATA") or a filler ("N/A") is an ABSENCE
+        # of data, not data. Left as-is it would key the identity engine and
+        # merge unrelated people. See _PLACEHOLDER_VALUES.
+        if field in _PLACEHOLDER_SENSITIVE_FIELDS and is_placeholder(value):
             value = None
         normalised[field] = value
     return normalised
@@ -320,7 +368,14 @@ SYNONYMS: dict[str, list[str]] = {
     "departure_country": ["departurecountry", "departcountry", "paysdepart", "depcountry"],
     "arrival_city": ["arrivalcity", "arrivcity", "villearrivee", "arrcity", "destinationcity"],
     "arrival_country": ["arrivalcountry", "paysarrivee", "country2", "arrcountry", "destinationcountry"],
-    "traveler_name": ["traveler", "traveller", "nomvoyageur", "passengername", "nomsurbillet"],
+    # COMBINED name columns. These MUST land here and not in last_name: the
+    # consolidation splits traveler_name into first+last, whereas a value routed
+    # to last_name is stored verbatim — which is how "MONTOYA HURTADO/MARÍA"
+    # ended up as a surname with no given name on 292 fiches.
+    "traveler_name": ["traveler", "traveller", "nomvoyageur", "passengername", "nomsurbillet",
+                      "fullname", "name", "nomcomplet", "nomprenom", "prenomnom",
+                      "guestname", "attendeename", "participantname", "passenger",
+                      "nametravel", "completename", "nometprenom"],
     "flight_domestic_intl": ["dominternational", "domintl", "domesticinternational", "domesticintl", "domestic", "international"],
 
     # Hotels (extra)

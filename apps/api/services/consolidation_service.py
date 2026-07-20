@@ -80,6 +80,78 @@ SCORE_PROBABLE_THRESHOLD = 75.0   # no email match but strong name match
 
 
 # ---------------------------------------------------------------------------
+# Name splitting
+# ---------------------------------------------------------------------------
+
+def split_full_name(raw: Any) -> tuple[str, str]:
+    """
+    Split a combined name into ``(first_name, last_name)``.
+
+    Client files carry the identity in a single cell far more often than in two,
+    and in three different conventions:
+
+        "MONTOYA HURTADO/MARÍA"  → ("María", "Montoya Hurtado")   airline/GDS
+        "Nakagawa, Tatsuhito"    → ("Tatsuhito", "Nakagawa")      roster export
+        "Simona Accorsi"         → ("Simona", "Accorsi")          plain
+
+    Returns ``("", "")`` when there is nothing to split, and ``("", name)`` for a
+    mononym — a single-token name is a complete identity in many cultures
+    (e.g. a Japanese name written without a space), so it is kept as the last
+    name rather than being torn in half or discarded.
+
+    Nothing here rewrites a value: the characters are the client's, only the
+    column they land in changes.
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return "", ""
+    if "/" in s:                       # LAST/First — the GDS convention
+        a, b = s.split("/", 1)
+        return b.strip(), a.strip()
+    if "," in s:                       # "Last, First"
+        a, b = s.split(",", 1)
+        return b.strip(), a.strip()
+    toks = s.split()
+    if len(toks) >= 2:                 # "First Last" / "First Middle Last"
+        return toks[0], " ".join(toks[1:])
+    return "", s                       # mononym
+
+
+def resolve_identity_name(nd: dict[str, Any]) -> tuple[str, str]:
+    """
+    Derive ``(first_name, last_name)`` from a normalized record, splitting a
+    combined name whenever the file did not provide the two parts separately.
+
+    Order of trust: explicit first+last > ``traveler_name`` > a ``last_name``
+    that actually holds the whole name (the mapper legitimately routes a column
+    named "Full Name" there, and a "Nom" column often contains "SURNAME/Given").
+    """
+    first = str(nd.get("first_name") or "").strip()
+    last = str(nd.get("last_name") or "").strip()
+    if first and last:
+        return first, last
+
+    # A combined-name column wins when we are missing a half.
+    if not first:
+        combined = [nd.get("traveler_name"), nd.get("full_name"), nd.get("name")]
+        for src in combined:
+            f, l = split_full_name(src)
+            if f and l:
+                return f, l
+        # Otherwise the surviving half may itself be the full name.
+        f, l = split_full_name(last)
+        if f and l:
+            return f, l
+        # Neither could be split. A mononym is still an identity — never drop it.
+        if not last:
+            for src in combined:
+                _, l = split_full_name(src)
+                if l:
+                    return "", l
+    return first, last
+
+
+# ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
 
@@ -89,8 +161,11 @@ class ParticipantRecord:
     def __init__(self, source_record_id: str, normalized: dict[str, Any]):
         self.source_record_id = source_record_id
         self.normalized = normalized
-        self.first_name: str = (normalized.get("first_name") or "").strip()
-        self.last_name:  str = (normalized.get("last_name") or "").strip()
+        # Split here rather than at each call site: EVERY downstream consumer
+        # (dedup key, fuzzy match, participant row) must see the same identity.
+        first, last = resolve_identity_name(normalized)
+        self.first_name: str = first
+        self.last_name:  str = last
         self.email:      str = (normalized.get("email") or "").strip().lower()
         self.company:    str = (normalized.get("company") or "").strip()
 
@@ -1022,7 +1097,14 @@ async def run_consolidation(
         links: dict[str, list[str]] = {}      # participant_id -> [source_record_id]
         created_ids: set[str] = set()
         for reg in registrations:
-            nd = reg.normalized
+            # Use the SPLIT identity, not the raw columns: a registration file
+            # very often carries one "Full Name" / "Nom" column holding
+            # "MONTOYA HURTADO/MARÍA". Read as-is it produced a fiche with an
+            # empty first name and the whole name crammed into the last name —
+            # which then broke dedup, the master list and the exports.
+            nd = dict(reg.normalized)
+            nd["first_name"] = reg.first_name
+            nd["last_name"] = reg.last_name
 
             # Skip parasitic rows (subtotals, job-title labels, fully-empty) — they
             # must not be created as participants (feedback #4).
@@ -1260,6 +1342,17 @@ async def run_consolidation(
                 stats["exceptions_count"] += len(doubt_rows)
             except Exception as exc:
                 logger.warning("Failed to insert doubt exceptions: %s", exc)
+
+        # ---------------------------------------------------------------
+        # 6b-bis. Repair incomplete identities now that every source record is
+        #         linked: split a full name stuck in one column, and give a
+        #         name to fiches that only had an email. Runs every time so
+        #         fiches created by an earlier, buggier run get fixed too.
+        # ---------------------------------------------------------------
+        try:
+            stats["names_backfilled"] = backfill_participant_names(event_id, supabase)
+        except Exception as exc:
+            logger.warning("Name backfill failed: %s", exc)
 
         # ---------------------------------------------------------------
         # 6c. Reconcile FCM match stats with reality. Step 5 can report
@@ -1664,26 +1757,14 @@ def match_non_registration_files_to_participants(event_id: str, supabase: Client
         normalized = rec.get("normalized_data") or {}
         raw = rec.get("raw_data") or {}
 
-        rec_first = (normalized.get("first_name") or "").strip().lower()
-        rec_last = (normalized.get("last_name") or "").strip().lower()
         # Flight/hotel files usually carry the identity as a single "Traveller"
-        # field (e.g. "LAI/Chun Chi" = LAST/First, or "First Last"). Derive a
-        # name from it when first/last aren't provided separately.
+        # field ("LAI/Chun Chi" = LAST/First, "Nakagawa, Tatsuhito", "First Last").
+        # ONE shared splitter for the whole engine (see resolve_identity_name) —
+        # this used to be a second, slightly different copy of the same logic.
+        _rf, _rl = resolve_identity_name(normalized)
+        rec_first = _rf.strip().lower()
+        rec_last = _rl.strip().lower()
         rec_traveler = (normalized.get("traveler_name") or "").strip().lower()
-        if not rec_first and not rec_last and rec_traveler:
-            if "/" in rec_traveler:
-                a, b = rec_traveler.split("/", 1)
-                rec_last, rec_first = a.strip(), b.strip()
-            else:
-                toks = rec_traveler.split()
-                if len(toks) >= 2:
-                    rec_first, rec_last = toks[0], " ".join(toks[1:])
-                else:
-                    rec_last = rec_traveler
-        elif not rec_first and " " in rec_last:
-            parts = rec_last.split(" ", 1)
-            rec_first = parts[0]
-            rec_last = parts[1]
 
         # A department label mistaken for a name ("Commercial Operations",
         # "R&D") is NOT an identity: ignore it entirely so the row's email can
@@ -1969,6 +2050,100 @@ def cleanup_stale_source_records(
                     logger.warning("Stale record %s still referenced, kept: %s", rid, exc2)
     logger.info("Purged %d stale source record(s) for event %s", deleted, event_id)
     return deleted
+
+
+def backfill_participant_names(event_id: str, supabase: Client) -> int:
+    """
+    Self-heal fiches whose identity is incomplete while their own source rows
+    hold the full name. Two situations, both observed in production:
+
+      * the whole name sits in ``last_name`` ("MONTOYA HURTADO/MARÍA") because
+        the file had a single "Full Name" column — split it in place;
+      * the fiche has NO name at all, only an email, while the linked flight or
+        hotel row carries ``traveler_name: "ACCORSI/SIMONA"`` — the matcher
+        linked the row and moved on without ever filling the identity in.
+
+    Fixing the engine alone would leave those fiches broken forever (an import
+    is not replayed), so the repair runs on every consolidation. It is strictly
+    additive: a field that already has a value is never overwritten, so a name
+    a human typed on the fiche always wins.
+
+    Returns the number of participants repaired.
+    """
+    parts: list[dict] = []
+    offset = 0
+    while True:
+        try:
+            res = (
+                supabase.table("participants")
+                .select("id, first_name, last_name")
+                .eq("event_id", event_id)
+                .range(offset, offset + 999)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Name backfill: participant fetch failed: %s", exc)
+            return 0
+        data = res.data or []
+        parts.extend(data)
+        if len(data) < 1000:
+            break
+        offset += 1000
+
+    # Only the fiches that are actually incomplete.
+    broken = {
+        p["id"]: p for p in parts
+        if not (p.get("first_name") or "").strip() or not (p.get("last_name") or "").strip()
+    }
+    if not broken:
+        return 0
+
+    # Pass 1 — the name is already on the fiche, just not split.
+    updates: dict[str, dict] = {}
+    still_missing: list[str] = []
+    for pid, p in broken.items():
+        first, last = resolve_identity_name(p)
+        if first and last and (first, last) != (p.get("first_name"), p.get("last_name")):
+            updates[pid] = {"first_name": first, "last_name": last}
+        elif not (p.get("first_name") or "").strip() and not (p.get("last_name") or "").strip():
+            still_missing.append(pid)
+
+    # Pass 2 — nameless fiches: recover the identity from their own source rows.
+    for i in range(0, len(still_missing), 100):
+        chunk = still_missing[i:i + 100]
+        try:
+            res = (
+                supabase.table("source_records")
+                .select("participant_id, normalized_data")
+                .in_("participant_id", chunk)
+                .execute()
+            )
+        except Exception as exc:
+            logger.warning("Name backfill: source fetch failed: %s", exc)
+            continue
+        for sr in res.data or []:
+            pid = sr.get("participant_id")
+            if not pid or pid in updates:
+                continue          # first usable row wins; don't fight between rows
+            nd = sr.get("normalized_data") or {}
+            first, last = resolve_identity_name(nd)
+            if not last:
+                continue
+            if _is_junk_name(first, last, nd.get("traveler_name")):
+                continue          # a department label is not an identity
+            updates[pid] = {"first_name": first.title(), "last_name": last.title()}
+
+    repaired = 0
+    for pid, patch in updates.items():
+        try:
+            supabase.table("participants").update(patch).eq("id", pid).execute()
+            repaired += 1
+        except Exception as exc:
+            logger.warning("Name backfill failed for %s: %s", pid, exc)
+
+    if repaired:
+        logger.info("Backfilled the name of %d participant(s) for event %s", repaired, event_id)
+    return repaired
 
 
 def purge_junk_participants(event_id: str, supabase: Client) -> int:

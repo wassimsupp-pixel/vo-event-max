@@ -274,15 +274,22 @@ def _detect_flight_no_participant(event_id: str, run_id: str, supabase: Client, 
 
 def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
     """
-    MISSING_REQUIRED_FIELD — participants where the IDENTITY fields first_name or
-    last_name are absent (critical). Contact/profile fields (email, phone,
-    nationality, dietary) are handled by _detect_missing_profile_fields so they
-    land in the actionable "Champs manquants" category.
+    MISSING_REQUIRED_FIELD — participants with NO usable name at all (critical:
+    such a fiche cannot be identified, printed on a badge or exported).
+
+    A single-token name is NOT an error. "Mohan", "髙取広太郎" (a Japanese name
+    written without a space) are complete identities; flagging them "Critique"
+    for a missing first_name buried the genuinely broken fiches under noise.
+    An incomplete-but-usable name is reported as an actionable "Champs
+    manquants" entry instead (see _detect_missing_profile_fields).
+
+    Contact/profile fields (email, phone, nationality, dietary) are likewise
+    handled there.
     """
     try:
         result = (
             supabase.table("participants")
-            .select("id, first_name, last_name")
+            .select("id, first_name, last_name, email")
             .eq("event_id", event_id)
             .execute()
         )
@@ -292,23 +299,28 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
 
     count = 0
     for p in result.data or []:
-        missing = []
-        if not p.get("first_name"): missing.append("first_name")
-        if not p.get("last_name"):  missing.append("last_name")
+        first = (p.get("first_name") or "").strip()
+        last = (p.get("last_name") or "").strip()
+        if first or last:
+            continue                       # a name exists — nothing critical here
 
-        if missing:
-            _insert_exception(
-                supabase=supabase,
-                run_id=run_id,
-                event_id=event_id,
-                exception_type="MISSING_REQUIRED_FIELD",
-                severity="critical",
-                message=f"Participant {p['id']} is missing required identity fields: {', '.join(missing)}.",
-                participant_id=p["id"],
-                context_data={"missing_fields": missing},
-                exceptions_list=exceptions_list,
-            )
-            count += 1
+        email = (p.get("email") or "").strip()
+        who = f"« {email} »" if email else "sans email"
+        _insert_exception(
+            supabase=supabase,
+            run_id=run_id,
+            event_id=event_id,
+            exception_type="MISSING_REQUIRED_FIELD",
+            severity="critical",
+            message=(
+                f"Fiche sans aucun nom ({who}) — impossible à identifier. "
+                "Ajoutez le nom, ou vérifiez la colonne « Nom » du fichier source."
+            ),
+            participant_id=p["id"],
+            context_data={"missing_fields": ["first_name", "last_name"]},
+            exceptions_list=exceptions_list,
+        )
+        count += 1
 
     logger.debug("MISSING_REQUIRED_FIELD: %d exceptions", count)
     return count
@@ -316,7 +328,9 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
 
 # Profile fields surfaced in the actionable "Champs manquants" category, each an
 # editable field on the participant fiche so the "Ajouter" button can fill it.
-_MISSING_PROFILE_FIELDS = ("email", "phone", "nationality", "dietary_requirements")
+# first_name is here rather than in the critical check: a mononym ("Mohan") is a
+# usable identity, so it is something to COMPLETE, not an error to fix.
+_MISSING_PROFILE_FIELDS = ("first_name", "email", "phone", "nationality", "dietary_requirements")
 
 
 def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
@@ -343,6 +357,10 @@ def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client,
     for p in result.data or []:
         missing = [f for f in _MISSING_PROFILE_FIELDS if not (p.get(f) or "").strip()]
         if not missing:
+            continue
+        # A fiche with no name at all is already reported as critical — don't
+        # duplicate it here as a mere "champ manquant".
+        if not (p.get("first_name") or "").strip() and not (p.get("last_name") or "").strip():
             continue
         name = f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() or p["id"]
         _insert_exception(
@@ -385,6 +403,14 @@ def _detect_invalid_formats(event_id: str, run_id: str, supabase: Client, except
         logger.error("INVALID_FORMAT query failed: %s", exc)
         return 0
 
+    # Local import: consolidation_service imports this module at load time.
+    from services.consolidation_service import resolve_identity_name
+
+    _DATE_LABELS = {
+        "departure_date": "date de départ", "return_date": "date de retour",
+        "check_in_date": "date d'arrivée hôtel", "check_out_date": "date de départ hôtel",
+    }
+
     count = 0
     for sr in result.data or []:
         nd: dict = sr.get("normalized_data") or {}
@@ -393,22 +419,27 @@ def _detect_invalid_formats(event_id: str, run_id: str, supabase: Client, except
         # Check email format
         email = nd.get("email")
         if email and not _EMAIL_RE.match(email):
-            issues.append(f"email='{email}' is not a valid email address")
+            issues.append(f"email « {email} » n'est pas une adresse valide")
 
         # Check date fields
         for df in date_fields:
             val = nd.get(df)
             if val and isinstance(val, str) and not _DATE_RE.match(val):
-                issues.append(f"{df}='{val}' is not a valid ISO-8601 date")
+                issues.append(f"{_DATE_LABELS.get(df, df)} « {val} » est illisible")
 
         if issues:
+            # Name the person, not the row's UUID: an operator can act on
+            # "Ligne de Steven Krithinakis", never on "Source record 7dd668dd-…".
+            first, last = resolve_identity_name(nd)
+            who = f"{first} {last}".strip()
+            subject = f"Ligne de « {who} »" if who else "Une ligne du fichier source"
             _insert_exception(
                 supabase=supabase,
                 run_id=run_id,
                 event_id=event_id,
                 exception_type="INVALID_FORMAT",
                 severity="warning",
-                message=f"Source record {sr['id']} has format issues: {'; '.join(issues)}.",
+                message=f"{subject} : {' ; '.join(issues)}.",
                 source_record_id=sr["id"],
                 context_data={"issues": issues, "normalized_data": nd},
                 exceptions_list=exceptions_list,

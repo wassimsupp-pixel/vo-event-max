@@ -12,12 +12,13 @@ import { api, type Exception } from '@/lib/api'
 
 // Sub-categories of "Champs manquants" — the actionable editable fiche fields.
 const MISSING_FIELD_META: Record<string, { label: string; icon: React.ElementType }> = {
+  first_name: { label: 'Prénom', icon: UserCheck },
   email: { label: 'Email', icon: Mail },
   phone: { label: 'Téléphone', icon: Phone },
   nationality: { label: 'Nationalité', icon: Globe },
   dietary_requirements: { label: 'Régime alimentaire', icon: Utensils },
 }
-const MISSING_FIELD_ORDER = ['email', 'phone', 'nationality', 'dietary_requirements']
+const MISSING_FIELD_ORDER = ['first_name', 'email', 'phone', 'nationality', 'dietary_requirements']
 
 const EXC_TYPE_LABELS: Record<string, string> = {
   conflict: 'Conflit de données',
