@@ -514,6 +514,7 @@ def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = F
     without_transfer = sum(1 for r in rows if not r.get("has_transfer"))
     without_activities = sum(1 for r in rows if not r.get("has_activities"))
     conflicts = sum(1 for r in rows if r.get("completeness_status") == "conflict")
+    complete_count = sum(1 for r in rows if r.get("completeness_status") == "complete")
 
     # Passport validity
     passport_expired = 0
@@ -581,6 +582,7 @@ def build_analysis(supabase: Client, event_id: str, include_ai_summary: bool = F
         "without_transfer": without_transfer,
         "without_activities": without_activities,
         "conflicts": conflicts,
+        "complete_count": complete_count,
         "passport_expired": passport_expired,
         "passport_expiring": passport_expiring,
         "by_region": by_region,

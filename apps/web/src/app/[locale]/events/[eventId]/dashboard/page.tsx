@@ -138,7 +138,10 @@ export default function DashboardPage() {
   }
 
   // Calculations
-  const completeCount = participants.filter((p) => p.completeness_status === 'complete').length
+  // Full-event-accurate, like withoutFlightCount etc. below: `participants` is
+  // capped at page_size: 5, so computing this from it silently showed the
+  // completion rate of an arbitrary 5-person sample instead of the event.
+  const completeCount = analysis?.complete_count ?? (totalParticipants > 0 ? participants.filter((p) => p.completeness_status === 'complete').length : 0)
   const completenessRate = totalParticipants > 0 ? Math.round((completeCount / totalParticipants) * 100) : 0
 
   const activeExceptionsCount = exceptions.filter((e) => !e.resolved).length
