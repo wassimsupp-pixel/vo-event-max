@@ -44,6 +44,11 @@ export default function ParticipantDetailPage() {
   } | null>(null)
   const [genConfirm, setGenConfirm] = useState(false)
   const [confirmMsg, setConfirmMsg] = useState<string | null>(null)
+  // In-flight guards: without these, double-clicking "Marquer comme envoyé"
+  // fires api.communications.send() twice concurrently -- sending the
+  // confirmation email to the participant twice.
+  const [savingConfirm, setSavingConfirm] = useState(false)
+  const [sendingConfirm, setSendingConfirm] = useState(false)
 
   useEffect(() => {
     async function load() {
@@ -125,23 +130,29 @@ export default function ParticipantDetailPage() {
   }
 
   const handleSaveConfirmation = async () => {
-    if (!confirmation?.commId) return
+    if (!confirmation?.commId || savingConfirm) return
+    setSavingConfirm(true)
     try {
       await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body, status: 'ready' })
       setConfirmMsg('Confirmation enregistrée (prête à envoyer).')
     } catch {
       setConfirmMsg('Erreur lors de l’enregistrement.')
+    } finally {
+      setSavingConfirm(false)
     }
   }
 
   const handleSendConfirmation = async () => {
-    if (!confirmation?.commId) return
+    if (!confirmation?.commId || sendingConfirm) return
+    setSendingConfirm(true)
     try {
       await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body })
       await api.communications.send(confirmation.commId)
       setConfirmMsg('Confirmation marquée comme envoyée.')
     } catch {
       setConfirmMsg('Erreur lors de l’envoi.')
+    } finally {
+      setSendingConfirm(false)
     }
   }
 
@@ -539,19 +550,19 @@ export default function ParticipantDetailPage() {
                 <Button
                   variant="outline"
                   onClick={handleSaveConfirmation}
-                  disabled={!confirmation.commId}
+                  disabled={!confirmation.commId || savingConfirm}
                   className="flex items-center gap-2"
                   title={confirmation.commId ? '' : 'Migration communications requise'}
                 >
-                  <Save className="h-4 w-4" /> Enregistrer
+                  {savingConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Enregistrer
                 </Button>
                 <Button
                   onClick={handleSendConfirmation}
-                  disabled={!confirmation.commId}
+                  disabled={!confirmation.commId || sendingConfirm}
                   className="bg-[var(--color-success)] hover:bg-emerald-600 text-white flex items-center gap-2"
                   title={confirmation.commId ? '' : 'Migration communications requise'}
                 >
-                  <Send className="h-4 w-4" /> Marquer comme envoyé
+                  {sendingConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />} Marquer comme envoyé
                 </Button>
               </div>
             </div>
