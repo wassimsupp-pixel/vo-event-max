@@ -167,15 +167,26 @@ export interface MatchCandidate {
 export interface ConsolidationRun {
   id: string
   event_id: string
-  status: 'pending' | 'running' | 'done' | 'error'
+  // Matches the Postgres `consolidation_runs.status` CHECK constraint and
+  // the two branches consolidation_service.py actually writes on completion
+  // (docs/schema.sql; never "pending" or "done" -- those never occur).
+  status: 'running' | 'completed' | 'failed'
   started_at: string
   finished_at?: string
+  // Matches the runtime `stats` dict built in consolidation_service.py's
+  // run_consolidation (not the narrower Pydantic ConsolidationStats model,
+  // which is itself out of sync with it) -- every key is optional since
+  // several are only added conditionally during a run.
   stats?: {
-    total: number
-    matched: number
-    conflicts: number
-    duplicates: number
-    not_found: number
+    total_source_records?: number
+    matched_certain?: number
+    matched_probable?: number
+    to_verify?: number
+    not_found?: number
+    participants_created?: number
+    participants_updated?: number
+    exceptions_count?: number
+    mappings_repaired?: number
   }
 }
 
