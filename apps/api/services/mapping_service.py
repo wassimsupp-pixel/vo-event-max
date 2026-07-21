@@ -618,6 +618,17 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         if "date_of_birth" in field_scores and not re.search(r"birth|dob|naiss|n[ée] le", _col_l):
             field_scores["date_of_birth"] = 0.0
 
+        # An administrative/system metadata header ("Registration Date",
+        # "Date d'inscription", "Submission Date"...) must never be
+        # content-boosted into a TRAVEL date/time field just because its
+        # values happen to look like dates — a leftover registration
+        # timestamp is not a flight arrival_date. Genuinely blank/generic
+        # headers are exempt: content-only inference must still work for
+        # unnamed columns (feedback: "if no column name, deduce from content").
+        if not header_absent and _ADMIN_DATE_HDR_RE.search(_col_l):
+            for _tf in _TRAVEL_DATE_TIME_FIELDS:
+                field_scores[_tf] = 0.0
+
         # Collect this column's candidate (field, score) pairs; the actual
         # suggestion is decided globally below.
         col_candidates[col] = sorted(
@@ -787,6 +798,20 @@ def _custom_field_key(col: str, used_targets: set[str]) -> Optional[str]:
 _CONF_HDR_RE = re.compile(r"\b(conf|booking|reserv|dossier|folio|voucher|r[ée]f)", re.I)
 _PHONE_HDR_RE = re.compile(r"\b(phone|t[ée]l|mobile|gsm|portable)", re.I)
 _HOTEL_HDR_RE = re.compile(r"h[oô]tel", re.I)
+# A header naming an ADMINISTRATIVE timestamp — when the person registered/
+# submitted the form, not a travel event — must never be mistaken for a
+# flight/hotel date just because its values look date-shaped. "Registration
+# Date" -> arrival_date fed a fake, weeks-before-the-event arrival into every
+# participant from that file (false DATE_INCOHERENCE + DATA_CONFLICT noise).
+_ADMIN_DATE_HDR_RE = re.compile(
+    r"regist|inscri|submi|soumis|signup|creat|updat|modifi|statut|status|horodat|timestamp", re.I
+)
+_TRAVEL_DATE_TIME_FIELDS = {
+    "arrival_date", "departure_date", "return_date",
+    "check_in_date", "check_out_date",
+    "arrival_time", "departure_time", "pickup_time",
+    "date_of_birth", "passport_expiry",
+}
 
 
 def repair_stored_mappings(event_id: str, supabase) -> int:
@@ -865,6 +890,18 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
                         break
             except Exception as exc:
                 logger.warning("Transfer-direction mapping repair failed for file %s: %s", f["id"], exc)
+
+        # 5. An administrative/system metadata column ("Registration Date",
+        #    "Registration Time", "Date d'inscription"...) must never sit on
+        #    a TRAVEL date/time field — it's when the person registered on
+        #    the platform, not a flight/hotel/transfer date. A mapping stored
+        #    before this guard existed silently fed a fake arrival_date/
+        #    departure_time into every participant from that file, causing
+        #    false DATE_INCOHERENCE and DATA_CONFLICT exceptions.
+        for col, tgt in list(new.items()):
+            if tgt in _TRAVEL_DATE_TIME_FIELDS and _ADMIN_DATE_HDR_RE.search(str(col)):
+                new[col] = str(col)          # keep its data as a custom field
+                changed = True
 
         if changed:
             try:
