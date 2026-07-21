@@ -77,7 +77,24 @@ PARTICIPANT_LIST_SELECT = (
 )
 
 # Fields that may NOT be updated via the API (system-managed)
-IMMUTABLE_FIELDS = {"id", "event_id", "created_at", "updated_at", "registration_source_id", "fcm_source_id"}
+# The single-field PATCH/lock endpoints below used to take an
+# IMMUTABLE_FIELDS BLOCKLIST (id/event_id/created_at/updated_at/
+# registration_source_id/fcm_source_id) — every OTHER column not on that
+# short list (completeness_status,
+# locked_fields, has_flight/has_hotel/has_transfer/has_activities,
+# verification_note...) was writable by any user with write access to the
+# event, including a client-role "editor". Those are engine-managed fields
+# (set by consolidation/matching, not meant to be user-editable) — a client
+# could e.g. set locked_fields to freeze dietary_requirements against future
+# re-imports, or fake has_flight/has_hotel for reporting. Restricted to
+# exactly the fields the participant edit form actually exposes
+# (apps/web/.../participants/[participantId]/page.tsx's EDITABLE_FIELDS).
+# locked_fields has its own dedicated POST /participants/{id}/lock endpoint
+# and is deliberately NOT here.
+CLIENT_EDITABLE_FIELDS = {
+    "first_name", "last_name", "email", "company", "phone",
+    "nationality", "dietary_requirements",
+}
 
 
 def _strip_dietary(participant: dict, role: str) -> dict:
@@ -371,8 +388,12 @@ async def update_participant(
             detail="Only admin and pm roles may update dietary_requirements.",
         )
 
-    # Guard: immutable system fields
-    if body.field in IMMUTABLE_FIELDS:
+    # Guard: only the fields the participant edit form actually exposes may be
+    # set through this endpoint — everything else (completeness_status,
+    # locked_fields, has_flight/has_hotel/has_transfer/has_activities,
+    # verification_note...) is engine-managed, set by consolidation/matching,
+    # not user-editable.
+    if body.field not in CLIENT_EDITABLE_FIELDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Field '{body.field}' cannot be modified via the API.",
@@ -460,7 +481,7 @@ async def lock_field(
     Locked fields retain their manually-set values when the consolidation
     engine re-runs — new imports cannot overwrite them.
     """
-    if field in IMMUTABLE_FIELDS:
+    if field not in CLIENT_EDITABLE_FIELDS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Field '{field}' is a system field and cannot be locked.",
