@@ -69,29 +69,44 @@ def _auto_width(ws, min_width: int = 10, max_width: int = 50) -> None:
         ws.column_dimensions[col_letter].width = min(col_max + 2, max_width)
 
 
-# Excel/CSV formula injection (CWE-1236): a cell string starting with one of
-# these characters is interpreted as a FORMULA when the file is opened in
-# Excel, not as text — openpyxl actively promotes it (cell.data_type='f').
-# Every value here can originate from an uploaded file's cell content OR its
-# column header (custom/unmapped fields keep their original header text) and
-# flows into this export verbatim. A booby-trapped upload (e.g. a Company
-# column containing `=cmd|'/c calc'!A1`) would execute when a DIFFERENT,
-# possibly more privileged staff member later opens the export. Prefixing
-# with an apostrophe forces Excel to treat it as literal text; openpyxl still
-# writes an ordinary string cell, so normal values are completely unaffected.
-_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _safe_cell_value(value: Any) -> Any:
-    if isinstance(value, str) and value[:1] in _FORMULA_TRIGGER_CHARS:
-        return "'" + value
-    return value
+# Excel/CSV formula injection (CWE-1236): a cell string starting with "="
+# gets auto-promoted by openpyxl to data_type='f' — a REAL live formula
+# (an actual <f> element in the XML), which Excel evaluates on open. Every
+# value here can originate from an uploaded file's cell content OR its
+# column header (custom/unmapped fields keep their original header text)
+# and flows into this export verbatim, so a booby-trapped upload (e.g. a
+# Company column containing `=cmd|'/c calc'!A1`) would execute when a
+# DIFFERENT, possibly more privileged staff member later opens the export.
+#
+# +, -, @ (the other CSV-injection trigger characters from OWASP's classic
+# guidance) do NOT need the same treatment HERE: verified empirically that
+# openpyxl already stores those as plain data_type='s' strings, and Excel/
+# LibreOffice respect an OOXML cell's explicit stored type on open — a
+# string-typed cell is never re-parsed as a formula just because its text
+# starts with +/-/@ (that risk is specific to raw CSV, which has no type
+# metadata at all). Guarding them anyway would require the same "prefix
+# with an apostrophe" trick CSV tools use, but openpyxl has no matching
+# "hide this quote marker" flag (that's an Excel-UI-only behaviour for
+# manual typing) — the apostrophe would show up as a literal, VISIBLE
+# character on ordinary data that legitimately starts with one of these,
+# most commonly phone numbers ("+33...").
+#
+# So instead of mutating the VALUE (which either leaves +/-/@ unprotected
+# or corrupts legitimate data), neutralise at the CELL level: after
+# openpyxl has decided a value looks like a formula, force it back to a
+# plain string type. This preserves the original text byte-for-byte —
+# Excel then displays "=cmd|..." as inert visible text, not a formula —
+# while adding zero visible side effects to anything else.
+def _neutralize_formula(cell) -> Any:
+    if cell.data_type == "f":
+        cell.data_type = "s"
+    return cell
 
 
 def _write_header_row(ws, headers: list[str]) -> None:
     """Write a styled header row."""
     for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=_safe_cell_value(header))
+        cell = _neutralize_formula(ws.cell(row=1, column=col_idx, value=header))
         cell.fill   = _header_fill()
         cell.font   = _header_font()
         cell.border = _thin_border()
@@ -196,7 +211,6 @@ def _build_master_list_sheet(
             p.get("dq_open_exceptions") or 0, p.get("dq_priority"),
             p.get("dq_sources_used"), p.get("dq_last_updated"), p.get("dq_action_needed"),
         ] + [custom.get(cf) for cf in custom_fields]
-        values = [_safe_cell_value(v) for v in values]
 
         # Determine row colour
         p_id = str(p.get("id", ""))
@@ -210,7 +224,7 @@ def _build_master_list_sheet(
 
         fill = _row_fill(fill_hex)
         for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _neutralize_formula(ws.cell(row=row_idx, column=col_idx, value=value))
             cell.fill   = fill
             cell.border = _thin_border()
             # Multi-line detail cells wrap; the rest are top-aligned for consistency
@@ -249,10 +263,9 @@ def _build_exceptions_sheet(ws, exceptions: list[dict]) -> None:
             exc.get("message"),
             ctx_str,
         ]
-        values = [_safe_cell_value(v) for v in values]
         fill = _row_fill(sev_color.get(severity, SEV_WARNING))
         for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _neutralize_formula(ws.cell(row=row_idx, column=col_idx, value=value))
             cell.fill   = fill
             cell.border = _thin_border()
             cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -334,9 +347,8 @@ def _build_change_log_sheet(ws, changes: list[dict], include_dietary: bool = Tru
             ch.get("new_value") if (include_dietary or not is_dietary) else None,
             ch.get("change_reason"),
         ]
-        values = [_safe_cell_value(v) for v in values]
         for col_idx, value in enumerate(values, start=1):
-            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell = _neutralize_formula(ws.cell(row=row_idx, column=col_idx, value=value))
             cell.border = _thin_border()
             cell.alignment = Alignment(vertical="center")
 
@@ -405,7 +417,7 @@ def _build_quality_sheet(ws, analysis: dict) -> None:
         ws.cell(row=1, column=start_col + 1, value="Nombre").font = _header_font()
         ws.cell(row=1, column=start_col + 1).fill = _header_fill()
         for i, (k, v) in enumerate(list(dist.items())[:25], start=2):
-            ws.cell(row=i, column=start_col, value=_safe_cell_value(str(k)))
+            _neutralize_formula(ws.cell(row=i, column=start_col, value=str(k)))
             ws.cell(row=i, column=start_col + 1, value=v)
 
     _write_distribution(4, "Par région", analysis.get("by_region", {}) or {})
@@ -424,7 +436,7 @@ def _build_advice_sheet(ws, analysis: dict) -> None:
     if ai:
         ws.cell(row=1, column=1, value="Synthèse (IA)").font = _header_font()
         ws.cell(row=1, column=1).fill = _header_fill()
-        cell = ws.cell(row=2, column=1, value=_safe_cell_value(str(ai)))
+        cell = _neutralize_formula(ws.cell(row=2, column=1, value=str(ai)))
         cell.alignment = Alignment(wrap_text=True, vertical="top")
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
         ws.row_dimensions[2].height = 90
@@ -448,9 +460,8 @@ def _build_advice_sheet(ws, analysis: dict) -> None:
         sev = r.get("severity", "info")
         fill = _row_fill(sev_color.get(sev, SEV_INFO))
         vals = [sev_label.get(sev, sev), r.get("text"), r.get("count")]
-        vals = [_safe_cell_value(v) for v in vals]
         for col_idx, value in enumerate(vals, start=1):
-            cell = ws.cell(row=i, column=col_idx, value=value)
+            cell = _neutralize_formula(ws.cell(row=i, column=col_idx, value=value))
             cell.fill = fill
             cell.border = _thin_border()
             cell.alignment = Alignment(wrap_text=True, vertical="top")

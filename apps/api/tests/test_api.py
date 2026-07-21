@@ -846,6 +846,65 @@ class TestMailConnectionWriteCheck:
         assert kwargs.get("write") is True
 
 
+class TestFormulaInjectionNoVisibleArtifact:
+    """The Excel/CSV formula-injection guard (CWE-1236) went through TWO
+    versions. v1 prefixed any string starting with =/+/-/@ with an
+    apostrophe. Caught before push: verified via raw OOXML inspection that
+    openpyxl writes NO quotePrefix attribute, so that apostrophe becomes a
+    LITERAL, VISIBLE character in the exported file -- every phone number
+    ("+33...") would show up as "'+33..." in the master list, a core MVP
+    deliverable. v2 (this one) root-caused the ACTUAL mechanism: only "="
+    gets auto-promoted by openpyxl to a real <f> formula element Excel
+    evaluates on open; +/-/@ already stay a plain string (data_type='s'),
+    which Excel never re-parses as a formula because OOXML cell types are
+    explicit metadata (unlike raw CSV). _neutralize_formula forces
+    data_type back to 's' only when openpyxl actually set it to 'f',
+    preserving the value byte-for-byte."""
+
+    def test_formula_neutralised_no_live_formula(self):
+        from services.export_service import _neutralize_formula
+        from openpyxl import Workbook
+        ws = Workbook().active
+        cell = _neutralize_formula(ws.cell(row=1, column=1, value="=cmd|'/c calc'!A1"))
+        assert cell.data_type == "s"
+        assert cell.value == "=cmd|'/c calc'!A1"
+
+    def test_ordinary_plus_minus_at_values_completely_unchanged(self):
+        """The regression this test exists to prevent: MUST show exactly
+        as typed, no apostrophe, no artifact of any kind."""
+        from services.export_service import _neutralize_formula
+        from openpyxl import Workbook
+        ws = Workbook().active
+        for v in ("+33612345678", "-5", "@handle", "Jean-Paul"):
+            cell = _neutralize_formula(ws.cell(row=1, column=1, value=v))
+            assert cell.value == v, f"value mutated: {cell.value!r} != {v!r}"
+            assert cell.data_type == "s"
+
+    def test_master_list_phone_column_shows_exact_value(self):
+        from services.export_service import _build_master_list_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        row = {
+            "id": "p1", "last_name": "Dupont", "first_name": "Marie",
+            "phone": "+33612345678", "completeness_status": "complete",
+        }
+        _build_master_list_sheet(ws, [row], set())
+        data_row = [c.value for c in ws[2]]
+        assert data_row[4] == "+33612345678"  # Phone column
+
+    def test_malicious_formula_neutralised_end_to_end(self):
+        from services.export_service import _build_master_list_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        row = {
+            "id": "p1", "last_name": "=cmd|'/c calc'!A1", "first_name": "Jean",
+            "completeness_status": "complete",
+        }
+        _build_master_list_sheet(ws, [row], set())
+        assert ws.cell(row=2, column=1).data_type == "s"
+        assert ws.cell(row=2, column=1).value == "=cmd|'/c calc'!A1"
+
+
 class TestExportDietaryRBAC:
     """The export endpoint (routers/exports.py create_export) only called
     verify_event_access with no role check, so ANY role that can read the
@@ -917,9 +976,12 @@ class TestExportDietaryRBAC:
         phone_row = [c.value for c in ws[3]]
         assert dietary_row[5] is None and dietary_row[6] is None  # old/new value
         assert dietary_row[4] == "dietary_requirements"  # field name itself still shown
-        # untouched by the DIETARY redaction -- the leading "'" is the
-        # UNRELATED formula-injection sanitizer, expected on a "+..." value.
-        assert phone_row[5] == "" and phone_row[6] == "'+33612345678"
+        # untouched by the DIETARY redaction, and exactly as-typed: the
+        # formula-injection guard neutralises "="-leading VALUES at the
+        # cell-type level (see _neutralize_formula), it never mutates the
+        # visible content, so a phone number is never shown with an
+        # artifact prefix.
+        assert phone_row[5] == "" and phone_row[6] == "+33612345678"
 
     def test_change_log_dietary_included_for_admin(self):
         from services.export_service import _build_change_log_sheet
