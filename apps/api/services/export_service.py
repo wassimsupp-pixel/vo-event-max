@@ -69,10 +69,29 @@ def _auto_width(ws, min_width: int = 10, max_width: int = 50) -> None:
         ws.column_dimensions[col_letter].width = min(col_max + 2, max_width)
 
 
+# Excel/CSV formula injection (CWE-1236): a cell string starting with one of
+# these characters is interpreted as a FORMULA when the file is opened in
+# Excel, not as text — openpyxl actively promotes it (cell.data_type='f').
+# Every value here can originate from an uploaded file's cell content OR its
+# column header (custom/unmapped fields keep their original header text) and
+# flows into this export verbatim. A booby-trapped upload (e.g. a Company
+# column containing `=cmd|'/c calc'!A1`) would execute when a DIFFERENT,
+# possibly more privileged staff member later opens the export. Prefixing
+# with an apostrophe forces Excel to treat it as literal text; openpyxl still
+# writes an ordinary string cell, so normal values are completely unaffected.
+_FORMULA_TRIGGER_CHARS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _safe_cell_value(value: Any) -> Any:
+    if isinstance(value, str) and value[:1] in _FORMULA_TRIGGER_CHARS:
+        return "'" + value
+    return value
+
+
 def _write_header_row(ws, headers: list[str]) -> None:
     """Write a styled header row."""
     for col_idx, header in enumerate(headers, start=1):
-        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell = ws.cell(row=1, column=col_idx, value=_safe_cell_value(header))
         cell.fill   = _header_fill()
         cell.font   = _header_font()
         cell.border = _thin_border()
@@ -84,10 +103,21 @@ def _write_header_row(ws, headers: list[str]) -> None:
 # Sheet 1 — Master List
 # ---------------------------------------------------------------------------
 
-def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custom_fields: list[str] | None = None) -> None:
+def _build_master_list_sheet(
+    ws, rows: list[dict], conflict_ids: set[str], custom_fields: list[str] | None = None,
+    include_dietary: bool = True,
+) -> None:
     """Populate the detailed Master List sheet (feedback §6): identity + real
     flight / hotel / transfer / activity / dietary details, not just booleans.
-    User-defined custom mapping fields are appended as extra columns."""
+    User-defined custom mapping fields are appended as extra columns.
+
+    ``include_dietary=False`` blanks Dietary Requirements / Food-Allergy for
+    every row: dietary_requirements is RGPD-sensitive and restricted to
+    admin/pm everywhere else in the app (participants.py's _strip_dietary,
+    the master-list JSON endpoint) — the export must not be a bypass for a
+    client/viewer role that can already reach this endpoint via
+    verify_event_access's read-level check.
+    """
     ws.title = "Master List"
     ws.freeze_panes = "A2"
     custom_fields = custom_fields or []
@@ -135,8 +165,8 @@ def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custo
             p.get("nationality"),
             p.get("region"),
             p.get("attendee_category"),
-            p.get("dietary_requirements"),
-            p.get("food_allergy_info"),
+            p.get("dietary_requirements") if include_dietary else None,
+            p.get("food_allergy_info") if include_dietary else None,
             p.get("flight_summary"),
             p.get("outbound_airline"), p.get("outbound_flight_number"),
             p.get("outbound_departure_airport"), p.get("outbound_arrival_airport"),
@@ -166,6 +196,7 @@ def _build_master_list_sheet(ws, rows: list[dict], conflict_ids: set[str], custo
             p.get("dq_open_exceptions") or 0, p.get("dq_priority"),
             p.get("dq_sources_used"), p.get("dq_last_updated"), p.get("dq_action_needed"),
         ] + [custom.get(cf) for cf in custom_fields]
+        values = [_safe_cell_value(v) for v in values]
 
         # Determine row colour
         p_id = str(p.get("id", ""))
@@ -218,6 +249,7 @@ def _build_exceptions_sheet(ws, exceptions: list[dict]) -> None:
             exc.get("message"),
             ctx_str,
         ]
+        values = [_safe_cell_value(v) for v in values]
         fill = _row_fill(sev_color.get(severity, SEV_WARNING))
         for col_idx, value in enumerate(values, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
@@ -293,6 +325,7 @@ def _build_change_log_sheet(ws, changes: list[dict]) -> None:
             ch.get("new_value"),
             ch.get("change_reason"),
         ]
+        values = [_safe_cell_value(v) for v in values]
         for col_idx, value in enumerate(values, start=1):
             cell = ws.cell(row=row_idx, column=col_idx, value=value)
             cell.border = _thin_border()
@@ -363,7 +396,7 @@ def _build_quality_sheet(ws, analysis: dict) -> None:
         ws.cell(row=1, column=start_col + 1, value="Nombre").font = _header_font()
         ws.cell(row=1, column=start_col + 1).fill = _header_fill()
         for i, (k, v) in enumerate(list(dist.items())[:25], start=2):
-            ws.cell(row=i, column=start_col, value=str(k))
+            ws.cell(row=i, column=start_col, value=_safe_cell_value(str(k)))
             ws.cell(row=i, column=start_col + 1, value=v)
 
     _write_distribution(4, "Par région", analysis.get("by_region", {}) or {})
@@ -382,7 +415,7 @@ def _build_advice_sheet(ws, analysis: dict) -> None:
     if ai:
         ws.cell(row=1, column=1, value="Synthèse (IA)").font = _header_font()
         ws.cell(row=1, column=1).fill = _header_fill()
-        cell = ws.cell(row=2, column=1, value=str(ai))
+        cell = ws.cell(row=2, column=1, value=_safe_cell_value(str(ai)))
         cell.alignment = Alignment(wrap_text=True, vertical="top")
         ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4)
         ws.row_dimensions[2].height = 90
@@ -406,6 +439,7 @@ def _build_advice_sheet(ws, analysis: dict) -> None:
         sev = r.get("severity", "info")
         fill = _row_fill(sev_color.get(sev, SEV_INFO))
         vals = [sev_label.get(sev, sev), r.get("text"), r.get("count")]
+        vals = [_safe_cell_value(v) for v in vals]
         for col_idx, value in enumerate(vals, start=1):
             cell = ws.cell(row=i, column=col_idx, value=value)
             cell.fill = fill
@@ -427,6 +461,7 @@ async def generate_excel(
     run_id: str,
     user_id: str,
     supabase: Client,
+    role: str = "viewer",
 ) -> bytes:
     """
     Generate a multi-sheet Excel workbook for a completed consolidation run.
@@ -437,6 +472,12 @@ async def generate_excel(
     run_id:    UUID of the consolidation_run.
     user_id:   UUID of the user requesting the export.
     supabase:  Supabase client.
+    role:      Requesting user's role. Only "admin"/"pm" get dietary_requirements
+               / food_allergy_info in the Master List sheet — same RGPD-sensitive
+               gate applied everywhere else (participants.py's _strip_dietary).
+               Defaults to the LEAST privileged role ("viewer") so a caller
+               that forgets to pass it fails closed (dietary stripped) rather
+               than open; the HTTP router always passes the caller's real role.
 
     Returns
     -------
@@ -516,7 +557,10 @@ async def generate_excel(
 
     # Sheet 1: Master List (detailed)
     ws1 = wb.active
-    _build_master_list_sheet(ws1, master_rows, conflict_ids, custom_fields)
+    _build_master_list_sheet(
+        ws1, master_rows, conflict_ids, custom_fields,
+        include_dietary=role in ("admin", "pm"),
+    )
 
     # Sheet 2: Data-quality analysis
     ws_q = wb.create_sheet()

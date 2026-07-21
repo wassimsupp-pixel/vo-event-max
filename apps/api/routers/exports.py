@@ -119,6 +119,7 @@ async def create_export(
             run_id=str(run_id),
             user_id=current_user["id"],
             supabase=supabase,
+            role=current_user.get("role", "viewer"),
         )
     except Exception as exc:
         logger.error("Excel generation failed for event %s run %s: %s", event_id, body.run_id, exc)
