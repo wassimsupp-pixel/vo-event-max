@@ -140,17 +140,52 @@ async def resolve_match_candidate(
             detail="This candidate has already been resolved.",
         )
 
+    # Atomically claim the candidate BEFORE merging: two concurrent PUTs for
+    # the same candidate_id (double-click "confirmer la fusion") both read
+    # status="pending" above and could both proceed — the second one
+    # operating on rows the first already repointed/deleted, silently
+    # no-op'ing while still logging a misleading "merge" change_log entry
+    # and re-marking an already-resolved candidate as resolved. The status
+    # column's CHECK constraint only allows 'pending'/'resolved' (no
+    # intermediate "claimed" state), so this update writes the FINAL state
+    # directly; if the merge below fails, the claim is reverted (back to
+    # 'pending') so the operation can still be retried, matching the
+    # original fail-and-retry behaviour for the single-request case.
+    resolved_at = datetime.now(timezone.utc).isoformat()
+    claim = (
+        supabase.table("match_candidates")
+        .update({"human_decision": decision, "status": "resolved", "resolved_at": resolved_at})
+        .eq("id", candidate_id)
+        .eq("status", "pending")
+        .execute()
+    )
+    if not claim.data:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This candidate has already been resolved.",
+        )
+
+    def _revert_claim() -> None:
+        try:
+            supabase.table("match_candidates").update({
+                "human_decision": None, "status": "pending", "resolved_at": None,
+            }).eq("id", candidate_id).execute()
+        except Exception as exc:
+            logger.warning("Failed to revert candidate %s claim after merge failure: %s", candidate_id, exc)
+
     merged = False
     if decision == "fusionner":
         loser_id = cand.get("participant_a_id")   # a is merged INTO b
         winner_id = cand.get("participant_b_id")
         if not loser_id or not winner_id:
+            _revert_claim()
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="One of the participants no longer exists; cannot merge.",
             )
         merged = consolidation_service._merge_participant_into(supabase, loser_id, winner_id)
         if not merged:
+            _revert_claim()
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Merge failed. The participants may have changed — refresh and retry.",
@@ -186,16 +221,7 @@ async def resolve_match_candidate(
         except Exception:
             pass
 
-    # Mark the candidate resolved with the human decision.
-    try:
-        supabase.table("match_candidates").update({
-            "human_decision": decision,
-            "status": "resolved",
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", candidate_id).execute()
-    except Exception as exc:
-        logger.warning("Failed to mark candidate %s resolved: %s", candidate_id, exc)
-
+    # Candidate already atomically marked resolved by the claim above.
     msg = (
         "Fiches fusionnées." if decision == "fusionner"
         else "Fiches conservées séparées."
