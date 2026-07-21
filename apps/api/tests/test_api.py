@@ -331,6 +331,101 @@ class TestParticipantDietaryRestriction:
         assert stripped.get("dietary_requirements") is None
 
 
+class TestConsolidationConcurrencyGuard:
+    """POST /consolidate must refuse a second run while one is already in
+    flight: the pipeline wipes and rebuilds the event's exceptions (and
+    re-links source_records) starting from its very first step, so two
+    concurrent runs stomp on each other's writes. This is what emptied a
+    real export's Exceptions sheet on 2026-07-20 (a race, not a code bug in
+    the export itself) -- see export_service.py's exceptions query fix."""
+
+    EVENT_ID = "00000000-0000-0000-0000-000000000001"
+
+    def _mocked_client(self, uploaded_files_data, runs_select_data, runs_insert_data=None):
+        mock_supabase = MagicMock()
+        uploaded_files_mock = MagicMock()
+        uploaded_files_mock.select.return_value.eq.return_value.in_.return_value.execute.return_value.data = uploaded_files_data
+        runs_mock = MagicMock()
+        runs_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = runs_select_data
+        if runs_insert_data is not None:
+            runs_mock.insert.return_value.execute.return_value.data = runs_insert_data
+
+        def table_side_effect(name):
+            if name == "uploaded_files":
+                return uploaded_files_mock
+            if name == "consolidation_runs":
+                return runs_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        return mock_supabase
+
+    @patch("routers.consolidation.verify_event_access")
+    def test_rejects_when_run_already_in_progress(self, mock_verify):
+        from datetime import datetime, timezone
+        mock_verify.return_value = None
+        client = _admin_client()
+        recent = datetime.now(timezone.utc).isoformat()
+        mock_supabase = self._mocked_client(
+            uploaded_files_data=[{"id": "f1"}],
+            runs_select_data=[{"id": "run1", "started_at": recent}],
+        )
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/consolidate")
+        assert response.status_code == 409
+
+    @patch("routers.consolidation.verify_event_access")
+    def test_allows_when_no_run_in_progress(self, mock_verify):
+        from datetime import datetime, timezone
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = self._mocked_client(
+            uploaded_files_data=[{"id": "f1"}],
+            runs_select_data=[],
+            runs_insert_data=[{
+                "id": "00000000-0000-0000-0000-000000000099",
+                "event_id": self.EVENT_ID,
+                "triggered_by": MOCK_ADMIN_USER["id"],
+                "status": "running",
+                "stats": None,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+            }],
+        )
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/consolidate")
+        assert response.status_code == 202
+
+    @patch("routers.consolidation.verify_event_access")
+    def test_allows_when_previous_run_is_stale(self, mock_verify):
+        """A 'running' row older than the staleness window (a hard-crashed
+        process that never reached the pipeline's own try/except 'failed'
+        handler) must not permanently lock the event out of consolidation."""
+        from datetime import datetime, timezone, timedelta
+        mock_verify.return_value = None
+        client = _admin_client()
+        stale = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        mock_supabase = self._mocked_client(
+            uploaded_files_data=[{"id": "f1"}],
+            runs_select_data=[{"id": "run_old", "started_at": stale}],
+            runs_insert_data=[{
+                "id": "00000000-0000-0000-0000-000000000099",
+                "event_id": self.EVENT_ID,
+                "triggered_by": MOCK_ADMIN_USER["id"],
+                "status": "running",
+                "stats": None,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": None,
+            }],
+        )
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/consolidate")
+        assert response.status_code == 202
+
+
 # ---------------------------------------------------------------------------
 # 5. Matching engine unit tests
 # ---------------------------------------------------------------------------

@@ -483,11 +483,17 @@ async def generate_excel(
         if r.get("participant_id")
     }
 
-    # Unresolved exceptions for this run
+    # Unresolved exceptions for this event. Scoped by event_id (not run_id):
+    # the exceptions table is wiped and rebuilt at the START of every
+    # consolidation run (see consolidation_service step "1b"), long before
+    # detection re-populates it near the end. A run_id-scoped query can race
+    # a concurrent/subsequent run and see zero rows even though hundreds
+    # exist — event_id + resolved matches the pattern already used by the
+    # live "Exceptions et alertes" page, which doesn't have this problem.
     exc_resp = (
         supabase.table("exceptions")
         .select("*")
-        .eq("run_id", run_id)
+        .eq("event_id", event_id)
         .eq("resolved", False)
         .order("severity")
         .execute()

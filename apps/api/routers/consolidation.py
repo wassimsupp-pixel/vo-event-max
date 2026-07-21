@@ -76,6 +76,38 @@ async def trigger_consolidation(
             ),
         )
 
+    # Refuse to start a second run while one is already in flight: the
+    # pipeline wipes and rebuilds this event's exceptions (and re-links
+    # source_records) starting from its very first step, so two concurrent
+    # runs stomp on each other's writes and can leave downstream views
+    # (e.g. the Excel export) reading a mid-wipe, momentarily-empty state.
+    running = (
+        supabase.table("consolidation_runs")
+        .select("id, started_at")
+        .eq("event_id", event_id)
+        .eq("status", "running")
+        .execute()
+    )
+    # Runs normally finish in well under 10 minutes; a "running" row older
+    # than that survived the pipeline's own try/except only because the
+    # whole process died (e.g. an OOM kill), not a handled failure. Treat it
+    # as stale rather than letting a hard crash permanently lock the event.
+    STALE_AFTER_SECONDS = 30 * 60
+    now = datetime.now(timezone.utc)
+    still_running = []
+    for r in running.data or []:
+        try:
+            started = datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))
+            if (now - started).total_seconds() < STALE_AFTER_SECONDS:
+                still_running.append(r)
+        except Exception:
+            still_running.append(r)  # unparsable timestamp — be conservative
+    if still_running:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A consolidation is already running for this event. Please wait for it to finish.",
+        )
+
     # Create the run record
     run_id = str(uuid.uuid4())
     run_record = {
