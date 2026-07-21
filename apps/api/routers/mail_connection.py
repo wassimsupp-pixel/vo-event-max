@@ -105,7 +105,7 @@ async def mail_sync(
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Pull the most recent inbox messages and turn them into AI proposals."""
-    await verify_event_access(str(event_id, write=True), current_user, supabase)
+    await verify_event_access(str(event_id), current_user, supabase, write=True)
     try:
         return await mail.sync_inbox(provider, event_id, supabase)
     except mail.MailConfigError as exc:
@@ -120,6 +120,6 @@ async def mail_disconnect(
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, str]:
     """Forget the stored tokens for a provider connection."""
-    await verify_event_access(str(event_id, write=True), current_user, supabase)
+    await verify_event_access(str(event_id), current_user, supabase, write=True)
     mail.disconnect(event_id, provider)
     return {"status": "disconnected", "provider": provider}
