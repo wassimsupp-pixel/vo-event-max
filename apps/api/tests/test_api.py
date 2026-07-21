@@ -331,6 +331,73 @@ class TestParticipantDietaryRestriction:
         assert stripped.get("dietary_requirements") is None
 
 
+class TestEmailAgentAccessControl:
+    """The Email Agent router had NO ownership check at all (2026-07-21 audit):
+    any authenticated user, any org, could list another org's email
+    proposals (sender addresses, message bodies, proposed dietary_requirements
+    changes) and apply/reject them, writing to a participant they don't own.
+    These tests prove verify_event_access is actually wired in and rejects a
+    cross-org event with 404, matching the pattern used by every other
+    endpoint in this codebase (see dependencies.verify_event_access)."""
+
+    FOREIGN_EVENT_ID = "00000000-0000-0000-0000-0000000000ff"
+    PROPOSAL_ID = "00000000-0000-0000-0000-000000000123"
+
+    def _client_with_org_mismatch(self):
+        """A supabase mock whose events lookup finds nothing -- simulates the
+        event belonging to a DIFFERENT org than current_user.org_id, which is
+        exactly what verify_event_access's real query filters on
+        (.eq("projects.org_id", org_id)). No proposal-specific behaviour is
+        stubbed: reaching this table at all proves the org check ran first."""
+        client = _admin_client()
+        mock_supabase = MagicMock()
+        events_mock = MagicMock()
+        events_mock.select.return_value.eq.return_value.eq.return_value.single.return_value.execute.side_effect = Exception("no row")
+        mock_supabase.table.side_effect = lambda name: events_mock if name == "events" else MagicMock()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        return client
+
+    def test_list_proposals_rejects_foreign_org_event(self):
+        client = self._client_with_org_mismatch()
+        response = client.get(f"/api/events/{self.FOREIGN_EVENT_ID}/email-agent")
+        assert response.status_code == 404
+
+    def test_analyze_rejects_foreign_org_event(self):
+        client = self._client_with_org_mismatch()
+        response = client.post(
+            f"/api/events/{self.FOREIGN_EVENT_ID}/email-agent/analyze",
+            json={"sender": "x@y.com", "subject": "s", "body": "b"},
+        )
+        assert response.status_code == 404
+
+    @patch("routers.email_agent.EmailAgentService.get_proposal")
+    def test_apply_rejects_proposal_from_foreign_org_event(self, mock_get_proposal):
+        mock_get_proposal.return_value = {
+            "id": self.PROPOSAL_ID, "event_id": self.FOREIGN_EVENT_ID,
+            "status": "pending", "participant_id": "p1", "proposed_changes": {"phone": "+1"},
+        }
+        client = self._client_with_org_mismatch()
+        response = client.post(f"/api/email-agent/{self.PROPOSAL_ID}/apply")
+        assert response.status_code == 404
+
+    @patch("routers.email_agent.EmailAgentService.get_proposal")
+    def test_reject_rejects_proposal_from_foreign_org_event(self, mock_get_proposal):
+        mock_get_proposal.return_value = {
+            "id": self.PROPOSAL_ID, "event_id": self.FOREIGN_EVENT_ID, "status": "pending",
+        }
+        client = self._client_with_org_mismatch()
+        response = client.post(f"/api/email-agent/{self.PROPOSAL_ID}/reject")
+        assert response.status_code == 404
+
+    @patch("routers.email_agent.EmailAgentService.get_proposal")
+    def test_apply_404s_when_proposal_does_not_exist(self, mock_get_proposal):
+        mock_get_proposal.return_value = None
+        client = _admin_client()
+        client.app.dependency_overrides[get_supabase_client] = lambda: _mock_supabase()
+        response = client.post(f"/api/email-agent/{self.PROPOSAL_ID}/apply")
+        assert response.status_code == 404
+
+
 class TestConsolidationConcurrencyGuard:
     """POST /consolidate must refuse a second run while one is already in
     flight: the pipeline wipes and rebuilds the event's exceptions (and
@@ -511,6 +578,125 @@ class TestMatchingEngine:
         merged = merge_participant_fields(existing, new_data, locked)
         assert merged["company"] == "ExistingCo"
         assert merged["phone"] == "+32 2 000 0000"
+
+
+class TestSafeStorageFilename:
+    """A client-controlled upload filename becomes a Supabase Storage path
+    segment (routers/files.py create_upload). Path-traversal or control
+    characters must never reach it, even though the {event_id}/{file_id}/
+    prefix is always server-generated."""
+
+    def test_path_traversal_stripped(self):
+        from routers.files import _safe_storage_filename
+        assert ".." not in _safe_storage_filename("../../../etc/passwd")
+        assert "/" not in _safe_storage_filename("../../other-event/x.xlsx")
+
+    def test_backslash_traversal_stripped(self):
+        from routers.files import _safe_storage_filename
+        result = _safe_storage_filename("..\\..\\windows\\system32\\x.xlsx")
+        assert "\\" not in result and "/" not in result
+
+    def test_normal_filename_mostly_preserved(self):
+        from routers.files import _safe_storage_filename
+        assert _safe_storage_filename("Participants Q3.xlsx") == "Participants_Q3.xlsx"
+
+    def test_empty_filename_falls_back(self):
+        from routers.files import _safe_storage_filename
+        assert _safe_storage_filename("") == "upload"
+
+    def test_original_filename_field_left_untouched(self):
+        """original_filename (DB field, shown in UI, used for extension
+        detection on re-download) must stay the user's real name -- only the
+        STORAGE PATH segment is sanitised."""
+        import inspect
+        from routers import files
+        src = inspect.getsource(files)
+        assert '"original_filename": filename' in src
+        assert "original_filename=filename" in src
+
+
+class TestMailConnectionWriteCheck:
+    """routers/mail_connection.py had `str(event_id, write=True)` -- write=True
+    landed inside str()'s call, not verify_event_access's, which raises
+    TypeError before the access check ever runs. POST .../mail/sync and
+    .../mail/disconnect always 500'd (fails closed, but the intended
+    write-access check never executed). Fixed by moving write=True onto
+    verify_event_access itself."""
+
+    EVENT_ID = "00000000-0000-0000-0000-000000000001"
+
+    @patch("routers.mail_connection.verify_event_access")
+    @patch("routers.mail_connection.mail")
+    def test_sync_no_longer_raises_typeerror(self, mock_mail, mock_verify):
+        from unittest.mock import AsyncMock
+        mock_verify.return_value = {"id": self.EVENT_ID}
+        mock_mail.sync_inbox = AsyncMock(return_value={"synced": 0})
+        client = _admin_client()
+        response = client.post(f"/api/events/{self.EVENT_ID}/mail/sync?provider=gmail")
+        assert response.status_code == 200
+        # write=True must reach verify_event_access, not str()
+        _, kwargs = mock_verify.call_args
+        assert kwargs.get("write") is True
+
+    @patch("routers.mail_connection.verify_event_access")
+    @patch("routers.mail_connection.mail")
+    def test_disconnect_no_longer_raises_typeerror(self, mock_mail, mock_verify):
+        mock_verify.return_value = {"id": self.EVENT_ID}
+        mock_mail.disconnect = MagicMock()
+        client = _admin_client()
+        response = client.post(f"/api/events/{self.EVENT_ID}/mail/disconnect?provider=gmail")
+        assert response.status_code == 200
+        _, kwargs = mock_verify.call_args
+        assert kwargs.get("write") is True
+
+
+class TestExportDietaryRBAC:
+    """The export endpoint (routers/exports.py create_export) only called
+    verify_event_access with no role check, so ANY role that can read the
+    event (including client/viewer) got dietary_requirements and
+    food_allergy_info in the generated Excel -- bypassing the RGPD-sensitive
+    gate enforced everywhere else (participants.py's _strip_dietary). Fixed
+    by threading the caller's role into export_service.generate_excel /
+    _build_master_list_sheet, defaulting to the LEAST privileged role so a
+    caller that forgets to pass it fails closed."""
+
+    def _rows(self):
+        return [{
+            "id": "p1", "last_name": "Dupont", "first_name": "Marie",
+            "dietary_requirements": "Allergie aux arachides",
+            "food_allergy_info": "Anaphylaxie severe",
+            "completeness_status": "complete",
+        }]
+
+    def test_dietary_included_for_admin(self):
+        from services.export_service import _build_master_list_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        _build_master_list_sheet(ws, self._rows(), set(), include_dietary=True)
+        row = [c.value for c in ws[2]]
+        assert row[8] == "Allergie aux arachides"
+        assert row[9] == "Anaphylaxie severe"
+
+    def test_dietary_stripped_for_non_privileged_role(self):
+        from services.export_service import _build_master_list_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        _build_master_list_sheet(ws, self._rows(), set(), include_dietary=False)
+        row = [c.value for c in ws[2]]
+        assert row[8] is None
+        assert row[9] is None
+        # Only these two columns are affected -- everything else survives.
+        assert row[0] == "Dupont"
+        assert row[1] == "Marie"
+
+    def test_generate_excel_defaults_to_least_privileged_role(self):
+        """A caller that forgets to pass `role=` must fail CLOSED (dietary
+        stripped), not open -- a permission parameter defaulting to full
+        access is exactly the bug class this test guards against."""
+        import inspect
+        from services.export_service import generate_excel
+        role_param = inspect.signature(generate_excel).parameters["role"]
+        assert role_param.default not in ("admin", "pm")
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +910,76 @@ class TestGlobalParticipants:
         assert data[0]["email"] == "alice@test.com"
         assert data[0]["history"][0]["event_name"] == "Barcelona Kick-off 2025"
         assert data[0]["history"][0]["dietary_requirements"] == "Vegetarian"
+
+    def _participant_rows(self):
+        return [
+            {
+                "email": "alice@test.com", "first_name": "Alice", "last_name": "Martin",
+                "dietary_requirements": "Vegetarian",
+                "events": {
+                    "id": "event-shared", "project_id": "proj-1",
+                    "name": "Shared Event", "start_date": "2025-11-10",
+                },
+            },
+            {
+                "email": "alice@test.com", "first_name": "Alice", "last_name": "Martin",
+                "dietary_requirements": "Vegetarian",
+                "events": {
+                    "id": "event-not-shared", "project_id": "proj-1",
+                    "name": "Not Shared Event", "start_date": "2025-12-01",
+                },
+            },
+        ]
+
+    def _mocked_client(self, membership_data):
+        client = _viewer_client()
+        mock_supabase = MagicMock()
+        participants_mock = MagicMock()
+        participants_mock.select.return_value.ilike.return_value.eq.return_value.execute.return_value.data = self._participant_rows()
+        members_mock = MagicMock()
+        members_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = membership_data
+
+        def table_side_effect(name):
+            if name == "participants":
+                return participants_mock
+            if name == "project_members":
+                return members_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        return client
+
+    def test_dietary_stripped_for_non_staff_role(self):
+        """A client/viewer sharing event-shared must not see dietary_requirements
+        in cross-event history, even for the event they DO have access to --
+        same RGPD gate as participants.py's _strip_dietary."""
+        client = self._mocked_client([{"id": "m1", "access_level": "viewer", "event_ids": ["event-shared"]}])
+        response = client.get("/api/global-participants/history?email=alice@test.com")
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        for entry in data[0]["history"]:
+            assert entry["dietary_requirements"] is None
+
+    def test_event_excluded_when_not_shared_with_non_staff(self):
+        """A client shared ONLY on event-shared must not see history for
+        event-not-shared, even though both belong to the same org/project."""
+        client = self._mocked_client([{"id": "m1", "access_level": "viewer", "event_ids": ["event-shared"]}])
+        response = client.get("/api/global-participants/history?email=alice@test.com")
+        assert response.status_code == 200
+        data = response.json()
+        event_names = {h["event_name"] for h in data[0]["history"]}
+        assert event_names == {"Shared Event"}
+        assert "Not Shared Event" not in event_names
+
+    def test_no_membership_excludes_all_events_for_non_staff(self):
+        """A non-staff user with no project_members row at all (never shared
+        on this project) must see nothing, not the full org history."""
+        client = self._mocked_client([])
+        response = client.get("/api/global-participants/history?email=alice@test.com")
+        assert response.status_code == 200
+        assert response.json() == []
 
 
 class TestEvents:
