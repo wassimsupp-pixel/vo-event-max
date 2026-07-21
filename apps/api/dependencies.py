@@ -10,6 +10,7 @@ Provides:
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
@@ -266,3 +267,33 @@ async def verify_event_access(
             detail="Read-only access: you cannot modify this event.",
         )
     return event
+
+
+# Runs normally finish in well under 10 minutes; a "running" row older than
+# this survived the pipeline's own try/except only because the whole
+# process died (e.g. an OOM kill), not a handled failure — treat it as
+# stale rather than letting a hard crash permanently block new work.
+CONSOLIDATION_STALE_AFTER_SECONDS = 30 * 60
+
+
+def is_consolidation_running(supabase: Client, event_id: str) -> bool:
+    """True if a non-stale consolidation run is currently in flight for this
+    event. Shared by trigger_consolidation (refuse a second overlapping run)
+    and delete_file (refuse deleting a file mid-run — see files.py for why
+    that races into orphaned source_records)."""
+    running = (
+        supabase.table("consolidation_runs")
+        .select("id, started_at")
+        .eq("event_id", event_id)
+        .eq("status", "running")
+        .execute()
+    )
+    now = datetime.now(timezone.utc)
+    for r in running.data or []:
+        try:
+            started = datetime.fromisoformat(r["started_at"].replace("Z", "+00:00"))
+            if (now - started).total_seconds() < CONSOLIDATION_STALE_AFTER_SECONDS:
+                return True
+        except Exception:
+            return True  # unparsable timestamp — be conservative
+    return False

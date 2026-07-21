@@ -22,7 +22,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPExcepti
 from supabase import Client
 
 import config
-from dependencies import get_current_user, get_supabase_client, verify_event_access
+from dependencies import get_current_user, get_supabase_client, is_consolidation_running, verify_event_access
 from models.schemas import (
     ColumnMappingRequest,
     ColumnMappingResponse,
@@ -64,7 +64,16 @@ def _safe_storage_filename(filename: str) -> str:
     # containing the OTHER slash style (e.g. a literal backslash on a
     # Linux server, or vice versa) would still smuggle path segments.
     base = base.replace("\\", "_").replace("/", "_")
-    return _UNSAFE_STORAGE_CHARS_RE.sub("_", base)
+    base = _UNSAFE_STORAGE_CHARS_RE.sub("_", base)
+    # A bare "." or ".." SURVIVES basename (it has no separator to strip) and
+    # is still a real path-traversal segment once joined into storage_path
+    # ("{event_id}/{file_id}/.." resolves to "{event_id}/"). The character
+    # allowlist above doesn't catch this either, since '.' itself is allowed
+    # (needed for real extensions). A name that is ENTIRELY dots is never a
+    # legitimate upload filename.
+    if base.strip(".") == "":
+        base = "upload"
+    return base
 
 
 def _parse_file_to_dataframe(content: bytes, filename: str) -> pd.DataFrame:
@@ -476,6 +485,19 @@ async def delete_file(
 
     meta = meta_resp.data
     await verify_event_access(meta["event_id"], current_user, supabase, write=True)
+
+    # Refuse to delete while a consolidation is running for this event: it
+    # snapshots this file's source_record ids up front, deletes exactly
+    # those, then deletes the uploaded_files row — but a concurrent
+    # consolidation re-parses this same file mid-run and inserts FRESH
+    # source_records for it. Rows inserted after deletion's snapshot but
+    # before it removes the uploaded_files row survive the cleanup and are
+    # then left permanently orphaned (file_id pointing at nothing).
+    if is_consolidation_running(supabase, meta["event_id"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A consolidation is currently running for this event. Please wait for it to finish before deleting files.",
+        )
 
     # 1. Delete from Supabase Storage
     try:
