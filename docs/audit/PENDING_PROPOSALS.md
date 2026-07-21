@@ -90,3 +90,60 @@ trier/prioriser la file par confiance décroissante côté UI si le volume devie
 
 **Je n'ai PAS appliqué ce correctif** — conformément à la consigne, il touche la logique métier du
 moteur de matching et attend validation humaine explicite avant implémentation.
+
+---
+
+## PROP-002 [MAJEUR] — Ordre non-déterministe des enregistrements alimentant le matcher : les égalités de score peuvent être tranchées différemment d'un run à l'autre
+
+### Où
+`apps/api/services/consolidation_service.py`, `run_consolidation` étape 3, lignes **1057-1070** :
+```python
+for ci in range(0, len(primary_ids), 200):
+    chunk = primary_ids[ci:ci + 200]
+    sr_resp = supabase.table("source_records").select("id, normalized_data").in_("id", chunk).execute()
+    for sr in sr_resp.data or []:
+        pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
+        if source_type in ("registration", "masterfile"):
+            registrations.append(pr)
+        ...
+```
+
+### Problème
+`WHERE id IN (...)` (via PostgREST `.in_()`) ne garantit **aucun ordre de retour** correspondant à
+l'ordre de la liste `chunk` — Postgres renvoie les lignes selon le plan d'exécution qu'il choisit, pas
+selon l'ordre du IN-list. `primary_ids` lui-même vient du retour d'un `.upsert()` (ligne ~298 de
+`mapping_service.py`, `parse_and_insert_source_records`), dont l'ordre de retour n'est pas non plus
+garanti égal à l'ordre des lignes du fichier source.
+
+`registrations` (et `fcm_records`) sont donc construits dans un ordre qui peut varier d'une
+consolidation à l'autre, **pour les mêmes données sources**.
+
+### Pourquoi ça affecte le moteur de matching
+Dans `match_sources` (même fichier, ligne 260-265) :
+```python
+for reg in registrations:
+    name_score = _compute_name_score(fcm, reg)
+    if name_score > best_score:   # strictement supérieur -> premier rencontré gagne en cas d'égalité
+        best_score = name_score
+        best_reg = reg
+```
+En cas d'**égalité parfaite** de score entre deux fiches d'inscription pour un même enregistrement FCM
+(ex. deux personnes différentes portant le même nom complet — cas réel et plausible sur un grand
+événement), c'est la première rencontrée dans `registrations` qui l'emporte. Si l'ordre de
+`registrations` n'est pas stable, **la même situation peut être résolue différemment selon le run** —
+directement contraire à l'exigence "même input → même output, toujours" du brief d'audit.
+
+### Correctif proposé
+Trier explicitement les lignes récupérées avant de les ajouter à `registrations`/`fcm_records`, sur une
+clé stable — par exemple par `id` du `source_record`, ou mieux, préserver l'ordre de `chunk` (l'ordre
+d'upsert lui-même) en réordonnant `sr_resp.data` selon la position de chaque ligne dans `chunk` après
+récupération. Exemple minimal (ne change ni le scoring ni les seuils, seulement l'ordre d'entrée) :
+```python
+order = {id_: i for i, id_ in enumerate(chunk)}
+for sr in sorted(sr_resp.data or [], key=lambda r: order.get(r["id"], 0)):
+    ...
+```
+
+**Non appliqué** — je le classe prudemment comme touchant le moteur de matching (il modifie l'ordre des
+données qui alimentent `match_sources`), donc soumis à la même règle de validation humaine préalable,
+même si le correctif lui-même ne touche à aucun poids ni seuil.
