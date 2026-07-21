@@ -766,6 +766,35 @@ class TestMatchingEngine:
         assert merged["company"] == "ExistingCo"
         assert merged["phone"] == "+32 2 000 0000"
 
+    def test_exact_score_tie_is_broken_by_list_order_not_by_any_other_signal(self):
+        """2026-07-21/22 audit (PROP-002): documents the CURRENT tie-break
+        behaviour of match_sources -- when two registration records score
+        identically against one FCM record, the first one encountered in
+        `registrations` wins (`if name_score > best_score`, strict >).
+        This is deterministic GIVEN a fixed list order, but the caller in
+        run_consolidation builds that list from `.select().in_(chunk)` after
+        an `.upsert()` -- neither guarantees the DB returns rows in input
+        order, so the same real-world tie could resolve to a different
+        winner across separate consolidation runs of identical source data.
+        This test pins today's behaviour (order-dependent) so a future fix
+        for the ordering bug is provable, and so any change to the
+        tie-break rule itself is a deliberate, visible diff."""
+        from services.consolidation_service import match_sources
+
+        fcm = self._fcm("Marie", "Laurent", "", "fcm-1")
+        reg_a = self._reg("Marie", "Laurent", "", "reg-a")  # identical name, no email either side
+        reg_b = self._reg("Marie", "Laurent", "", "reg-b")
+
+        results_ab = match_sources([reg_a, reg_b], [fcm])
+        results_ba = match_sources([reg_b, reg_a], [fcm])
+
+        assert results_ab[0].score == results_ba[0].score == 100.0  # genuine tie
+        assert results_ab[0].reg_record.source_record_id == "reg-a"
+        assert results_ba[0].reg_record.source_record_id == "reg-b"
+        # Same two people, same tie score, opposite input order -> opposite
+        # winner. Proves the outcome depends on list order, not on any
+        # property of the data itself.
+
 
 class TestSafeStorageFilename:
     """A client-controlled upload filename becomes a Supabase Storage path
