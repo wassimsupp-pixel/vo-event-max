@@ -2125,6 +2125,87 @@ class TestRepairStoredMappingsTransferRules:
         assert new_mapping["Country"] == "nationality"
 
 
+class TestInferEventCity:
+    """2026-07-21 audit: there is no UI to set events.location_city, so the
+    arrival_airport fallback that depends on it silently left EVERY flight's
+    arrival_airport empty for a real file whose 2-sheet Arrival/Departure
+    layout never states an explicit arrival airport at all (600/600 flights,
+    real event). _infer_event_city derives it from departure_airport
+    frequency instead: every attendee's return leg departs FROM the event
+    city, so it dominates the frequency count."""
+
+    def _record(self, departure_airport):
+        return {"normalized_data": {"departure_airport": departure_airport}}
+
+    def test_dominant_airport_inferred(self):
+        from services.consolidation_service import _infer_event_city
+        records = (
+            [self._record("BARCELONE BCN")] * 300
+            + [self._record("SEOUL ICN")] * 23
+            + [self._record("STOCKHOLM ARN")] * 19
+            + [self._record("MEXICO MEX")] * 17
+        )
+        assert _infer_event_city(records) == "BARCELONE BCN"
+
+    def test_no_dominant_airport_returns_none(self):
+        """No single city clearly dominates (e.g. only outbound legs exist
+        so far, roughly evenly spread across distinct home cities) -- must
+        not guess."""
+        from services.consolidation_service import _infer_event_city
+        records = (
+            [self._record("PARIS CDG")] * 10
+            + [self._record("LONDON LHR")] * 10
+            + [self._record("BERLIN BER")] * 10
+            + [self._record("MADRID MAD")] * 10
+            + [self._record("ROME FCO")] * 10
+        )
+        assert _infer_event_city(records) is None
+
+    def test_too_few_records_returns_none_even_if_unanimous(self):
+        from services.consolidation_service import _infer_event_city
+        records = [self._record("BARCELONE BCN")] * 5
+        assert _infer_event_city(records) is None
+
+    def test_no_departure_airport_data_returns_none(self):
+        from services.consolidation_service import _infer_event_city
+        records = [{"normalized_data": {}}, {"raw_data": {}}]
+        assert _infer_event_city(records) is None
+
+    def test_falls_back_to_raw_data_when_normalized_missing(self):
+        from services.consolidation_service import _infer_event_city
+        records = [{"raw_data": {"departure_airport": "BARCELONE BCN"}}] * 15
+        assert _infer_event_city(records) == "BARCELONE BCN"
 
 
+class TestFallbackArrivalAirport:
+    """2026-07-21 audit, same real event: once the event city was known
+    (either from events.location_city or _infer_event_city above), the
+    arrival_airport fallback was applied unconditionally -- including to the
+    RETURN leg, which already departs FROM the event city. Real result:
+    300/600 flights showed "BARCELONE BCN -> BARCELONE BCN", a self-round-trip
+    that makes no sense on a master list a client will actually read."""
+
+    def test_outbound_leg_gets_event_city_as_arrival(self):
+        from services.consolidation_service import _fallback_arrival_airport
+        assert _fallback_arrival_airport("MILAN MXP", "BARCELONE BCN") == "BARCELONE BCN"
+
+    def test_return_leg_does_not_get_event_city_stamped_twice(self):
+        from services.consolidation_service import _fallback_arrival_airport
+        assert _fallback_arrival_airport("BARCELONE BCN", "BARCELONE BCN") == ""
+
+    def test_return_leg_matches_case_insensitively_and_by_substring(self):
+        """events.location_city may hold just the city name ("Barcelone")
+        while departure_airport holds "city + code" ("Barcelone BCN") --
+        must still recognise it as the same place."""
+        from services.consolidation_service import _fallback_arrival_airport
+        assert _fallback_arrival_airport("Barcelone BCN", "barcelone") == ""
+        assert _fallback_arrival_airport("barcelone", "Barcelone BCN") == ""
+
+    def test_no_event_city_returns_empty(self):
+        from services.consolidation_service import _fallback_arrival_airport
+        assert _fallback_arrival_airport("MILAN MXP", "") == ""
+
+    def test_no_departure_airport_still_falls_back_to_event_city(self):
+        from services.consolidation_service import _fallback_arrival_airport
+        assert _fallback_arrival_airport(None, "BARCELONE BCN") == "BARCELONE BCN"
 

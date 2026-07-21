@@ -2879,6 +2879,51 @@ def detect_ambiguous_duplicate_participants(
     return {"auto_merged": auto_merged, "candidates": candidates}
 
 
+def _infer_event_city(all_records: list[dict]) -> Optional[str]:
+    """
+    Infer the event's own city from flight data when events.location_city
+    was never set (there is currently no UI to set it). Virtually every
+    attendee's RETURN leg departs FROM the event city, so across hundreds of
+    distinct home-city departures, only the event city repeats at high
+    frequency — real data: "BARCELONE BCN" 300/600 vs every other airport
+    under 25/600. The modal departure_airport, when it clearly dominates
+    (>=30% of all departures, minimum sample of 10), is a safe stand-in;
+    otherwise returns None rather than guessing on thin data.
+    """
+    dep_counts: dict[str, int] = {}
+    for r in all_records:
+        d = r.get("normalized_data") or r.get("raw_data") or {}
+        apt = str(d.get("departure_airport") or "").strip()
+        if apt:
+            dep_counts[apt] = dep_counts.get(apt, 0) + 1
+    if not dep_counts:
+        return None
+    top_apt, top_n = max(dep_counts.items(), key=lambda kv: kv[1])
+    total = sum(dep_counts.values())
+    if top_n >= 10 and top_n >= 0.3 * total:
+        return top_apt
+    return None
+
+
+def _fallback_arrival_airport(dep_apt: Optional[str], event_city: str) -> str:
+    """
+    The event-city fallback (used when a file states no explicit arrival
+    airport — common when "everyone lands at the event city" is implicit)
+    only makes sense for a flight travelling TO the event. Applying it
+    unconditionally also stamped it onto the RETURN leg, which already
+    departs FROM the event city — producing a nonsensical "BARCELONE BCN ->
+    BARCELONE BCN" self-round-trip (real case, 300/600 flights). Skip the
+    fallback when the flight is already departing from the event city.
+    """
+    if not event_city:
+        return ""
+    dep = str(dep_apt or "").strip().upper()
+    city = str(event_city).strip().upper()
+    if dep and (city in dep or dep in city):
+        return ""
+    return event_city
+
+
 def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     """
     Extract flights, hotels, transfers, and activities from mapped source_records
@@ -2928,6 +2973,21 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
     # Without a stable order, "last write wins" collisions below pick a random
     # record each run (flights flipping airports/times between exports).
     all_records.sort(key=lambda r: (str(r.get("file_id") or ""), r.get("row_index") or 0, str(r.get("id") or "")))
+
+    # There is currently no UI to set events.location_city, so this fallback
+    # is empty far more often than not — leaving arrival_airport blank on
+    # EVERY flight for a file that (very commonly) never states an explicit
+    # arrival airport at all, because "everyone lands at the event city" is
+    # implicit in the source file (confirmed real case: a 2-sheet Arrival/
+    # Departure FCM export with no arrival-airport column whatsoever, 600/600
+    # flights left with arrival_airport=""). Infer it from the data itself
+    # instead of leaving it unset. Also feeds the transfers pickup/dropoff
+    # fallback below, which relies on the same `event_city` variable.
+    if not event_city:
+        inferred = _infer_event_city(all_records)
+        if inferred:
+            event_city = inferred
+            logger.info("event_id=%s: location_city unset, inferred event city %r from departure_airport frequency", event_id, event_city)
 
     # 1. Flights Extraction (any record exposing flight fields)
     try:
@@ -3006,7 +3066,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     )
                     arr_apt = (
                         data.get("arrival_airport") or data.get("arrival")
-                        or data.get("arrival_city") or event_city
+                        or data.get("arrival_city") or _fallback_arrival_airport(dep_apt, event_city)
                     )
                     has_time_signal = any(
                         data.get(k) for k in ("departure_time", "departure_date", "arrival_time", "arrival_date")
