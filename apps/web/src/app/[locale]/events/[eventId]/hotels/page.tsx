@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Hotel, Bed, Calendar, Plus, Search, UserX } from 'lucide-react'
+import { Hotel, Bed, Calendar, Plus, Search, UserX, AlertTriangle } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
 import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
@@ -48,6 +48,15 @@ export default function HotelsPage() {
   const [assignRoomType, setAssignRoomType] = useState('single')
   const [searchTerm, setSearchTerm] = useState('')
 
+  // In-flight guards + user-visible errors: these actions used to fail
+  // silently (console.error only) and had no disabled state, so a double
+  // click (e.g. on "Confirmer l'attribution" with "Tous les participants
+  // en bloc" selected) could fire the same mutation twice concurrently.
+  const [addingHotel, setAddingHotel] = useState(false)
+  const [assigningRoom, setAssigningRoom] = useState(false)
+  const [deletingStayKey, setDeletingStayKey] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+
   const fetchData = async () => {
     try {
       setLoading(true)
@@ -74,7 +83,9 @@ export default function HotelsPage() {
 
   const handleAddHotel = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newHotelName) return
+    if (!newHotelName || addingHotel) return
+    setAddingHotel(true)
+    setActionError(null)
     try {
       await api.hotels.create(eventId, {
         name: newHotelName,
@@ -85,12 +96,17 @@ export default function HotelsPage() {
       await fetchData()
     } catch (err) {
       console.error('Failed to add hotel', err)
+      setActionError(err instanceof Error ? `Échec de l'ajout de l'hôtel : ${err.message}` : "Échec de l'ajout de l'hôtel. Réessayez.")
+    } finally {
+      setAddingHotel(false)
     }
   }
 
   const handleAssignRoom = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!assignParticipantId || !assignHotelId || !assignDate) return
+    if (!assignParticipantId || !assignHotelId || !assignDate || assigningRoom) return
+    setAssigningRoom(true)
+    setActionError(null)
     try {
       if (assignParticipantId === 'all') {
         await api.hotels.assignRoomingBulk(eventId, {
@@ -110,6 +126,9 @@ export default function HotelsPage() {
       await fetchData()
     } catch (err) {
       console.error('Failed to assign rooming night', err)
+      setActionError(err instanceof Error ? `Échec de l'attribution : ${err.message}` : "Échec de l'attribution de la chambre. Réessayez.")
+    } finally {
+      setAssigningRoom(false)
     }
   }
 
@@ -162,11 +181,17 @@ export default function HotelsPage() {
   ).sort((a, b) => (a.participant_name || '').localeCompare(b.participant_name || ''))
 
   const handleDeleteStay = async (stay: Stay) => {
+    if (deletingStayKey) return
+    setDeletingStayKey(stay.key)
+    setActionError(null)
     try {
       await Promise.all(stay.nightIds.map((id) => api.hotels.deleteRooming(id)))
-      fetchData()
+      await fetchData()
     } catch (err) {
       console.error('Failed to delete stay', err)
+      setActionError(err instanceof Error ? `Échec de la suppression : ${err.message}` : "Échec de la suppression du séjour. Réessayez.")
+    } finally {
+      setDeletingStayKey(null)
     }
   }
 
@@ -274,9 +299,10 @@ export default function HotelsPage() {
               </div>
               <button
                 type="submit"
-                className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors"
+                disabled={addingHotel}
+                className="rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {t('addHotelButton')}
+                {addingHotel ? '…' : t('addHotelButton')}
               </button>
             </form>
           </div>
@@ -351,14 +377,22 @@ export default function HotelsPage() {
               <div className="col-span-1 md:col-span-2">
                 <button
                   type="submit"
-                  className="w-full rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors"
+                  disabled={assigningRoom}
+                  className="w-full rounded-lg bg-[var(--color-accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-accent)]/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  {t('confirmAssignment')}
+                  {assigningRoom ? '…' : t('confirmAssignment')}
                 </button>
               </div>
             </form>
           </div>
         </div>
+
+        {actionError && (
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] px-4 py-2.5 text-sm text-[var(--color-danger)]">
+            <AlertTriangle className="h-4 w-4 shrink-0" />
+            <span>{actionError}</span>
+          </div>
+        )}
 
         {/* Rooming list table */}
         <div id="detail-list" className="flex items-center gap-2 max-w-md bg-white border rounded-lg px-3 py-2 shadow-sm scroll-mt-24">
@@ -428,9 +462,10 @@ export default function HotelsPage() {
                       <td className="p-4 text-right">
                         <button
                           onClick={() => handleDeleteStay(stay)}
-                          className="text-rose-600 hover:text-rose-900 font-semibold text-xs transition-colors"
+                          disabled={deletingStayKey !== null}
+                          className="text-rose-600 hover:text-rose-900 font-semibold text-xs transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                         >
-                          {t('deleteButton')}
+                          {deletingStayKey === stay.key ? '…' : t('deleteButton')}
                         </button>
                       </td>
                     </tr>
