@@ -196,12 +196,14 @@ export default function DashboardPage() {
   const activitiesPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutActivitiesCount) / totalParticipants) * 100) : 0
   const commsPct = totalParticipants > 0 ? 90 : 0
 
+  // Monochrome palette (dashboard is black & white only) — shades still need
+  // to differ from each other so the donut's segments stay distinguishable.
   const distributionData = [
-    { name: 'Vols', value: flightsPct, color: '#806CAF' },
-    { name: 'Hôtels', value: hotelsPct, color: '#47AB75' },
-    { name: 'Transferts', value: transfersPct, color: '#F99A4C' },
-    { name: 'Activités', value: activitiesPct, color: '#3B82F6' },
-    { name: 'Comms', value: commsPct, color: '#8B5CF6' },
+    { name: 'Vols', value: flightsPct, color: '#1F2937' },
+    { name: 'Hôtels', value: hotelsPct, color: '#4B5563' },
+    { name: 'Transferts', value: transfersPct, color: '#6B7280' },
+    { name: 'Activités', value: activitiesPct, color: '#9CA3AF' },
+    { name: 'Comms', value: commsPct, color: '#D1D5DB' },
   ]
 
   // Stepper steps status
@@ -223,7 +225,7 @@ export default function DashboardPage() {
     return (
       <AppLayout eventId={eventId} locale={locale} pageTitle={t('title')} pageSubtitle={t('subtitle')}>
         <div className="flex h-[60vh] w-full flex-col items-center justify-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin text-[var(--color-accent)]" />
+          <Loader2 className="h-8 w-8 animate-spin text-[var(--color-text-primary)]" />
           <p className="text-sm font-medium text-[var(--color-text-secondary)]">
             Chargement du tableau de bord...
           </p>
@@ -244,7 +246,7 @@ export default function DashboardPage() {
           <button
             onClick={handleRunConsolidation}
             disabled={consolidating || files.length === 0 || loading}
-            className="flex items-center gap-2 rounded-lg bg-[var(--color-cta)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-cta)]/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+            className="flex items-center gap-2 rounded-lg bg-[var(--color-text-primary)] px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-[var(--color-text-primary)]/90 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
           >
             {consolidating ? (
               <><Loader2 className="h-4 w-4 animate-spin" /> Consolidation en cours...</>
@@ -256,11 +258,7 @@ export default function DashboardPage() {
 
         {/* Consolidation status banner */}
         {consolidationMsg && (
-          <div className={`flex items-center gap-3 rounded-lg border p-4 text-sm font-medium ${
-            consolidationMsg.type === 'success'
-              ? 'bg-[var(--color-success-light)] border-[var(--color-success)]/20 text-[var(--color-success)]'
-              : 'bg-[var(--color-danger-light)] border-[var(--color-danger)]/20 text-[var(--color-danger)]'
-          }`}>
+          <div className="flex items-center gap-3 rounded-lg border border-[var(--color-border-strong)] bg-white p-4 text-sm font-medium text-[var(--color-text-primary)]">
             {consolidationMsg.type === 'success'
               ? <CheckCircle2 className="h-5 w-5 shrink-0" />
               : <XCircle className="h-5 w-5 shrink-0" />
@@ -276,7 +274,7 @@ export default function DashboardPage() {
             label={tKpi('participants')}
             value={totalParticipants}
             icon={<Users className="h-5 w-5" />}
-            accentColor="var(--color-accent)"
+            accentColor="var(--color-text-primary)"
             href={`/${locale}/events/${eventId}/master-list`}
           />
           <KPICard
@@ -285,14 +283,14 @@ export default function DashboardPage() {
             delta={importedCount === totalRequiredSources ? "Toutes importées" : "Importation en cours"}
             deltaPositive={importedCount > 0}
             icon={<Database className="h-5 w-5" />}
-            accentColor="var(--color-success)"
+            accentColor="var(--color-text-primary)"
             href={`/${locale}/events/${eventId}/sources`}
           />
           <KPICard
             label={tKpi('complete')}
             value={totalParticipants > 0 ? `${completenessRate}%` : '-'}
             icon={<CheckSquare className="h-5 w-5" />}
-            accentColor="var(--color-cta)"
+            accentColor="var(--color-text-primary)"
             href={`/${locale}/events/${eventId}/master-list`}
           />
           <KPICard
@@ -301,7 +299,7 @@ export default function DashboardPage() {
             delta={activeExceptionsCount === 0 ? "Aucune exception" : undefined}
             deltaPositive={activeExceptionsCount === 0}
             icon={<AlertTriangle className="h-5 w-5" />}
-            accentColor="var(--color-danger)"
+            accentColor="var(--color-text-primary)"
             href={`/${locale}/events/${eventId}/exceptions`}
           />
         </div>
@@ -316,7 +314,7 @@ export default function DashboardPage() {
               delta={withoutFlightCount === 0 ? 'Tous couverts' : undefined}
               deltaPositive={withoutFlightCount === 0}
               icon={<Plane className="h-5 w-5" />}
-              accentColor="var(--color-warning)"
+              accentColor="var(--color-text-primary)"
               href={`${masterListBase}?missing=flight`}
             />
             <KPICard
@@ -325,7 +323,7 @@ export default function DashboardPage() {
               delta={withoutHotelCount === 0 ? 'Tous couverts' : undefined}
               deltaPositive={withoutHotelCount === 0}
               icon={<Hotel className="h-5 w-5" />}
-              accentColor="var(--color-warning)"
+              accentColor="var(--color-text-primary)"
               href={`${masterListBase}?missing=hotel`}
             />
             <KPICard
@@ -334,7 +332,7 @@ export default function DashboardPage() {
               delta={withoutTransferCount === 0 ? 'Tous couverts' : undefined}
               deltaPositive={withoutTransferCount === 0}
               icon={<Bus className="h-5 w-5" />}
-              accentColor="var(--color-warning)"
+              accentColor="var(--color-text-primary)"
               href={`${masterListBase}?missing=transfer`}
             />
             <KPICard
@@ -343,7 +341,7 @@ export default function DashboardPage() {
               delta={withoutActivitiesCount === 0 ? 'Tous couverts' : undefined}
               deltaPositive={withoutActivitiesCount === 0}
               icon={<PartyPopper className="h-5 w-5" />}
-              accentColor="var(--color-warning)"
+              accentColor="var(--color-text-primary)"
               href={`${masterListBase}?missing=activities`}
             />
           </div>
@@ -354,12 +352,12 @@ export default function DashboardPage() {
           <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-white p-5 shadow-[var(--shadow-card)]">
             <div className="mb-4 flex items-center justify-between">
               <h3 className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
-                <ShieldCheck className="h-4 w-4 text-[var(--color-accent)]" />
+                <ShieldCheck className="h-4 w-4 text-[var(--color-text-primary)]" />
                 Analyse de la qualité des données
               </h3>
               <Link
                 href={`/${locale}/events/${eventId}/reports`}
-                className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+                className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)] hover:underline"
               >
                 Rapport complet <ChevronRight className="h-3 w-3" />
               </Link>
@@ -367,10 +365,7 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               {/* Score + dimensions */}
               <div className="flex items-center gap-4 lg:col-span-1">
-                <div
-                  className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-full border-4"
-                  style={{ borderColor: analysis.quality_score >= 80 ? 'var(--color-success)' : analysis.quality_score >= 60 ? 'var(--color-warning)' : 'var(--color-danger)' }}
-                >
+                <div className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-full border-4 border-[var(--color-text-primary)]">
                   <span className="text-2xl font-bold text-[var(--color-text-primary)]">{analysis.quality_score}</span>
                   <span className="text-[9px] text-[var(--color-text-secondary)]">/ 100</span>
                 </div>
@@ -385,7 +380,7 @@ export default function DashboardPage() {
                           <span className="font-semibold text-[var(--color-text-primary)]">{v}%</span>
                         </div>
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                          <div className="h-full rounded-full" style={{ width: `${v}%`, background: v >= 80 ? 'var(--color-success)' : v >= 60 ? 'var(--color-warning)' : 'var(--color-danger)' }} />
+                          <div className="h-full rounded-full bg-[var(--color-text-primary)]" style={{ width: `${v}%` }} />
                         </div>
                       </div>
                     )
@@ -395,7 +390,7 @@ export default function DashboardPage() {
 
               {/* Recommendations */}
               <div className="lg:col-span-2">
-                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-cta)]">
+                <div className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold text-[var(--color-text-primary)]">
                   <Lightbulb className="h-3.5 w-3.5" /> Conseils prioritaires
                 </div>
                 {(!analysis.recommendations || analysis.recommendations.length === 0) ? (
@@ -404,15 +399,15 @@ export default function DashboardPage() {
                   <ul className="space-y-1.5">
                     {analysis.recommendations.slice(0, 4).map((r: any, i: number) => (
                       <li key={i} className="flex items-start gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-1.5">
-                        <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${r.severity === 'critical' ? 'text-[var(--color-danger)]' : r.severity === 'warning' ? 'text-[var(--color-warning)]' : 'text-[var(--color-text-secondary)]'}`} />
+                        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--color-text-primary)]" />
                         <span className="text-xs text-[var(--color-text-primary)]"><strong className="font-semibold">{r.count}</strong> {r.text}</span>
                       </li>
                     ))}
                   </ul>
                 )}
                 {analysis.ai_summary && (
-                  <div className="mt-3 rounded-lg border border-[var(--color-accent)]/20 bg-[var(--color-accent-light)]/40 p-2.5">
-                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold text-[var(--color-accent)]">
+                  <div className="mt-3 rounded-lg border border-[var(--color-border-strong)] bg-slate-50 p-2.5">
+                    <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold text-[var(--color-text-primary)]">
                       <Sparkles className="h-3 w-3" /> Synthèse IA
                     </div>
                     <p className="whitespace-pre-wrap text-[11px] leading-relaxed text-[var(--color-text-primary)]">{analysis.ai_summary}</p>
@@ -470,7 +465,7 @@ export default function DashboardPage() {
                 {totalParticipants > 0 && (
                   <Link
                     href={`/${locale}/events/${eventId}/master-list`}
-                    className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+                    className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)] hover:underline"
                   >
                     {tActions('viewMasterList')}
                     <ChevronRight className="h-3 w-3" />
@@ -505,7 +500,7 @@ export default function DashboardPage() {
                 </h3>
                 <Link
                   href={`/${locale}/events/${eventId}/sources`}
-                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-accent)] hover:underline"
+                  className="flex items-center gap-1 text-xs font-medium text-[var(--color-text-primary)] hover:underline"
                 >
                   {tActions('viewAll')}
                   <ChevronRight className="h-3 w-3" />
@@ -544,7 +539,7 @@ export default function DashboardPage() {
                 {activeExceptionsCount > 0 && (
                   <Link
                     href={`/${locale}/events/${eventId}/exceptions`}
-                    className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+                    className="text-xs font-medium text-[var(--color-text-primary)] hover:underline"
                   >
                     {tActions('viewAll')}
                   </Link>
@@ -595,7 +590,7 @@ export default function DashboardPage() {
                     <div
                       className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border-2 ${
                         step.done
-                          ? 'border-[var(--color-success)] bg-[var(--color-success)]'
+                          ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)]'
                           : 'border-[var(--color-border-strong)] bg-white'
                       }`}
                     >

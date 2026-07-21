@@ -42,9 +42,9 @@ export function ConsolidationStepper({ steps, className, onStepClick }: Consolid
               className={cn(
                 'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-xs font-bold transition-all',
                 step.status === 'done' &&
-                  'bg-[var(--color-success)] text-white',
+                  'bg-[var(--color-text-primary)] text-white',
                 step.status === 'active' &&
-                  'bg-[var(--color-cta)] text-white shadow-md',
+                  'bg-[var(--color-text-primary)] text-white shadow-md',
                 step.status === 'pending' &&
                   'border-2 border-[var(--color-border-strong)] bg-white text-[var(--color-text-secondary)]'
               )}
@@ -64,7 +64,7 @@ export function ConsolidationStepper({ steps, className, onStepClick }: Consolid
                 className={cn(
                   'mt-1 w-0.5 flex-1 min-h-[16px]',
                   step.status === 'done'
-                    ? 'bg-[var(--color-success)]'
+                    ? 'bg-[var(--color-text-primary)]'
                     : 'bg-[var(--color-border-strong)]'
                 )}
               />
@@ -76,8 +76,8 @@ export function ConsolidationStepper({ steps, className, onStepClick }: Consolid
             <p
               className={cn(
                 'text-sm font-semibold leading-tight',
-                step.status === 'done' && 'text-[var(--color-success)]',
-                step.status === 'active' && 'text-[var(--color-cta)]',
+                step.status === 'done' && 'text-[var(--color-text-primary)]',
+                step.status === 'active' && 'text-[var(--color-text-primary)]',
                 step.status === 'pending' && 'text-[var(--color-text-secondary)]'
               )}
             >

@@ -43,8 +43,11 @@ export default function HotelsPage() {
   const [newHotelName, setNewHotelName] = useState('')
   const [newHotelCity, setNewHotelCity] = useState('')
   const [assignParticipantId, setAssignParticipantId] = useState('')
+  const [participantSearch, setParticipantSearch] = useState('')
+  const [showParticipantDropdown, setShowParticipantDropdown] = useState(false)
   const [assignHotelId, setAssignHotelId] = useState('')
-  const [assignDate, setAssignDate] = useState('2025-11-10')
+  const [assignCheckIn, setAssignCheckIn] = useState('2025-11-10')
+  const [assignCheckOut, setAssignCheckOut] = useState('2025-11-11')
   const [assignRoomType, setAssignRoomType] = useState('single')
   const [searchTerm, setSearchTerm] = useState('')
 
@@ -102,26 +105,53 @@ export default function HotelsPage() {
     }
   }
 
+  // A stay is a check-in/check-out RANGE, but the backend still models one
+  // row per NIGHT (HotelNightCreate only takes a single night_date) -- so a
+  // 3-night stay needs 3 calls. Standard hotel semantics: nights run from
+  // check-in (inclusive) to the day before check-out (the guest leaves that
+  // morning), so 21/07 -> 23/07 is 2 nights (21/07, 22/07).
+  const nightsInRange = (checkIn: string, checkOut: string): string[] => {
+    const nights: string[] = []
+    const start = new Date(checkIn + 'T00:00:00')
+    const end = new Date(checkOut + 'T00:00:00')
+    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+      nights.push(d.toISOString().slice(0, 10))
+    }
+    return nights
+  }
+
   const handleAssignRoom = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!assignParticipantId || !assignHotelId || !assignDate || assigningRoom) return
+    if (assigningRoom) return
+    if (!assignParticipantId) {
+      setActionError('Sélectionnez un participant dans la liste (ou "Tous les participants").')
+      return
+    }
+    if (!assignHotelId || !assignCheckIn || !assignCheckOut) return
+    const nights = nightsInRange(assignCheckIn, assignCheckOut)
+    if (nights.length === 0) {
+      setActionError('La date de départ doit être après la date d\'arrivée.')
+      return
+    }
     setAssigningRoom(true)
     setActionError(null)
     try {
-      if (assignParticipantId === 'all') {
-        await api.hotels.assignRoomingBulk(eventId, {
-          hotel_id: assignHotelId,
-          night_date: assignDate,
-          room_type: assignRoomType,
-          status: 'confirmed',
-        })
-      } else {
-        await api.hotels.assignRooming(eventId, {
-          participant_id: assignParticipantId,
-          hotel_id: assignHotelId,
-          night_date: assignDate,
-          room_type: assignRoomType,
-        })
+      for (const night_date of nights) {
+        if (assignParticipantId === 'all') {
+          await api.hotels.assignRoomingBulk(eventId, {
+            hotel_id: assignHotelId,
+            night_date,
+            room_type: assignRoomType,
+            status: 'confirmed',
+          })
+        } else {
+          await api.hotels.assignRooming(eventId, {
+            participant_id: assignParticipantId,
+            hotel_id: assignHotelId,
+            night_date,
+            room_type: assignRoomType,
+          })
+        }
       }
       await fetchData()
     } catch (err) {
@@ -130,6 +160,15 @@ export default function HotelsPage() {
     } finally {
       setAssigningRoom(false)
     }
+  }
+
+  // Pre-fills the assign form with a participant clicked from the "Sans
+  // hébergement" list and scrolls to it, so the user only needs to pick the
+  // hotel + dates and confirm.
+  const handleQuickAddHotel = (row: CohortRow) => {
+    setAssignParticipantId(row.id)
+    setParticipantSearch([row.first_name, row.last_name].filter(Boolean).join(' '))
+    document.getElementById('assign-night-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
 
@@ -260,6 +299,8 @@ export default function HotelsPage() {
             emptyText="Tous les participants ont un hébergement."
             locale={locale}
             eventId={eventId}
+            quickActionLabel="Ajouter hébergement"
+            onQuickAction={handleQuickAddHotel}
           />
         )}
 
@@ -308,28 +349,71 @@ export default function HotelsPage() {
           </div>
 
           {/* Assign Night */}
-          <div className="rounded-[var(--radius-card)] border bg-white p-6 shadow-sm">
+          <div id="assign-night-form" className="rounded-[var(--radius-card)] border bg-white p-6 shadow-sm scroll-mt-24">
             <h2 className="text-lg font-bold text-[var(--color-text-primary)] mb-4 flex items-center gap-2">
               <Plus className="h-5 w-5 text-[var(--color-accent)]" />
               {t('assignNightTitle')}
             </h2>
             <form onSubmit={handleAssignRoom} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
+              <div className="relative md:col-span-2">
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
                   {t('participantLabel')}
                 </label>
-                <select
-                  value={assignParticipantId}
-                  onChange={(e) => setAssignParticipantId(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[var(--color-accent)] bg-white"
-                  required
-                >
-                  <option value="">{t('selectPlaceholder')}</option>
-                  <option value="all">Tous les participants (en bloc)</option>
-                  {participants.map(p => (
-                    <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>
-                  ))}
-                </select>
+                <input
+                  type="text"
+                  value={participantSearch}
+                  onChange={(e) => {
+                    setParticipantSearch(e.target.value)
+                    setAssignParticipantId('')
+                    setShowParticipantDropdown(true)
+                  }}
+                  onFocus={() => setShowParticipantDropdown(true)}
+                  onBlur={() => setTimeout(() => setShowParticipantDropdown(false), 150)}
+                  placeholder={t('participantSearchPlaceholder')}
+                  className="w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                />
+                {showParticipantDropdown && (
+                  <div className="absolute z-10 mt-1 max-h-60 w-full overflow-y-auto rounded-lg border bg-white shadow-lg">
+                    <button
+                      type="button"
+                      onMouseDown={() => {
+                        setAssignParticipantId('all')
+                        setParticipantSearch('Tous les participants (en bloc)')
+                        setShowParticipantDropdown(false)
+                      }}
+                      className="block w-full px-3 py-2 text-left text-sm font-semibold hover:bg-slate-50 border-b"
+                    >
+                      Tous les participants (en bloc)
+                    </button>
+                    {(() => {
+                      const q = participantSearch.trim().toLowerCase()
+                      const matches = participants.filter(p =>
+                        `${p.first_name} ${p.last_name}`.toLowerCase().includes(q)
+                      ).slice(0, 50)
+                      if (matches.length === 0) {
+                        return (
+                          <div className="px-3 py-2 text-sm text-[var(--color-text-secondary)]">
+                            Aucun participant trouvé.
+                          </div>
+                        )
+                      }
+                      return matches.map(p => (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onMouseDown={() => {
+                            setAssignParticipantId(p.id)
+                            setParticipantSearch(`${p.first_name} ${p.last_name}`)
+                            setShowParticipantDropdown(false)
+                          }}
+                          className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                        >
+                          {p.first_name} {p.last_name}
+                        </button>
+                      ))
+                    })()}
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
@@ -349,12 +433,25 @@ export default function HotelsPage() {
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
-                  {t('dateLabel')}
+                  {t('checkInLabel')}
                 </label>
                 <input
                   type="date"
-                  value={assignDate}
-                  onChange={(e) => setAssignDate(e.target.value)}
+                  value={assignCheckIn}
+                  onChange={(e) => setAssignCheckIn(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold mb-1 text-[var(--color-text-secondary)]">
+                  {t('checkOutLabel')}
+                </label>
+                <input
+                  type="date"
+                  value={assignCheckOut}
+                  min={assignCheckIn}
+                  onChange={(e) => setAssignCheckOut(e.target.value)}
                   className="w-full border rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[var(--color-accent)]"
                   required
                 />

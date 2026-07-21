@@ -143,26 +143,26 @@ def _build_master_list_sheet(
     # itinerary or a 3rd activity is never lost, only additionally summarised
     # in the two-column form the spec asks for.
     headers = [
-        "Last Name", "First Name", "Email", "Company", "Phone", "Nationality",
-        "Region", "Category", "Dietary Requirements", "Food / Allergy",
-        "Flights (airline · route · times)",
-        "Outbound Airline", "Outbound Flight #", "Outbound From", "Outbound To",
-        "Outbound Departure", "Outbound Arrival", "Outbound Status",
-        "Return Airline", "Return Flight #", "Return From", "Return To",
-        "Return Departure", "Return Arrival", "Return Status",
-        "Hotel", "Check-in", "Check-out", "Nights", "Room",
-        "Transfers",
-        "Arrival Transfer Type", "Arrival Transfer Route", "Arrival Transfer Time",
-        "Arrival Transfer Vehicle", "Arrival Transfer Status",
-        "Return Transfer Type", "Return Transfer Route", "Return Transfer Time",
-        "Return Transfer Vehicle", "Return Transfer Status",
-        "Activities (name · day/time)",
-        "Activity 1", "Activity 1 When", "Activity 1 Location", "Activity 1 Status",
-        "Activity 2", "Activity 2 When", "Activity 2 Location", "Activity 2 Status",
-        "Status",
-        "Confirmation Prepared", "Confirmation Sent", "Sent Date", "Needs Update", "Last Communication",
-        "Data Complete", "Missing Fields", "Open Exceptions", "Priority",
-        "Sources Used", "Last Updated", "Action Needed",
+        "Nom", "Prénom", "Email", "Entreprise", "Téléphone", "Nationalité",
+        "Région", "Catégorie", "Régime Alimentaire", "Allergies / Alimentation",
+        "Vols (compagnie · trajet · horaires)",
+        "Compagnie Aller", "N° Vol Aller", "Départ Aller", "Arrivée Aller",
+        "Heure Départ Aller", "Heure Arrivée Aller", "Statut Aller",
+        "Compagnie Retour", "N° Vol Retour", "Départ Retour", "Arrivée Retour",
+        "Heure Départ Retour", "Heure Arrivée Retour", "Statut Retour",
+        "Hôtel", "Arrivée Hôtel", "Départ Hôtel", "Nuitées", "Chambre",
+        "Transferts",
+        "Type Transfert Arrivée", "Trajet Transfert Arrivée", "Heure Transfert Arrivée",
+        "Véhicule Transfert Arrivée", "Statut Transfert Arrivée",
+        "Type Transfert Retour", "Trajet Transfert Retour", "Heure Transfert Retour",
+        "Véhicule Transfert Retour", "Statut Transfert Retour",
+        "Activités (nom · jour/heure)",
+        "Activité 1", "Activité 1 — Horaire", "Activité 1 — Lieu", "Activité 1 — Statut",
+        "Activité 2", "Activité 2 — Horaire", "Activité 2 — Lieu", "Activité 2 — Statut",
+        "Statut",
+        "Confirmation Préparée", "Confirmation Envoyée", "Date d'envoi", "Mise à jour requise", "Dernière Communication",
+        "Données Complètes", "Champs Manquants", "Exceptions Ouvertes", "Priorité",
+        "Sources Utilisées", "Dernière Mise à Jour", "Action Requise",
     ] + list(custom_fields)
     _write_header_row(ws, headers)
 
@@ -242,11 +242,12 @@ def _build_exceptions_sheet(ws, exceptions: list[dict]) -> None:
     ws.title = "Exceptions"
     ws.freeze_panes = "A2"
 
-    headers = ["Type", "Severity", "Participant Name", "Message", "Context"]
+    headers = ["Type", "Sévérité", "Nom du Participant", "Message", "Contexte"]
     _write_header_row(ws, headers)
 
     # Severity → colour map
     sev_color = {"critical": SEV_CRITICAL, "warning": SEV_WARNING, "info": SEV_INFO}
+    sev_label = {"critical": "Critique", "warning": "Avertissement", "info": "Info"}
 
     for row_idx, exc in enumerate(exceptions, start=2):
         severity = exc.get("severity", "warning")
@@ -258,7 +259,7 @@ def _build_exceptions_sheet(ws, exceptions: list[dict]) -> None:
 
         values = [
             exc.get("exception_type"),
-            severity,
+            sev_label.get(severity, severity),
             p_name,
             exc.get("message"),
             ctx_str,
@@ -279,33 +280,33 @@ def _build_exceptions_sheet(ws, exceptions: list[dict]) -> None:
 
 def _build_summary_sheet(ws, run: dict, user_id: str) -> None:
     """Populate the Summary sheet with run statistics."""
-    ws.title = "Summary"
+    ws.title = "Résumé"
 
     stats: dict = run.get("stats") or {}
     rows = [
-        ("Run ID",               run.get("id")),
-        ("Event ID",             run.get("event_id")),
-        ("Triggered By",         user_id),
-        ("Status",               run.get("status")),
-        ("Started At",           run.get("started_at")),
-        ("Completed At",         run.get("completed_at")),
-        ("Generated At",         datetime.now(timezone.utc).isoformat()),
+        ("ID de l'exécution",          run.get("id")),
+        ("ID de l'événement",          run.get("event_id")),
+        ("Déclenché par",              user_id),
+        ("Statut",                     run.get("status")),
+        ("Démarré à",                  run.get("started_at")),
+        ("Terminé à",                  run.get("completed_at")),
+        ("Généré à",                   datetime.now(timezone.utc).isoformat()),
         ("", ""),  # spacer
-        ("— Statistics —",       ""),
-        ("Total Source Records", stats.get("total_source_records", 0)),
-        ("Matched (Certain)",    stats.get("matched_certain", 0)),
-        ("Matched (Probable)",   stats.get("matched_probable", 0)),
-        ("To Verify",            stats.get("to_verify", 0)),
-        ("Not Found",            stats.get("not_found", 0)),
-        ("Participants Created", stats.get("participants_created", 0)),
-        ("Participants Updated", stats.get("participants_updated", 0)),
-        ("Exceptions Count",     stats.get("exceptions_count", 0)),
+        ("— Statistiques —",           ""),
+        ("Total enregistrements source", stats.get("total_source_records", 0)),
+        ("Correspondances (certaines)", stats.get("matched_certain", 0)),
+        ("Correspondances (probables)", stats.get("matched_probable", 0)),
+        ("À vérifier",                 stats.get("to_verify", 0)),
+        ("Non trouvés",                stats.get("not_found", 0)),
+        ("Participants créés",         stats.get("participants_created", 0)),
+        ("Participants mis à jour",    stats.get("participants_updated", 0)),
+        ("Nombre d'exceptions",        stats.get("exceptions_count", 0)),
     ]
 
     # Header row
-    ws.cell(row=1, column=1, value="Key").font   = _header_font()
+    ws.cell(row=1, column=1, value="Clé").font   = _header_font()
     ws.cell(row=1, column=1).fill = _header_fill()
-    ws.cell(row=1, column=2, value="Value").font = _header_font()
+    ws.cell(row=1, column=2, value="Valeur").font = _header_font()
     ws.cell(row=1, column=2).fill = _header_fill()
 
     for row_idx, (key, value) in enumerate(rows, start=2):
@@ -329,10 +330,10 @@ def _build_change_log_sheet(ws, changes: list[dict], include_dietary: bool = Tru
     apply_proposal) — without this, the same RGPD-sensitive value leaks
     through the audit trail regardless of the Master List redaction.
     """
-    ws.title = "Change Log"
+    ws.title = "Historique des modifications"
     ws.freeze_panes = "A2"
 
-    headers = ["Changed At", "User ID", "Entity Type", "Entity ID", "Field", "Old Value", "New Value", "Reason"]
+    headers = ["Date de modification", "Utilisateur", "Type d'entité", "ID de l'entité", "Champ", "Ancienne valeur", "Nouvelle valeur", "Raison"]
     _write_header_row(ws, headers)
 
     for row_idx, ch in enumerate(changes, start=2):

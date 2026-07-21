@@ -1,6 +1,6 @@
 import { Sidebar } from '@/components/layout/Sidebar'
 import { EventSelector } from '@/components/layout/EventSelector'
-import { Bell, HelpCircle } from 'lucide-react'
+import { HelpCircle } from 'lucide-react'
 
 interface AppLayoutProps {
   children: React.ReactNode
@@ -48,12 +48,6 @@ export function AppLayout({
 
           {/* Header actions */}
           {headerExtra}
-
-          {/* Notification bell */}
-          <button className="relative flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-gray-100 hover:text-[var(--color-text-primary)]">
-            <Bell className="h-4 w-4" />
-            <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-[var(--color-danger)]" />
-          </button>
 
           {/* Help */}
           <button className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--color-text-secondary)] transition-colors hover:bg-gray-100 hover:text-[var(--color-text-primary)]">

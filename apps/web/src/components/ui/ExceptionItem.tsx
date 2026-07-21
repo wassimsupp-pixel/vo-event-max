@@ -15,17 +15,17 @@ interface ExceptionItemProps {
 
 const severityConfig: Record<Severity, { dot: string; badge: string; badgeText: string }> = {
   critical: {
-    dot: 'bg-[var(--color-danger)]',
-    badge: 'bg-[var(--color-danger-light)] text-[var(--color-danger)]',
+    dot: 'bg-[var(--color-text-primary)]',
+    badge: 'bg-[var(--color-text-primary)] text-white',
     badgeText: '',
   },
   warning: {
-    dot: 'bg-[var(--color-warning)]',
-    badge: 'bg-[var(--color-warning-light)] text-[var(--color-warning)]',
+    dot: 'bg-gray-500',
+    badge: 'bg-gray-200 text-[var(--color-text-primary)]',
     badgeText: '',
   },
   info: {
-    dot: 'bg-gray-400',
+    dot: 'bg-gray-300',
     badge: 'bg-gray-100 text-gray-500',
     badgeText: '',
   },

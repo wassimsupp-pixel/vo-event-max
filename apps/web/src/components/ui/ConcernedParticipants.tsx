@@ -44,6 +44,8 @@ export function ConcernedParticipants({
   locale,
   eventId,
   emptyText,
+  quickActionLabel,
+  onQuickAction,
 }: {
   rows: CohortRow[]
   title: string
@@ -51,6 +53,10 @@ export function ConcernedParticipants({
   locale: string
   eventId: string
   emptyText: string
+  /** Optional extra per-row button (e.g. "Ajouter hébergement"), rendered
+   * next to "Ouvrir". Omit both props to keep the default behaviour. */
+  quickActionLabel?: string
+  onQuickAction?: (row: CohortRow) => void
 }) {
   const router = useRouter()
   const name = (r: CohortRow) => [r.first_name, r.last_name].filter(Boolean).join(' ') || 'N/A'
@@ -94,12 +100,22 @@ export function ConcernedParticipants({
                   </td>
                   <td className="p-3">{statusBadge(r.completeness_status)}</td>
                   <td className="p-3 text-right">
-                    <button
-                      onClick={() => router.push(`/${locale}/events/${eventId}/participants/${r.id}`)}
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-accent)] transition-colors hover:underline"
-                    >
-                      Ouvrir <ArrowRight className="h-3 w-3" />
-                    </button>
+                    <div className="flex items-center justify-end gap-3">
+                      {onQuickAction && quickActionLabel && (
+                        <button
+                          onClick={() => onQuickAction(r)}
+                          className="inline-flex items-center gap-1 rounded-md border border-[var(--color-accent)] px-2 py-1 text-xs font-semibold text-[var(--color-accent)] transition-colors hover:bg-[var(--color-accent-light)]/30"
+                        >
+                          {quickActionLabel}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => router.push(`/${locale}/events/${eventId}/participants/${r.id}`)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[var(--color-accent)] transition-colors hover:underline"
+                      >
+                        Ouvrir <ArrowRight className="h-3 w-3" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))

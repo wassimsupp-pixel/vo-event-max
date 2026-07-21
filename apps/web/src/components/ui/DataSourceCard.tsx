@@ -38,18 +38,18 @@ export function DataSourceCard({
 
   const statusColors: Record<SourceStatus, { color: string; bg: string; Icon: React.ElementType }> = {
     imported: {
-      color: 'text-[var(--color-success)]',
-      bg: 'bg-[var(--color-success-light)]',
+      color: 'text-white',
+      bg: 'bg-[var(--color-text-primary)]',
       Icon: CheckCircle2,
     },
     pending: {
-      color: 'text-[var(--color-warning)]',
-      bg: 'bg-[var(--color-warning-light)]',
+      color: 'text-[var(--color-text-primary)]',
+      bg: 'bg-slate-100',
       Icon: Clock,
     },
     error: {
-      color: 'text-[var(--color-danger)]',
-      bg: 'bg-[var(--color-danger-light)]',
+      color: 'text-white',
+      bg: 'bg-[var(--color-text-primary)]',
       Icon: AlertCircle,
     },
   }
@@ -68,7 +68,7 @@ export function DataSourceCard({
       <div className="space-y-4">
         {/* Header */}
         <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--color-accent-light)] text-xl">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xl">
             {icon}
           </div>
           <div className="min-w-0 flex-1">
@@ -111,7 +111,7 @@ export function DataSourceCard({
           'flex w-full items-center justify-center gap-1.5 rounded-lg py-2.5 text-xs sm:text-sm font-semibold transition-all',
           status === 'imported'
             ? 'bg-slate-100 hover:bg-slate-200 text-slate-700 active:scale-[0.99]'
-            : 'bg-[var(--color-accent)] text-white hover:bg-[#6B5A93] active:scale-[0.99]',
+            : 'bg-[var(--color-text-primary)] text-white hover:bg-[var(--color-text-primary)]/90 active:scale-[0.99]',
           'disabled:cursor-not-allowed disabled:opacity-60'
         )}
       >
