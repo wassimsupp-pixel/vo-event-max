@@ -2056,6 +2056,74 @@ class TestRepairStoredMappingsTransferRules:
         new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
         assert new_mapping["Aeroport"] == "arrival_airport"
 
+    def test_bare_country_column_redirected_to_nationality_when_unmapped(self):
+        """Real case: a registration file's "Country" column (300/300 rows
+        populated with "Turquie", "Japon"...) was captured under the unused
+        `country` rich field -- the export never shows it -- while
+        `nationality`, the field that drives Missing Fields / Data Complete,
+        stayed empty for all 300 participants (2026-07-21 audit)."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-5",
+            "source_type": "registration",
+            "column_mapping": {
+                "First Name": "first_name", "Last Name": "last_name",
+                "Email Address": "email", "Country": "country",
+            },
+        }
+        mock_supabase, files_mock = self._mocked_client([file_row])
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Country"] == "nationality"
+
+    def test_country_column_left_alone_when_nationality_already_mapped(self):
+        """A file that genuinely distinguishes the two (a separate,
+        POPULATED "Nationalité" column) must not have its "Country" column
+        stolen away from the `country` rich field."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-6",
+            "source_type": "registration",
+            "column_mapping": {
+                "First Name": "first_name", "Last Name": "last_name",
+                "Country": "country", "Nationalité": "nationality",
+            },
+        }
+        sample = [{"raw_data": {"Nationalité": "Française"}}]
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 0
+        files_mock.update.assert_not_called()
+
+    def test_country_column_redirected_when_mapped_nationality_column_is_a_ghost(self):
+        """The exact real-world case: the stored mapping already had a
+        'Nationalité' -> nationality entry, but it was a STALE leftover from
+        an earlier org template -- no such column exists in this file at
+        all, so it never carries real data. Being MAPPED is not enough; it
+        must be POPULATED, exactly like the bare-airport rule above."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-7",
+            "source_type": "registration",
+            "column_mapping": {
+                "First Name": "first_name", "Last Name": "last_name",
+                "Country": "country", "Nationalité": "nationality",
+            },
+        }
+        sample = [{"raw_data": {"Country": "Turquie"}}]  # no 'Nationalité' key at all
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Country"] == "nationality"
+
 
 
 

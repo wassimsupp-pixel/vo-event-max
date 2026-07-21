@@ -836,7 +836,9 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
       4. a transfer file's direction column ("Type") left unmapped;
       5. an administrative timestamp mapped onto a travel date/time field;
       6. a transfer file's date column mapped onto a hotel-only field;
-      7. a transfer file's sole, unqualified "Aéroport" column left unmapped.
+      7. a transfer file's sole, unqualified "Aéroport" column left unmapped;
+      8. a bare "Country"/"Pays" column left on the unused `country` rich
+         field when no column maps to `nationality` at all.
     Returns the number of files repaired.
     """
     fixed = 0
@@ -974,6 +976,48 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
                         new[col] = "arrival_airport"
                         changed = True
                         break
+
+        # 8. A bare "Country"/"Pays" column is the file's nationality signal
+        #    when the column(s) already mapped to `nationality` carry no real
+        #    data — a form with no separate nationality field means "Country"
+        #    IS the attendee's nationality for travel logistics, confirmed
+        #    against a real case: 300/300 participants had real data
+        #    ("Turquie", "Japon"...) captured under the `country` rich field,
+        #    which the export never even shows, while `nationality` — the
+        #    field that actually drives Missing Fields / Data Complete —
+        #    stayed empty for every single one (2026-07-21 audit). Checking
+        #    DATA, not just mapping presence, matters here too: that same
+        #    file's stored mapping already had a stale 'Nationalité' entry
+        #    inherited from an earlier org template — a column that doesn't
+        #    exist in this file at all — which made a naive "already mapped"
+        #    check wrongly skip the repair. A file that genuinely
+        #    distinguishes the two (a real, populated "Nationalité" column)
+        #    is left untouched.
+        nationality_cols = [col for col, tgt in new.items() if tgt == "nationality"]
+        nationality_has_data = False
+        if nationality_cols:
+            try:
+                sample = (
+                    supabase.table("source_records")
+                    .select("raw_data")
+                    .eq("file_id", f["id"])
+                    .limit(20)
+                    .execute()
+                    .data or []
+                )
+                nationality_has_data = any(
+                    (r.get("raw_data") or {}).get(col) not in (None, "")
+                    for r in sample for col in nationality_cols
+                )
+            except Exception as exc:
+                logger.warning("Nationality-data sampling failed for file %s: %s", f["id"], exc)
+                nationality_has_data = True  # fail safe: don't touch the mapping on error
+        if not nationality_has_data:
+            for col, tgt in list(new.items()):
+                if tgt == "country":
+                    new[col] = "nationality"
+                    changed = True
+                    break
 
         if changed:
             try:
