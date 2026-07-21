@@ -1196,6 +1196,104 @@ class TestTransfers:
         assert data[0]["flight_number"] == "SN3715"
 
 
+class TestAutoGroupShuttlesFixes:
+    """2026-07-21 audit: the shuttle dispatcher (routers.transfers.auto_group_shuttles)
+    had two independent bugs, both confirmed against real production data before
+    the fix — see verify_transfer_roundtrip.py in the session scratchpad."""
+
+    EVENT_ID = "00000000-0000-0000-0000-00000000ee01"
+    PART_ID = "00000000-0000-0000-0000-00000000ee02"
+
+    def _mocked_client(self, flights_data, transfers_exist_check_data=None):
+        mock_supabase = MagicMock()
+        flights_mock = MagicMock()
+        flights_mock.select.return_value.eq.return_value.execute.return_value.data = flights_data
+
+        transfers_mock = MagicMock()
+        # existing_res: no imported (flight_id-less) transfers to preserve
+        transfers_mock.select.return_value.eq.return_value.execute.return_value.data = []
+        # per-flight "already grouped?" check: nothing exists yet -> insert branch
+        transfers_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = (
+            transfers_exist_check_data or []
+        )
+        transfers_mock.insert.return_value.execute.return_value.data = [{"id": "new-transfer"}]
+
+        participants_mock = MagicMock()
+
+        def table_side_effect(name):
+            if name == "flights":
+                return flights_mock
+            if name == "transfers":
+                return transfers_mock
+            if name == "participants":
+                return participants_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        client = _admin_client()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        return client, transfers_mock
+
+    @patch("routers.transfers.verify_event_access")
+    def test_return_flight_not_treated_as_arrival(self, mock_verify):
+        """A participant with an outbound (Aller) AND return (Retour) flight
+        segment must only get ONE computed shuttle, for the outbound arrival.
+        Before the fix, every flight row was treated as an event arrival, so
+        the return leg's landing (back home, days later) also spawned a
+        bogus airport-to-hotel shuttle. Confirmed live: 1,156 such bogus
+        transfers already existed in production for one event alone."""
+        mock_verify.return_value = None
+        outbound = {
+            "id": "flight-aller", "participant_id": self.PART_ID,
+            "departure_time": "2026-02-05T08:00:00Z", "arrival_time": "2026-02-05T10:00:00Z",
+            "flight_number": "SN100",
+        }
+        retour = {
+            "id": "flight-retour", "participant_id": self.PART_ID,
+            "departure_time": "2026-02-09T14:00:00Z", "arrival_time": "2026-02-09T16:00:00Z",
+            "flight_number": "SN200",
+        }
+        client, transfers_mock = self._mocked_client([outbound, retour])
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/transfers/group")
+        assert response.status_code == 200
+        assert transfers_mock.insert.call_count == 1
+        inserted_payload = transfers_mock.insert.call_args_list[0][0][0]
+        assert inserted_payload["flight_id"] == "flight-aller"
+
+    @patch("routers.transfers.verify_event_access")
+    def test_window_grouping_consistent_for_non_divisor_window(self, mock_verify):
+        """A 90-minute ('1h30') window must group two arrivals only 20
+        minutes apart into the SAME shuttle slot, even when they straddle a
+        clock-hour boundary. Before the fix, the rounding reset every clock
+        hour regardless of window_minutes, so 09:50 and 10:10 landed a full
+        hour apart (10:30 vs 11:30) instead of together — the 90/120-minute
+        options silently behaved as plain hourly buckets."""
+        mock_verify.return_value = None
+        part_a = "00000000-0000-0000-0000-00000000ee03"
+        part_b = "00000000-0000-0000-0000-00000000ee04"
+        flight_a = {
+            "id": "flight-a", "participant_id": part_a,
+            "departure_time": "2026-02-05T06:00:00Z", "arrival_time": "2026-02-05T09:50:00Z",
+            "flight_number": "SN300",
+        }
+        flight_b = {
+            "id": "flight-b", "participant_id": part_b,
+            "departure_time": "2026-02-05T06:20:00Z", "arrival_time": "2026-02-05T10:10:00Z",
+            "flight_number": "SN400",
+        }
+        client, transfers_mock = self._mocked_client([flight_a, flight_b])
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/transfers/group?window_minutes=90")
+        assert response.status_code == 200
+        assert transfers_mock.insert.call_count == 2
+        pickup_by_participant = {
+            call[0][0]["participant_id"]: call[0][0]["pickup_time"]
+            for call in transfers_mock.insert.call_args_list
+        }
+        assert pickup_by_participant[part_a] == pickup_by_participant[part_b]
+
+
 class TestActivities:
     @patch("routers.activities.verify_event_access")
     def test_list_activities(self, mock_verify):
@@ -1835,6 +1933,128 @@ class TestEventProjectDeletion:
         client = _viewer_client()
         response = client.delete(f"/api/projects/{self.PROJECT_ID}")
         assert response.status_code == 403
+
+
+class TestRepairStoredMappingsTransferRules:
+    """2026-07-21 audit: a transfer file's "Date" column got mapped to
+    check_in_date (a hotel-only field) by mistake once, was "remembered"
+    org-wide (column_mapping_templates), and was then silently reapplied
+    verbatim to a real event's real transfer import — 0 of 600 rows
+    extracted, because check_in_date is never checked as a date source by
+    the transfer-extraction gate, and the file's only airport column
+    ("Aéroport", unqualified) was left unmapped for the same underlying
+    reason (no synonym recognizes a bare "Aéroport"). Rules 6 and 7 in
+    repair_stored_mappings (services/mapping_service.py) self-heal both,
+    the same way rules 1-5 already self-heal older mis-mapping classes."""
+
+    EVENT_ID = "00000000-0000-0000-0000-00000000ff01"
+
+    def _mocked_client(self, files_data, source_records_data=None):
+        mock_supabase = MagicMock()
+        files_mock = MagicMock()
+        files_mock.select.return_value.eq.return_value.execute.return_value.data = files_data
+        files_mock.update.return_value.eq.return_value.execute.return_value.data = [{"id": "ok"}]
+
+        records_mock = MagicMock()
+        records_mock.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = (
+            source_records_data or []
+        )
+
+        def table_side_effect(name):
+            if name == "uploaded_files":
+                return files_mock
+            if name == "source_records":
+                return records_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        return mock_supabase, files_mock
+
+    def test_hotel_only_date_field_redirected_to_travel_date(self):
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-1",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Date": "check_in_date", "Type": "transfer_type",
+                "Aeroport": "arrival_airport",
+            },
+        }
+        mock_supabase, files_mock = self._mocked_client([file_row])
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Date"] == "departure_date"
+
+    def test_bare_airport_column_mapped_when_no_other_location_field(self):
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-2",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Date": "departure_date", "Type": "transfer_type",
+                "Aeroport": "Aeroport",  # left unmapped (self-mapped custom field)
+            },
+        }
+        mock_supabase, files_mock = self._mocked_client([file_row])
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Aeroport"] == "arrival_airport"
+
+    def test_bare_airport_column_left_alone_when_real_location_field_present(self):
+        """If the file already has a proper pickup_location/dropoff_location
+        column that is ACTUALLY POPULATED, a bare "Aéroport" is genuinely
+        extra info -- must not be overwritten (avoids stomping a deliberate
+        custom-field choice)."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-3",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Date": "departure_date", "Type": "transfer_type",
+                "Aeroport": "Aeroport", "Lieu de Prise en charge": "pickup_location",
+            },
+        }
+        sample = [{"raw_data": {"Lieu de Prise en charge": "Conference Hotel"}}]
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 0
+        files_mock.update.assert_not_called()
+
+    def test_bare_airport_redirected_when_mapped_location_column_is_empty(self):
+        """The exact real-world case: 'Destination'/'Lieu de Prise en charge'
+        WERE mapped to dropoff_location/pickup_location, but every one of the
+        600 real rows left them blank -- 'Aéroport' was the only column
+        actually carrying data. Being MAPPED is not enough; it must be
+        POPULATED, or the extraction gate still silently drops every row."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-4",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Date": "departure_date", "Type": "transfer_type",
+                "Aeroport": "Aeroport",
+                "Destination": "dropoff_location", "Lieu de Prise en charge": "pickup_location",
+            },
+        }
+        sample = [
+            {"raw_data": {"Aeroport": "New York JFK", "Destination": None, "Lieu de Prise en charge": ""}},
+            {"raw_data": {"Aeroport": "Tokyo NRT", "Destination": "", "Lieu de Prise en charge": None}},
+        ]
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Aeroport"] == "arrival_airport"
 
 
 

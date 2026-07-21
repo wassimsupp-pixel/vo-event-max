@@ -204,12 +204,33 @@ async def auto_group_shuttles(
     # Fetch all flights for this event
     flights_res = (
         supabase.table("flights")
-        .select("id, participant_id, arrival_time, flight_number")
+        .select("id, participant_id, arrival_time, departure_time, flight_number")
         .eq("event_id", event_id)
         .execute()
     )
 
     if not flights_res.data:
+        return MessageResponse(message="No flight records found to group.")
+
+    # The flights table holds every segment of a trip (outbound AND return)
+    # with no direction marker (mirrors the flights page's own "Aller/Retour"
+    # heuristic: earliest departure = outbound). A shuttle pickup is only
+    # needed for the OUTBOUND arrival at the event — treating every segment
+    # as an "arrival" also books a bogus BRU-airport-to-hotel shuttle for a
+    # participant's return flight landing back home, days later. Keep only
+    # each participant's earliest-departing flight.
+    earliest_by_participant: dict[str, dict[str, Any]] = {}
+    for flight in flights_res.data:
+        part_id = flight.get("participant_id")
+        if not part_id:
+            continue
+        dep = flight.get("departure_time") or ""
+        current = earliest_by_participant.get(part_id)
+        if current is None or dep < (current.get("departure_time") or ""):
+            earliest_by_participant[part_id] = flight
+    outbound_flights = list(earliest_by_participant.values())
+
+    if not outbound_flights:
         return MessageResponse(message="No flight records found to group.")
 
     # Preserve transfers that came from an imported transfer file. Those rows are
@@ -233,7 +254,7 @@ async def auto_group_shuttles(
     preserved_imported = 0
     # Group flights by rounded arrival time window
     # We round to nearest block of window_minutes
-    for flight in flights_res.data:
+    for flight in outbound_flights:
         part_id = flight["participant_id"]
         if not part_id:
             continue
@@ -250,10 +271,19 @@ async def auto_group_shuttles(
         except Exception:
             continue
 
-        # Round arrival time to nearest window block (e.g. hourly)
-        # Window timestamp is the top of the hour or the end of the slot
-        rounded_minutes = (arr_dt.minute // window_minutes + 1) * window_minutes
-        pickup_dt = arr_dt.replace(minute=0, second=0, microsecond=0) + timedelta(minutes=rounded_minutes)
+        # Round arrival time up to the next slot on a fixed grid anchored to
+        # midnight (minutes-since-midnight), not to the arrival's own clock
+        # hour. Anchoring to "own hour" (previous behaviour) only produced a
+        # genuine window_minutes-wide bucket when window_minutes evenly
+        # divides 60 (30 or 60): for 90/120 ("1h30"/"2 heures" in the UI) it
+        # silently collapsed back to hourly buckets shifted by a fixed
+        # offset — two flights only 20 minutes apart could land in shuttle
+        # slots a full hour apart. A single midnight-anchored grid gives
+        # consistent window_minutes-wide buckets for every slot size.
+        minutes_since_midnight = arr_dt.hour * 60 + arr_dt.minute
+        rounded_minutes = (minutes_since_midnight // window_minutes + 1) * window_minutes
+        day_start = arr_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        pickup_dt = day_start + timedelta(minutes=rounded_minutes)
         pickup_ts = pickup_dt.isoformat()
 
         # Check if transfer already exists for this participant & flight_id

@@ -812,6 +812,15 @@ _TRAVEL_DATE_TIME_FIELDS = {
     "arrival_time", "departure_time", "pickup_time",
     "date_of_birth", "passport_expiry",
 }
+# A transfer file carries no hotel data at all — a column landing on one of
+# these is always a mis-mapping, never a legitimate reading.
+_HOTEL_ONLY_FIELDS = {"check_in_date", "check_out_date", "room_type", "hotel_name", "early_checkin", "late_checkout"}
+# A bare "Aéroport"/"Airport" header, with no depart/arrivée qualifier, is how
+# real transfer files commonly label their sole location column (the
+# direction lives in the separate "Type" column instead) — but no synonym in
+# SYNONYMS recognizes it (only "aeroportdepart"/"aeroportarrivee" do), so it
+# is left as an unmapped custom field by suggest_mapping.
+_BARE_AIRPORT_HDR_RE = re.compile(r"^(a[eé]roport|airport)$", re.I)
 
 
 def repair_stored_mappings(event_id: str, supabase) -> int:
@@ -823,7 +832,11 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
          looked like a phone and stole the field from the real "Telephone"
          column — the cause of the DATA_CONFLICT flood);
       2. gives ``phone`` back to the column actually named phone/téléphone;
-      3. a hotel-name column sitting on the participant's name.
+      3. a hotel-name column sitting on the participant's name;
+      4. a transfer file's direction column ("Type") left unmapped;
+      5. an administrative timestamp mapped onto a travel date/time field;
+      6. a transfer file's date column mapped onto a hotel-only field;
+      7. a transfer file's sole, unqualified "Aéroport" column left unmapped.
     Returns the number of files repaired.
     """
     fixed = 0
@@ -902,6 +915,65 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
             if tgt in _TRAVEL_DATE_TIME_FIELDS and _ADMIN_DATE_HDR_RE.search(str(col)):
                 new[col] = str(col)          # keep its data as a custom field
                 changed = True
+
+        # 6. A transfer file's date column landing on a HOTEL-only field
+        #    (check_in_date, room_type...) is always wrong — the file has no
+        #    hotel data. A single ambiguous "Date" header (direction lives in
+        #    "Type", not here) got mapped to check_in_date by mistake once,
+        #    was "remembered" org-wide, and silently reapplied verbatim to a
+        #    real event's real transfer import: 0 of 600 rows extracted,
+        #    because check_in_date is never checked as a date source by the
+        #    transfer-extraction gate (2026-07-21 audit).
+        if f.get("source_type") == "transfer":
+            for col, tgt in list(new.items()):
+                if tgt in _HOTEL_ONLY_FIELDS:
+                    used = set(new.values())
+                    for fallback in ("departure_date", "arrival_date"):
+                        if fallback not in used:
+                            new[col] = fallback
+                            changed = True
+                            break
+                    else:
+                        new[col] = str(col)  # keep its data as a custom field
+                        changed = True
+
+        # 7. That same audit: the file's ONLY location-bearing column (a bare
+        #    "Aéroport") was left unmapped for the same reason — no synonym
+        #    recognizes an unqualified "Aéroport". Every row then also failed
+        #    has_location_signal, on top of the date failure above. A column
+        #    being MAPPED to pickup_location/dropoff_location/*_airport is not
+        #    enough to skip this: the real file had "Destination" and "Lieu de
+        #    Prise en charge" columns mapped correctly, yet EMPTY on all 600
+        #    rows — "Aéroport" was the only column actually carrying data. So
+        #    sample the already-imported rows and check the mapped location
+        #    columns for real values, not just their presence in the mapping.
+        if f.get("source_type") == "transfer":
+            location_fields = {"pickup_location", "dropoff_location", "departure_airport", "arrival_airport"}
+            location_cols = [col for col, tgt in new.items() if tgt in location_fields]
+            location_has_data = False
+            if location_cols:
+                try:
+                    sample = (
+                        supabase.table("source_records")
+                        .select("raw_data")
+                        .eq("file_id", f["id"])
+                        .limit(20)
+                        .execute()
+                        .data or []
+                    )
+                    location_has_data = any(
+                        (r.get("raw_data") or {}).get(col) not in (None, "")
+                        for r in sample for col in location_cols
+                    )
+                except Exception as exc:
+                    logger.warning("Location-data sampling failed for file %s: %s", f["id"], exc)
+                    location_has_data = True  # fail safe: don't touch the mapping on error
+            if not location_has_data:
+                for col, tgt in list(new.items()):
+                    if tgt not in CANONICAL_FIELDS and _BARE_AIRPORT_HDR_RE.match(str(col).strip()):
+                        new[col] = "arrival_airport"
+                        changed = True
+                        break
 
         if changed:
             try:
