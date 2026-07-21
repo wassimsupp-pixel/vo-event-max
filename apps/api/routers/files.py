@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import uuid
 from typing import Any
 
@@ -45,6 +46,25 @@ ALLOWED_CONTENT_TYPES = {
     "text/csv",
     "application/csv",
 }
+
+_UNSAFE_STORAGE_CHARS_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_storage_filename(filename: str) -> str:
+    """Neutralise the client-controlled filename before it becomes a segment
+    of the Supabase Storage path. The {event_id}/{file_id}/ prefix is always
+    server-generated, so this alone isn't a full path-traversal opening, but
+    a filename like "../../other-event/x.xlsx" or one containing control/
+    null characters has no business reaching a storage key unsanitised.
+    original_filename (shown in the UI, used for extension detection on
+    re-download) is intentionally left as the user's real name -- only the
+    STORAGE PATH segment is sanitised here."""
+    base = os.path.basename(filename).strip() or "upload"
+    # os.path.basename only strips the OS-native separator; a filename
+    # containing the OTHER slash style (e.g. a literal backslash on a
+    # Linux server, or vice versa) would still smuggle path segments.
+    base = base.replace("\\", "_").replace("/", "_")
+    return _UNSAFE_STORAGE_CHARS_RE.sub("_", base)
 
 
 def _parse_file_to_dataframe(content: bytes, filename: str) -> pd.DataFrame:
@@ -137,7 +157,7 @@ async def upload_file(
 
     # --- Upload to Supabase Storage ---
     file_id = str(uuid.uuid4())
-    storage_path = f"{event_id}/{file_id}/{filename}"
+    storage_path = f"{event_id}/{file_id}/{_safe_storage_filename(filename)}"
 
     try:
         supabase.storage.from_(config.SUPABASE_STORAGE_BUCKET).upload(
