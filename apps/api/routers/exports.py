@@ -216,11 +216,56 @@ async def download_export(
     # Verify the caller can access this event's exports
     await verify_event_access(export["event_id"], current_user, supabase)
 
+    # The stored file was generated once, using whoever created IT's role —
+    # dietary_requirements/food_allergy_info are baked in if that was an
+    # admin/pm. This endpoint only checked event access, not role, so any
+    # role with plain read access to the event could download an
+    # admin-generated export's raw dietary columns even though the same
+    # role gets them stripped from a FRESH export they generate themselves
+    # (see 2026-07-21 audit). A non-admin/pm downloader gets a freshly
+    # regenerated, role-appropriate copy instead of the original stored
+    # file; admin/pm keep the fast path (serve the original as-is).
+    role = current_user.get("role", "viewer")
+    storage_path = export["storage_path"]
+
+    if role not in ("admin", "pm"):
+        try:
+            redacted_bytes = await export_service.generate_excel(
+                event_id=export["event_id"],
+                run_id=str(export["run_id"]),
+                user_id=current_user["id"],
+                supabase=supabase,
+                role=role,
+            )
+        except Exception as exc:
+            logger.error("Failed to regenerate redacted export %s for role %s: %s", export_id, role, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to prepare a download for your role.",
+            ) from exc
+
+        redacted_path = f"exports/{export['event_id']}/{export_id}/redacted-{role}-{uuid.uuid4()}/{export['filename']}"
+        try:
+            supabase.storage.from_(config.SUPABASE_STORAGE_BUCKET).upload(
+                path=redacted_path,
+                file=redacted_bytes,
+                file_options={
+                    "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                },
+            )
+        except Exception as exc:
+            logger.error("Failed to upload redacted export %s for role %s: %s", export_id, role, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to prepare a download for your role.",
+            ) from exc
+        storage_path = redacted_path
+
     # Generate a signed URL (3600 seconds = 1 hour)
     expiry_seconds = 3600
     try:
         signed = supabase.storage.from_(config.SUPABASE_STORAGE_BUCKET).create_signed_url(
-            path=export["storage_path"],
+            path=storage_path,
             expires_in=expiry_seconds,
         )
         signed_url: str = signed["signedURL"]

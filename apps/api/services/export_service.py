@@ -306,8 +306,16 @@ def _build_summary_sheet(ws, run: dict, user_id: str) -> None:
 # Sheet 4 — Change Log
 # ---------------------------------------------------------------------------
 
-def _build_change_log_sheet(ws, changes: list[dict]) -> None:
-    """Populate the Change Log sheet (last 500 entries)."""
+def _build_change_log_sheet(ws, changes: list[dict], include_dietary: bool = True) -> None:
+    """Populate the Change Log sheet (last 500 entries).
+
+    ``include_dietary=False`` blanks Old/New Value for any entry touching
+    dietary_requirements: the Master List sheet strips the CURRENT value for
+    non-admin/pm roles, but every historical edit to that field is written
+    here verbatim (participants.py's update_participant, the email agent's
+    apply_proposal) — without this, the same RGPD-sensitive value leaks
+    through the audit trail regardless of the Master List redaction.
+    """
     ws.title = "Change Log"
     ws.freeze_panes = "A2"
 
@@ -315,14 +323,15 @@ def _build_change_log_sheet(ws, changes: list[dict]) -> None:
     _write_header_row(ws, headers)
 
     for row_idx, ch in enumerate(changes, start=2):
+        is_dietary = ch.get("field_name") == "dietary_requirements"
         values = [
             ch.get("changed_at"),
             ch.get("user_id"),
             ch.get("entity_type"),
             str(ch.get("entity_id", "")),
             ch.get("field_name"),
-            ch.get("old_value"),
-            ch.get("new_value"),
+            ch.get("old_value") if (include_dietary or not is_dietary) else None,
+            ch.get("new_value") if (include_dietary or not is_dietary) else None,
             ch.get("change_reason"),
         ]
         values = [_safe_cell_value(v) for v in values]
@@ -580,7 +589,7 @@ async def generate_excel(
 
     # Sheet 6: Change Log
     ws4 = wb.create_sheet()
-    _build_change_log_sheet(ws4, changes)
+    _build_change_log_sheet(ws4, changes, include_dietary=role in ("admin", "pm"))
 
     # Serialise to bytes
     import io
