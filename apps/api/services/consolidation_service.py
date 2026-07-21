@@ -1205,16 +1205,50 @@ async def run_consolidation(
             upsert_rows.append(r)
         for i in range(0, len(upsert_rows), 100):
             supabase.table("participants").upsert(upsert_rows[i:i + 100]).execute()
+        # Keep an id -> full-row lookup: step 5 below (FCM matching) reuses it
+        # to flip has_flight/fcm_source_id without a second participants fetch.
+        participant_rows_by_id: dict[str, dict] = {r["id"]: r for r in upsert_rows}
 
-        # Link source_records → participant, grouped by participant (same signals).
-        for pid, sr_ids in links.items():
-            for i in range(0, len(sr_ids), 100):
-                supabase.table("source_records").update({
-                    "participant_id": pid,
-                    "match_decision": "certain",
-                    "match_score": 100.0,
-                    "match_signals": {"source": "registration"},
-                }).in_("id", sr_ids[i:i + 100]).execute()
+        # Link source_records → participant. PostgREST's upsert validates the
+        # attempted INSERT row against NOT-NULL constraints BEFORE the ON
+        # CONFLICT branch resolves it — a payload missing file_id/event_id/
+        # row_index/raw_data raises a constraint violation instead of doing a
+        # targeted UPDATE (confirmed empirically against production on
+        # 2026-07-21; this is what made commit eec57e6's partial-column
+        # upsert crash every run). Batch-fetch the full existing rows first,
+        # merge in only the link fields, then upsert whole rows — every
+        # NOT-NULL column always has a real value, so the constraint check
+        # can never fail, while still collapsing what used to be one
+        # .update() call per participant into a handful of chunked calls.
+        all_link_sr_ids = [sr_id for sr_ids in links.values() for sr_id in sr_ids]
+        if all_link_sr_ids:
+            existing_sr_by_id: dict[str, dict] = {}
+            for i in range(0, len(all_link_sr_ids), 100):
+                chunk = all_link_sr_ids[i:i + 100]
+                resp = supabase.table("source_records").select("*").in_("id", chunk).execute()
+                for row in (resp.data or []):
+                    existing_sr_by_id[row["id"]] = row
+
+            # Keyed by sr_id (not a plain list): a single upsert batch containing
+            # the SAME id twice raises "ON CONFLICT DO UPDATE command cannot
+            # affect row a second time" in Postgres — the old .update().in_()
+            # tolerated duplicate ids in its filter list for free, so this must
+            # too. A dict naturally dedupes (last write wins, same as before).
+            link_rows_by_id: dict[str, dict] = {}
+            for pid, sr_ids in links.items():
+                for sr_id in sr_ids:
+                    base = existing_sr_by_id.get(sr_id)
+                    if base is None:
+                        continue  # record vanished mid-run — nothing to link
+                    merged = dict(base)
+                    merged["participant_id"] = pid
+                    merged["match_decision"] = "certain"
+                    merged["match_score"] = 100.0
+                    merged["match_signals"] = {"source": "registration"}
+                    link_rows_by_id[sr_id] = merged
+            link_rows = list(link_rows_by_id.values())
+            for i in range(0, len(link_rows), 100):
+                supabase.table("source_records").upsert(link_rows[i:i + 100]).execute()
 
         # Bulk-insert the batched merge change-log entries (chunked).
         if merge_change_rows:
@@ -1229,23 +1263,33 @@ async def run_consolidation(
         # ---------------------------------------------------------------
         match_results = match_sources(registrations, fcm_records)
 
+        # Collect every write instead of issuing it inline — this loop used to
+        # make TWO sequential HTTP calls per matched flight (participants +
+        # source_records), by far the largest contributor to a multi-minute
+        # run on a several-hundred-flight event. Multi-segment semantics are
+        # preserved exactly: when a participant has several matches (aller +
+        # retour), the LAST one processed in this loop still ends up as their
+        # has_flight/fcm_source_id, same as the old sequential .update() calls
+        # each overwriting the previous.
+        touched_participant_ids: set[str] = set()
+        fcm_link_targets: dict[str, dict] = {}
+
         for mr in match_results:
             if mr.decision in ("certain", "probable") and mr.reg_record:
                 p_id = participant_id_map.get(mr.reg_record.source_record_id)
                 if p_id:
-                    # Update participant: mark has_flight = True
-                    supabase.table("participants").update({
-                        "has_flight": True,
-                        "fcm_source_id": mr.fcm_record.source_record_id,
-                    }).eq("id", p_id).execute()
+                    prow = participant_rows_by_id.get(p_id)
+                    if prow is not None:
+                        prow["has_flight"] = True
+                        prow["fcm_source_id"] = mr.fcm_record.source_record_id
+                        touched_participant_ids.add(p_id)
 
-                    # Link FCM source_record
-                    supabase.table("source_records").update({
+                    fcm_link_targets[mr.fcm_record.source_record_id] = {
                         "participant_id": p_id,
                         "match_decision": mr.decision,
                         "match_score": mr.score,
                         "match_signals": mr.signals,
-                    }).eq("id", mr.fcm_record.source_record_id).execute()
+                    }
 
                     if mr.decision == "certain":
                         stats["matched_certain"] += 1
@@ -1275,6 +1319,37 @@ async def run_consolidation(
                 stats["to_verify"] += 1
             else:
                 stats["not_found"] += 1
+
+        # Flush participants: re-upsert only the rows this step touched,
+        # reusing the full-row dicts already built (and already NOT-NULL
+        # complete) for the earlier participants upsert — no extra fetch.
+        if touched_participant_ids:
+            flight_rows = [participant_rows_by_id[pid] for pid in touched_participant_ids]
+            for i in range(0, len(flight_rows), 100):
+                supabase.table("participants").upsert(flight_rows[i:i + 100]).execute()
+
+        # Flush FCM source_records: same NOT-NULL-safe pattern as the
+        # registration-link step above — fetch full existing rows first,
+        # merge in only the match fields, upsert whole rows.
+        if fcm_link_targets:
+            fcm_ids = list(fcm_link_targets.keys())
+            existing_fcm_by_id: dict[str, dict] = {}
+            for i in range(0, len(fcm_ids), 100):
+                chunk = fcm_ids[i:i + 100]
+                resp = supabase.table("source_records").select("*").in_("id", chunk).execute()
+                for row in (resp.data or []):
+                    existing_fcm_by_id[row["id"]] = row
+
+            fcm_rows = []
+            for sr_id, fields in fcm_link_targets.items():
+                base = existing_fcm_by_id.get(sr_id)
+                if base is None:
+                    continue  # record vanished mid-run — nothing to link
+                merged = dict(base)
+                merged.update(fields)
+                fcm_rows.append(merged)
+            for i in range(0, len(fcm_rows), 100):
+                supabase.table("source_records").upsert(fcm_rows[i:i + 100]).execute()
 
         # ---------------------------------------------------------------
         # 6a-1. Purge stale source-record copies from earlier runs (records
