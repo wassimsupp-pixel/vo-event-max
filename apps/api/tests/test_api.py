@@ -17,7 +17,7 @@ from __future__ import annotations
 import io
 import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -331,6 +331,61 @@ class TestParticipantDietaryRestriction:
         assert stripped.get("dietary_requirements") is None
 
 
+class TestParticipantFieldAllowlist:
+    """PATCH /participants/{id} and POST .../lock/{field} used to take an
+    IMMUTABLE_FIELDS BLOCKLIST (only id/event_id/created_at/updated_at/
+    registration_source_id/fcm_source_id refused) -- every OTHER column,
+    including engine-managed ones (completeness_status, locked_fields,
+    has_flight/has_hotel/has_transfer/has_activities, verification_note),
+    was writable by any user with write access to the event. A client-role
+    "editor" could e.g. lock dietary_requirements against future re-imports
+    with a value never actually reviewed, or fake has_flight/has_hotel for
+    reporting. Fixed by flipping to an ALLOWLIST matching exactly what the
+    participant edit form exposes (apps/web EDITABLE_FIELDS)."""
+
+    def test_engine_managed_fields_not_in_allowlist(self):
+        from routers.participants import CLIENT_EDITABLE_FIELDS
+        for field in ("completeness_status", "locked_fields", "has_flight",
+                      "has_hotel", "has_transfer", "has_activities",
+                      "verification_note", "id", "event_id"):
+            assert field not in CLIENT_EDITABLE_FIELDS, field
+
+    def test_allowlist_matches_frontend_editable_fields(self):
+        from routers.participants import CLIENT_EDITABLE_FIELDS
+        # apps/web/.../participants/[participantId]/page.tsx EDITABLE_FIELDS
+        frontend_fields = {"first_name", "last_name", "email", "company", "phone", "nationality", "dietary_requirements"}
+        assert CLIENT_EDITABLE_FIELDS == frontend_fields
+
+    @patch("routers.participants.verify_event_access")
+    def test_patch_rejects_engine_managed_field(self, mock_verify):
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+            "id": "p1", "event_id": "e1", "completeness_status": "incomplete",
+        }
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.patch(
+            "/api/participants/p1",
+            json={"field": "completeness_status", "value": "complete", "reason": "test"},
+        )
+        assert response.status_code == 400
+
+    @patch("routers.participants.verify_event_access")
+    def test_lock_rejects_engine_managed_field(self, mock_verify):
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+            "id": "p1", "event_id": "e1", "locked_fields": {},
+        }
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.post("/api/participants/p1/lock/has_flight")
+        assert response.status_code == 400
+
+
 class TestEmailAgentAccessControl:
     """The Email Agent router had NO ownership check at all (2026-07-21 audit):
     any authenticated user, any org, could list another org's email
@@ -396,6 +451,61 @@ class TestEmailAgentAccessControl:
         client.app.dependency_overrides[get_supabase_client] = lambda: _mock_supabase()
         response = client.post(f"/api/email-agent/{self.PROPOSAL_ID}/apply")
         assert response.status_code == 404
+
+
+class TestDeleteFileConcurrencyGuard:
+    """DELETE /files/{id} used to have no guard against a concurrent
+    consolidation run on the same event: deletion snapshots the file's
+    source_record ids up front, deletes exactly those, then deletes the
+    uploaded_files row -- but a concurrent consolidation re-parses this same
+    file mid-run and inserts FRESH source_records for it, which survive the
+    cleanup and are then permanently orphaned once the parent uploaded_files
+    row is gone. Fixed by reusing the same is_consolidation_running() guard
+    trigger_consolidation already uses to reject an overlapping run."""
+
+    FILE_ID = "00000000-0000-0000-0000-000000000077"
+
+    def _mocked_client(self, running_data):
+        mock_supabase = MagicMock()
+        files_mock = MagicMock()
+        files_mock.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+            "id": self.FILE_ID, "event_id": "e1", "storage_path": "e1/f1/x.xlsx",
+        }
+        runs_mock = MagicMock()
+        runs_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = running_data
+
+        def table_side_effect(name):
+            if name == "uploaded_files":
+                return files_mock
+            if name == "consolidation_runs":
+                return runs_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        return mock_supabase
+
+    @patch("routers.files.verify_event_access")
+    def test_delete_rejected_while_consolidation_running(self, mock_verify):
+        from datetime import datetime, timezone
+        mock_verify.return_value = None
+        client = _admin_client()
+        recent = datetime.now(timezone.utc).isoformat()
+        mock_supabase = self._mocked_client([{"id": "run1", "started_at": recent}])
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.delete(f"/api/files/{self.FILE_ID}")
+        assert response.status_code == 409
+
+    @patch("routers.files.deletion_service")
+    @patch("routers.files.verify_event_access")
+    def test_delete_allowed_when_no_run_in_progress(self, mock_verify, mock_deletion):
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = self._mocked_client([])
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.delete(f"/api/files/{self.FILE_ID}")
+        assert response.status_code == 200
 
 
 class TestConsolidationConcurrencyGuard:
@@ -491,6 +601,83 @@ class TestConsolidationConcurrencyGuard:
 
         response = client.post(f"/api/events/{self.EVENT_ID}/consolidate")
         assert response.status_code == 202
+
+
+class TestMatchCandidateResolveRace:
+    """PUT /match-candidates/{id} used to check status != "resolved", run the
+    merge, and only THEN write status="resolved" -- a plain read-then-write
+    with no atomicity. Two concurrent requests for the same candidate_id
+    (double-click "confirmer la fusion") could both pass the check and both
+    proceed: the second one merges against rows the first already
+    repointed/deleted, silently no-ops, but still logs a misleading "merge"
+    change_log entry and re-marks an already-resolved candidate. Fixed by
+    atomically claiming the candidate (UPDATE ... WHERE status='pending')
+    BEFORE merging, with a revert-to-pending on merge failure so a genuine
+    single-request failure can still be retried."""
+
+    CANDIDATE_ID = "cand-1"
+
+    def _mock_supabase(self, claim_data, cand_row):
+        mock_supabase = MagicMock()
+        candidates_mock = MagicMock()
+        candidates_mock.select.return_value.eq.return_value.single.return_value.execute.return_value.data = cand_row
+        candidates_mock.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = claim_data
+        # The revert path only chains a single .eq(), not .eq().eq() -- a
+        # distinct attribute path on the same mock tree, configured separately.
+        candidates_mock.update.return_value.eq.return_value.execute.return_value.data = claim_data
+
+        participants_mock = MagicMock()
+
+        def table_side_effect(name):
+            if name == "match_candidates":
+                return candidates_mock
+            if name == "participants":
+                return participants_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        return mock_supabase, candidates_mock
+
+    @patch("routers.matching.verify_event_access")
+    def test_second_concurrent_resolve_is_rejected(self, mock_verify):
+        """Simulates the race directly: the claim's conditional UPDATE
+        (.eq("status", "pending")) matches zero rows because a first request
+        already flipped status to "resolved" -- the loser must 409, not
+        proceed to merge."""
+        mock_verify.return_value = None
+        client = _admin_client()
+        cand_row = {
+            "id": self.CANDIDATE_ID, "event_id": "e1", "status": "pending",
+            "participant_a_id": "loser", "participant_b_id": "winner",
+        }
+        mock_supabase, candidates_mock = self._mock_supabase(claim_data=[], cand_row=cand_row)
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.put(f"/api/match-candidates/{self.CANDIDATE_ID}", json={"decision": "fusionner"})
+        assert response.status_code == 409
+
+    @patch("routers.matching.consolidation_service._merge_participant_into")
+    @patch("routers.matching.verify_event_access")
+    def test_failed_merge_reverts_claim_to_pending(self, mock_verify, mock_merge):
+        """A genuine (non-race) merge failure must revert the atomic claim
+        so the candidate can still be retried, not get permanently stuck
+        "resolved" with no merge having actually happened."""
+        mock_verify.return_value = None
+        mock_merge.return_value = False
+        client = _admin_client()
+        cand_row = {
+            "id": self.CANDIDATE_ID, "event_id": "e1", "status": "pending",
+            "participant_a_id": "loser", "participant_b_id": "winner",
+        }
+        mock_supabase, candidates_mock = self._mock_supabase(claim_data=[{"id": self.CANDIDATE_ID}], cand_row=cand_row)
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.put(f"/api/match-candidates/{self.CANDIDATE_ID}", json={"decision": "fusionner"})
+        assert response.status_code == 500
+        # Two update() calls on match_candidates: the initial claim, then the revert.
+        assert candidates_mock.update.call_count == 2
+        revert_payload = candidates_mock.update.call_args_list[1].args[0]
+        assert revert_payload["status"] == "pending"
 
 
 # ---------------------------------------------------------------------------
@@ -590,6 +777,15 @@ class TestSafeStorageFilename:
         from routers.files import _safe_storage_filename
         assert ".." not in _safe_storage_filename("../../../etc/passwd")
         assert "/" not in _safe_storage_filename("../../other-event/x.xlsx")
+
+    def test_bare_dot_dot_rejected(self):
+        """A bare ".." has no separator for os.path.basename to strip and
+        survives it unchanged -- still a real traversal segment once joined
+        into storage_path ("{event_id}/{file_id}/.." resolves upward)."""
+        from routers.files import _safe_storage_filename
+        assert _safe_storage_filename("..") == "upload"
+        assert _safe_storage_filename(".") == "upload"
+        assert _safe_storage_filename("...") == "upload"
 
     def test_backslash_traversal_stripped(self):
         from routers.files import _safe_storage_filename
@@ -697,6 +893,109 @@ class TestExportDietaryRBAC:
         from services.export_service import generate_excel
         role_param = inspect.signature(generate_excel).parameters["role"]
         assert role_param.default not in ("admin", "pm")
+
+    def _changes(self):
+        return [
+            {"changed_at": "2026-07-21T00:00:00Z", "user_id": "u1", "entity_type": "participant",
+             "entity_id": "p1", "field_name": "dietary_requirements",
+             "old_value": "", "new_value": "Halal", "change_reason": "manual"},
+            {"changed_at": "2026-07-21T00:01:00Z", "user_id": "u1", "entity_type": "participant",
+             "entity_id": "p1", "field_name": "phone",
+             "old_value": "", "new_value": "+33612345678", "change_reason": "manual"},
+        ]
+
+    def test_change_log_dietary_redacted_for_non_privileged_role(self):
+        """The Master List sheet strips the CURRENT dietary value for
+        non-admin/pm, but every HISTORICAL edit to that field was still
+        written verbatim to the Change Log sheet regardless of role --
+        the same RGPD-sensitive value leaking through the audit trail."""
+        from services.export_service import _build_change_log_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        _build_change_log_sheet(ws, self._changes(), include_dietary=False)
+        dietary_row = [c.value for c in ws[2]]
+        phone_row = [c.value for c in ws[3]]
+        assert dietary_row[5] is None and dietary_row[6] is None  # old/new value
+        assert dietary_row[4] == "dietary_requirements"  # field name itself still shown
+        # untouched by the DIETARY redaction -- the leading "'" is the
+        # UNRELATED formula-injection sanitizer, expected on a "+..." value.
+        assert phone_row[5] == "" and phone_row[6] == "'+33612345678"
+
+    def test_change_log_dietary_included_for_admin(self):
+        from services.export_service import _build_change_log_sheet
+        from openpyxl import Workbook
+        ws = Workbook().active
+        _build_change_log_sheet(ws, self._changes(), include_dietary=True)
+        dietary_row = [c.value for c in ws[2]]
+        assert dietary_row[6] == "Halal"
+
+
+class TestExportDownloadRoleRedaction:
+    """The dietary RBAC fix (commit 27a7c76) only gated export GENERATION:
+    create_export threaded role into generate_excel, but download_export
+    only checked verify_event_access (read-level, no role condition) before
+    minting a signed URL for the ORIGINAL stored file. A viewer/client could
+    still download an admin-generated export and get the raw dietary
+    columns baked into that file -- see 2026-07-21 audit finding #1. Fixed
+    by regenerating a role-appropriate copy at download time for any
+    non-admin/pm role instead of serving the original."""
+
+    EXPORT_ID = "00000000-0000-0000-0000-000000000042"
+
+    def _mock_supabase_for_export(self, export_row):
+        mock_supabase = MagicMock()
+        exports_mock = MagicMock()
+        exports_mock.select.return_value.eq.return_value.single.return_value.execute.return_value.data = export_row
+
+        def table_side_effect(name):
+            if name == "exports":
+                return exports_mock
+            return MagicMock()
+
+        mock_supabase.table.side_effect = table_side_effect
+        mock_supabase.storage.from_.return_value.create_signed_url.return_value = {"signedURL": "https://signed.example/x"}
+        mock_supabase.storage.from_.return_value.upload.return_value = None
+        return mock_supabase
+
+    @patch("routers.exports.verify_event_access")
+    @patch("routers.exports.export_service.generate_excel")
+    def test_admin_download_serves_original_no_regeneration(self, mock_generate, mock_verify):
+        mock_verify.return_value = None
+        export_row = {
+            "id": self.EXPORT_ID, "event_id": "e1", "run_id": "r1",
+            "storage_path": "exports/e1/orig/file.xlsx", "filename": "file.xlsx", "created_by": "u1",
+        }
+        mock_supabase = self._mock_supabase_for_export(export_row)
+        client = _admin_client()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.get(f"/api/exports/{self.EXPORT_ID}/download")
+        assert response.status_code == 200
+        mock_generate.assert_not_called()
+        called_path = mock_supabase.storage.from_.return_value.create_signed_url.call_args.kwargs["path"]
+        assert called_path == "exports/e1/orig/file.xlsx"
+
+    @patch("routers.exports.verify_event_access")
+    @patch("routers.exports.export_service.generate_excel")
+    def test_viewer_download_regenerates_redacted_copy(self, mock_generate, mock_verify):
+        mock_verify.return_value = None
+        mock_generate.return_value = b"fake-redacted-bytes"
+        export_row = {
+            "id": self.EXPORT_ID, "event_id": "e1", "run_id": "r1",
+            "storage_path": "exports/e1/orig/file.xlsx", "filename": "file.xlsx", "created_by": "u1",
+        }
+        mock_supabase = self._mock_supabase_for_export(export_row)
+        client = _viewer_client()
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.get(f"/api/exports/{self.EXPORT_ID}/download")
+        assert response.status_code == 200
+        mock_generate.assert_called_once()
+        # regenerated with the DOWNLOADING user's role, not the original creator's
+        assert mock_generate.call_args.kwargs["role"] == "viewer"
+        called_path = mock_supabase.storage.from_.return_value.create_signed_url.call_args.kwargs["path"]
+        assert called_path != "exports/e1/orig/file.xlsx"
+        assert "redacted-viewer" in called_path
 
 
 # ---------------------------------------------------------------------------
@@ -1030,6 +1329,97 @@ class TestEvents:
         data = response.json()
         assert len(data) == 1
         assert data[0]["name"] == "Event One"
+
+
+class TestEmailAgentApplyProposalSafety:
+    """apply_proposal (services/email_agent_service.py) wrote AI-proposed
+    `changes` verbatim -- the prompt's "Allowed fields" list was never
+    enforced in code, so a crafted/injected email could get the model to
+    propose event_id/locked_fields/id and have them applied. It also had a
+    read-then-write TOCTOU race: two concurrent applies for the same
+    proposal_id could both pass the pending check before either wrote
+    status="applied", doubling every change_log entry."""
+
+    def _proposal(self, changes):
+        return {
+            "id": "prop-1", "event_id": "e1", "participant_id": "p1",
+            "status": "pending", "proposed_changes": changes,
+        }
+
+    def _mock_sb(self, claim_data):
+        mock_sb = MagicMock()
+        proposals_mock = MagicMock()
+        proposals_mock.update.return_value.eq.return_value.eq.return_value.execute.return_value.data = claim_data
+        participants_mock = MagicMock()
+        participants_mock.select.return_value.eq.return_value.execute.return_value.data = [
+            {"id": "p1", "locked_fields": [], "first_name": "Old"}
+        ]
+        change_log_mock = MagicMock()
+
+        def table_side_effect(name):
+            if name == "email_proposals":
+                return proposals_mock
+            if name == "participants":
+                return participants_mock
+            if name == "change_log":
+                return change_log_mock
+            return MagicMock()
+
+        mock_sb.table.side_effect = table_side_effect
+        return mock_sb, participants_mock, change_log_mock
+
+    @pytest.mark.asyncio
+    async def test_disallowed_fields_filtered_before_apply(self):
+        from services.email_agent_service import EmailAgentService
+        service = EmailAgentService(MagicMock())
+        service.get_proposal = AsyncMock(return_value=self._proposal({
+            "first_name": "Marie", "event_id": "other-event-id",
+            "locked_fields": [], "id": "different-participant",
+        }))
+        mock_sb, participants_mock, _ = self._mock_sb(claim_data=[{"id": "prop-1"}])
+        service.sb = mock_sb
+
+        result = await service.apply_proposal("prop-1", "u1")
+        assert result is True
+        applied_payload = participants_mock.update.call_args.args[0]
+        assert applied_payload.get("first_name") == "Marie"
+        for forbidden in ("event_id", "locked_fields", "id"):
+            assert forbidden not in applied_payload or forbidden == "locked_fields"
+        # locked_fields IS a real key in the payload (the lock-merge logic),
+        # but its VALUE must never come from attacker-supplied changes --
+        # only "first_name" (the one allowlisted field) is on it.
+        assert applied_payload["locked_fields"] == ["first_name"]
+
+    @pytest.mark.asyncio
+    async def test_only_allowlisted_fields_survive_when_all_disallowed(self):
+        from services.email_agent_service import EmailAgentService
+        service = EmailAgentService(MagicMock())
+        service.get_proposal = AsyncMock(return_value=self._proposal({
+            "event_id": "other-event-id", "locked_fields": [], "id": "x",
+        }))
+        mock_sb, _, _ = self._mock_sb(claim_data=[{"id": "prop-1"}])
+        service.sb = mock_sb
+
+        result = await service.apply_proposal("prop-1", "u1")
+        # Nothing allowlisted survives -> changes is empty -> no-op, not applied.
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_double_apply_second_call_is_rejected(self):
+        """Simulates the race: the SECOND concurrent call's conditional
+        UPDATE (.eq("status", "pending")) matches zero rows because the
+        first call already flipped status to "applied", proving the claim
+        is the actual gate -- not the earlier plain status read."""
+        from services.email_agent_service import EmailAgentService
+        service = EmailAgentService(MagicMock())
+        service.get_proposal = AsyncMock(return_value=self._proposal({"first_name": "Marie"}))
+        mock_sb, participants_mock, change_log_mock = self._mock_sb(claim_data=[])  # 0 rows affected
+        service.sb = mock_sb
+
+        result = await service.apply_proposal("prop-1", "u1")
+        assert result is False
+        participants_mock.update.assert_not_called()
+        change_log_mock.insert.assert_not_called()
 
 
 class TestEmailAgent:
