@@ -29,6 +29,19 @@ except ImportError:
     pass
 
 
+# The prompt below instructs the model to only propose these fields, but
+# that instruction was never enforced in code — apply_proposal wrote
+# proposed_changes verbatim. A crafted inbound email (prompt injection) that
+# got the model to emit e.g. {"event_id": "<other-event>", "locked_fields":
+# [], "id": "..."} would have been applied as-is. This is the authoritative,
+# code-enforced allowlist; keep it in sync with the "Allowed fields" list in
+# analyze_email's prompt below.
+_ALLOWED_PROPOSAL_FIELDS = {
+    "first_name", "last_name", "email", "company", "phone",
+    "nationality", "dietary_requirements",
+}
+
+
 class EmailAgentService:
     """Service handling parsing, listing, and applying AI email updates."""
 
@@ -193,9 +206,31 @@ class EmailAgentService:
             return False
 
         participant_id = proposal["participant_id"]
-        changes = proposal["proposed_changes"]
+        # Filter to the code-enforced allowlist -- see _ALLOWED_PROPOSAL_FIELDS.
+        changes = {
+            k: v for k, v in (proposal["proposed_changes"] or {}).items()
+            if k in _ALLOWED_PROPOSAL_FIELDS
+        }
 
         if not changes:
+            return False
+
+        # Atomically claim the proposal BEFORE touching the participant: the
+        # previous read-then-write (check status="pending" here, write
+        # status="applied" several DB round-trips later) left a race window
+        # where two concurrent apply calls for the SAME proposal_id could
+        # both pass the pending check and both apply the change, doubling
+        # every change_log entry. This conditional UPDATE only succeeds for
+        # whichever request gets there first; the loser sees zero affected
+        # rows and bails out before writing anything.
+        claim = (
+            self.sb.table("email_proposals")
+            .update({"status": "applied"})
+            .eq("id", str(proposal_id))
+            .eq("status", "pending")
+            .execute()
+        )
+        if not claim.data:
             return False
 
         try:
@@ -218,10 +253,7 @@ class EmailAgentService:
 
             self.sb.table("participants").update(update_payload).eq("id", str(participant_id)).execute()
 
-            # 3. Update proposal status
-            self.sb.table("email_proposals").update({"status": "applied"}).eq("id", str(proposal_id)).execute()
-
-            # 4. Log audit changes
+            # 3. Log audit changes (status already claimed as "applied" above)
             for field, val in changes.items():
                 old_val = part.get(field, "")
                 audit_log = {
