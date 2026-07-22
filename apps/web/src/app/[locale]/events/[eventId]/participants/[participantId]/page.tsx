@@ -387,11 +387,31 @@ export default function ParticipantDetailPage() {
               <div className="space-y-2">
                 <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">Vols</h4>
                 {consolidated.flights.map((f) => (
-                  <div key={f.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
-                    <span className="font-mono font-semibold">{f.flight_number || '—'}</span>
-                    <span>{f.departure_airport} → {f.arrival_airport}</span>
-                    {f.departure_time && <span className="text-[var(--color-text-secondary)]">{new Date(f.departure_time).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>}
-                    {f.status && <span className="text-[var(--color-text-secondary)]">{f.status}</span>}
+                  <div key={f.id} className="space-y-1.5 rounded border border-slate-100 bg-slate-50 px-3 py-2.5 text-xs">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span className="rounded border border-slate-200 bg-white px-1.5 py-0.5 font-mono font-semibold">{f.flight_number || '—'}</span>
+                      {f.airline && <span className="font-medium text-[var(--color-text-primary)]">{f.airline}</span>}
+                      {f.pnr_code && <span className="text-[var(--color-text-secondary)]">PNR&nbsp;<span className="font-mono">{f.pnr_code}</span></span>}
+                      {f.status && (
+                        <span className={`ml-auto rounded-full border px-2 py-0.5 text-[10px] font-semibold ${
+                          f.status === 'cancelled'
+                            ? 'border-rose-200 bg-rose-50 text-rose-700'
+                            : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        }`}>
+                          {f.status === 'cancelled' ? 'Annulé' : f.status === 'confirmed' ? 'Confirmé' : f.status}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="font-semibold text-[var(--color-text-primary)]">{f.departure_airport || '—'}</span>
+                      {f.departure_time && <span className="text-[var(--color-text-secondary)]">{new Date(f.departure_time).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>}
+                      <span className="text-[var(--color-text-secondary)]">→</span>
+                      <span className="font-semibold text-[var(--color-text-primary)]">{f.arrival_airport || '—'}</span>
+                      {f.arrival_time && <span className="text-[var(--color-text-secondary)]">{new Date(f.arrival_time).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}</span>}
+                    </div>
+                    {f.baggage_info && (
+                      <div className="text-[var(--color-text-secondary)]">Bagages : {f.baggage_info}</div>
+                    )}
                   </div>
                 ))}
               </div>

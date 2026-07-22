@@ -250,6 +250,7 @@ export default function FlightsPage() {
                           <div className="flex flex-col gap-1.5">
                             {pax.segments.map((s, idx) => {
                               const label = segmentLabel(pax.segments.length, idx)
+                              const localeTag = locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US'
                               return (
                                 <div key={s.id} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
                                   {label && (
@@ -258,10 +259,15 @@ export default function FlightsPage() {
                                     </span>
                                   )}
                                   <span className="font-mono bg-slate-100 rounded px-1.5 py-0.5 text-slate-800">{s.flight_number}</span>
+                                  {s.airline && <span className="font-medium">{s.airline}</span>}
                                   <span className="font-medium">{s.departure_airport} ➔ {s.arrival_airport}</span>
                                   <span className="text-[var(--color-text-secondary)]">
-                                    {new Date(s.departure_time).toLocaleString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', { dateStyle: 'short', timeStyle: 'short' })}
+                                    {new Date(s.departure_time).toLocaleString(localeTag, { dateStyle: 'short', timeStyle: 'short' })}
+                                    {s.arrival_time && ` → ${new Date(s.arrival_time).toLocaleString(localeTag, { dateStyle: 'short', timeStyle: 'short' })}`}
                                   </span>
+                                  {s.baggage_info && (
+                                    <span className="text-[var(--color-text-secondary)]">· Bagages : {s.baggage_info}</span>
+                                  )}
                                   {s.status === 'cancelled' && (
                                     <span className="text-[10px] font-semibold text-rose-600">(annulé)</span>
                                   )}
