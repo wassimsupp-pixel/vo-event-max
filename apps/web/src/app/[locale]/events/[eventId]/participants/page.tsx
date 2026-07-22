@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useParams } from 'next/navigation'
+import { useParams, useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
@@ -18,6 +18,7 @@ const STATUS_META: Record<string, { label: string; className: string; Icon: type
 
 export default function EventParticipantsPage() {
   const { locale, eventId } = useParams() as { locale: string; eventId: string }
+  const router = useRouter()
   const t = useTranslations('nav')
 
   const [rows, setRows] = useState<Participant[]>([])
@@ -150,7 +151,11 @@ export default function EventParticipantsPage() {
                   rows.map((p) => {
                     const meta = STATUS_META[p.completeness_status] || STATUS_META.incomplete
                     return (
-                      <tr key={p.id} className="hover:bg-[var(--color-bg-subtle)] transition-colors">
+                      <tr
+                        key={p.id}
+                        onClick={() => router.push(`/${locale}/events/${eventId}/participants/${p.id}`)}
+                        className="cursor-pointer hover:bg-[var(--color-bg-subtle)] transition-colors"
+                      >
                         <td className="px-4 py-3 font-semibold text-[var(--color-text-primary)] whitespace-nowrap">
                           {`${p.first_name || ''} ${p.last_name || ''}`.trim() || '—'}
                         </td>
