@@ -6,7 +6,7 @@ import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
-import { Hotel, Bed, Calendar, Plus, Search, UserX, AlertTriangle } from 'lucide-react'
+import { Hotel, Bed, Calendar, Plus, Search, UserX, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
 import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
@@ -59,6 +59,7 @@ export default function HotelsPage() {
   const [assigningRoom, setAssigningRoom] = useState(false)
   const [deletingStayKey, setDeletingStayKey] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null)
 
   const fetchData = async () => {
     try {
@@ -110,11 +111,17 @@ export default function HotelsPage() {
   // 3-night stay needs 3 calls. Standard hotel semantics: nights run from
   // check-in (inclusive) to the day before check-out (the guest leaves that
   // morning), so 21/07 -> 23/07 is 2 nights (21/07, 22/07).
+  //
+  // Dates must be parsed/stepped in UTC ('T00:00:00Z' + setUTCDate), not
+  // local time: 'T00:00:00' (no Z) is local midnight, and toISOString()
+  // converts back to UTC — in any timezone ahead of UTC (e.g. CEST, UTC+2)
+  // that pushes every date back by a day (15/06 saved as 14/06). Found when
+  // a stay entered as 15/06->18/06 came back displayed as 14/06-16/06.
   const nightsInRange = (checkIn: string, checkOut: string): string[] => {
     const nights: string[] = []
-    const start = new Date(checkIn + 'T00:00:00')
-    const end = new Date(checkOut + 'T00:00:00')
-    for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+    const start = new Date(checkIn + 'T00:00:00Z')
+    const end = new Date(checkOut + 'T00:00:00Z')
+    for (let d = new Date(start); d < end; d.setUTCDate(d.getUTCDate() + 1)) {
       nights.push(d.toISOString().slice(0, 10))
     }
     return nights
@@ -135,6 +142,7 @@ export default function HotelsPage() {
     }
     setAssigningRoom(true)
     setActionError(null)
+    setActionSuccess(null)
     try {
       for (const night_date of nights) {
         if (assignParticipantId === 'all') {
@@ -153,6 +161,11 @@ export default function HotelsPage() {
           })
         }
       }
+      const hotelName = hotels.find(h => h.id === assignHotelId)?.name || 'l\'hôtel sélectionné'
+      const who = assignParticipantId === 'all' ? 'tous les participants' : (participantSearch || 'le participant sélectionné')
+      setActionSuccess(
+        `${nights.length} nuit${nights.length > 1 ? 's' : ''} attribuée${nights.length > 1 ? 's' : ''} à ${who} — ${hotelName}.`
+      )
       await fetchData()
     } catch (err) {
       console.error('Failed to assign rooming night', err)
@@ -483,6 +496,14 @@ export default function HotelsPage() {
             </form>
           </div>
         </div>
+
+        {actionSuccess && (
+          <div className="flex items-center gap-2 rounded-lg border border-[var(--color-success)]/30 bg-[var(--color-success-light)] px-4 py-2.5 text-sm text-[var(--color-success)]">
+            <CheckCircle2 className="h-4 w-4 shrink-0" />
+            <span>{actionSuccess}</span>
+            <button onClick={() => setActionSuccess(null)} className="ml-auto text-xs underline opacity-70 hover:opacity-100">Fermer</button>
+          </div>
+        )}
 
         {actionError && (
           <div className="flex items-center gap-2 rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] px-4 py-2.5 text-sm text-[var(--color-danger)]">
