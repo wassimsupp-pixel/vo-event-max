@@ -93,7 +93,7 @@ moteur de matching et attend validation humaine explicite avant implémentation.
 
 ---
 
-## PROP-002 [MAJEUR] — Ordre non-déterministe des enregistrements alimentant le matcher : les égalités de score peuvent être tranchées différemment d'un run à l'autre
+## PROP-002 [MAJEUR] — **APPLIQUÉ le 2026-07-22, validation explicite reçue en chat.** Ordre non-déterministe des enregistrements alimentant le matcher : les égalités de score pouvaient être tranchées différemment d'un run à l'autre
 
 ### Où
 `apps/api/services/consolidation_service.py`, `run_consolidation` étape 3, lignes **1057-1070** :
@@ -144,6 +144,7 @@ for sr in sorted(sr_resp.data or [], key=lambda r: order.get(r["id"], 0)):
     ...
 ```
 
-**Non appliqué** — je le classe prudemment comme touchant le moteur de matching (il modifie l'ordre des
-données qui alimentent `match_sources`), donc soumis à la même règle de validation humaine préalable,
-même si le correctif lui-même ne touche à aucun poids ni seuil.
+**Statut : appliqué.** Correctif implémenté tel que décrit ci-dessus (`consolidation_service.py:1057-1073`),
+après validation humaine explicite reçue en chat le 2026-07-22 (le correctif ne touche à aucun poids ni
+seuil, uniquement à l'ordre d'entrée). Build frontend et 113 tests backend vérifiés au vert après
+application. PROP-001 reste, lui, en attente — non validé, non appliqué.

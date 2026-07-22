@@ -1062,7 +1062,14 @@ async def run_consolidation(
                     .in_("id", chunk)
                     .execute()
                 )
-                for sr in sr_resp.data or []:
+                # PostgREST/Postgres does not guarantee `.in_()` results come back in
+                # the input list's order. Re-sort by that order so ParticipantRecord
+                # construction — and therefore any tie-break in match_sources() that
+                # relies on "first encountered wins" — is stable across runs on the
+                # same source data (audit PROP-002).
+                chunk_order = {id_: i for i, id_ in enumerate(chunk)}
+                sorted_rows = sorted(sr_resp.data or [], key=lambda r: chunk_order.get(r["id"], 0))
+                for sr in sorted_rows:
                     pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
                     if source_type in ("registration", "masterfile"):
                         registrations.append(pr)

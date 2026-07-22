@@ -38,7 +38,7 @@ sur cette branche : ils ne touchent ni au scoring du moteur de matching ni au sc
   file `match_candidates` (revue humaine), quelle que soit la confiance.
 
 ### B2 [MAJEUR] — Ordre non-déterministe des données alimentant le matcher
-**Statut : documenté seulement (PROP-002), non corrigé.**
+**Statut : corrigé (PROP-002), après validation humaine explicite reçue en chat le 2026-07-22.**
 - Fichier : `apps/api/services/consolidation_service.py:1057-1070`
 - Description : `registrations`/`fcm_records` sont construits via `.select().in_(chunk)` après un `.upsert()` —
   aucun des deux n'est garanti par PostgREST/Postgres de préserver l'ordre d'entrée. `match_sources` tranche
