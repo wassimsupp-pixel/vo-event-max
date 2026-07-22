@@ -95,7 +95,10 @@ async def create_transfer(
             detail="Participant not found in this event.",
         )
 
-    payload = body.model_dump()
+    # mode="json": TransferCreate has UUID/datetime fields that .model_dump()
+    # alone would leave as non-JSON-serializable objects (see hotels.py's
+    # assign_rooming_night for the same crash, confirmed via Railway logs).
+    payload = body.model_dump(mode="json")
     payload["event_id"] = event_id
 
     result = supabase.table("transfers").insert(payload).execute()

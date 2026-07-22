@@ -1963,6 +1963,81 @@ class TestEventProjectDeletion:
         assert response.status_code == 403
 
 
+class TestModelDumpJSONSerializable:
+    """2026-07-22: assigning a hotel night crashed with a 500 on every single
+    attempt ("Failed to fetch" in the browser — the crash path lost the CORS
+    header, so the browser reported a network error instead of a readable
+    error). Railway logs pinned it down: routers/hotels.py's
+    assign_rooming_night built its Supabase insert payload with a bare
+    `body.model_dump()`, which leaves UUID/date fields as UUID/date Python
+    objects — the postgrest/httpx JSON encoder can't serialize those and
+    raises TypeError before any request even reaches Supabase.
+
+    The same bare-.model_dump() pattern existed in 3 other insert/update call
+    sites (all fixed to model_dump(mode="json")). These tests assert directly
+    on the models: any payload built this way must be json.dumps()-safe.
+    """
+
+    def test_hotel_night_create_dump_is_json_safe(self):
+        import json
+        from models.schemas import HotelNightCreate
+
+        model = HotelNightCreate(
+            hotel_id="00000000-0000-0000-0000-000000000001",
+            participant_id="00000000-0000-0000-0000-000000000002",
+            night_date="2027-06-15",
+        )
+        # The bug: bare model_dump() leaves UUID/date objects that crash here.
+        with pytest.raises(TypeError):
+            json.dumps(model.model_dump())
+        # The fix: mode="json" converts them to plain strings.
+        payload = model.model_dump(mode="json")
+        json.dumps(payload)  # must not raise
+        assert isinstance(payload["hotel_id"], str)
+        assert isinstance(payload["participant_id"], str)
+        assert isinstance(payload["night_date"], str)
+
+    def test_hotel_night_update_dump_is_json_safe(self):
+        import json
+        from models.schemas import HotelNightUpdate
+
+        model = HotelNightUpdate(hotel_id="00000000-0000-0000-0000-000000000001")
+        with pytest.raises(TypeError):
+            json.dumps(model.model_dump(exclude_none=True))
+        payload = model.model_dump(mode="json", exclude_none=True)
+        json.dumps(payload)
+        assert isinstance(payload["hotel_id"], str)
+
+    def test_transfer_create_dump_is_json_safe(self):
+        import json
+        from models.schemas import TransferCreate
+
+        model = TransferCreate(
+            participant_id="00000000-0000-0000-0000-000000000002",
+            transfer_type="arrival",
+            pickup_location="BCN Airport T1",
+            dropoff_location="Hotel Arts BCN",
+            pickup_time="2027-06-15T12:30:00Z",
+        )
+        with pytest.raises(TypeError):
+            json.dumps(model.model_dump())
+        payload = model.model_dump(mode="json")
+        json.dumps(payload)
+        assert isinstance(payload["participant_id"], str)
+        assert isinstance(payload["pickup_time"], str)
+
+    def test_activity_create_dump_is_json_safe(self):
+        import json
+        from models.schemas import ActivityCreate
+
+        model = ActivityCreate(name="Visite guidée", date_time="2027-06-15T09:00:00Z")
+        with pytest.raises(TypeError):
+            json.dumps(model.model_dump())
+        payload = model.model_dump(mode="json")
+        json.dumps(payload)
+        assert isinstance(payload["date_time"], str)
+
+
 class TestDeletionServiceCascade:
     """2026-07-22: deleting an event/project 500'd whenever the event had any
     row in `communications` (confirmation/campaign emails) — that table has no

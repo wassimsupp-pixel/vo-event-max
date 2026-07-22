@@ -216,7 +216,12 @@ async def assign_rooming_night(
             detail="Hotel not found in this event.",
         )
 
-    payload = body.model_dump()
+    # mode="json" is required: HotelNightCreate has UUID/date fields, and the
+    # plain .model_dump() leaves them as UUID/date objects, which the
+    # supabase-py/httpx JSON encoder cannot serialize (TypeError, 500 that
+    # surfaces to the browser as an opaque "Failed to fetch" — no CORS
+    # headers make it onto that particular crash path).
+    payload = body.model_dump(mode="json")
 
     # Unique check: participant cannot have duplicate nights
     exist = (
@@ -273,7 +278,9 @@ async def update_rooming_night(
     event_id = existing.data["hotels"]["event_id"]
     await verify_event_access(event_id, current_user, supabase, write=True)
 
-    payload = body.model_dump(exclude_none=True)
+    # mode="json": HotelNightUpdate.hotel_id is UUID, same crash class as
+    # assign_rooming_night if a client ever patches hotel_id here.
+    payload = body.model_dump(mode="json", exclude_none=True)
     user_id = current_user["id"]
 
     for field, new_val in payload.items():

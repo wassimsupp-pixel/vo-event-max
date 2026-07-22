@@ -110,7 +110,10 @@ async def create_activity(
     """
     await verify_event_access(event_id, current_user, supabase, write=True)
 
-    payload = body.model_dump()
+    # mode="json": ActivityCreate.date_time is a datetime field that
+    # .model_dump() alone would leave as a non-JSON-serializable object (same
+    # crash class as hotels.py's assign_rooming_night, confirmed via logs).
+    payload = body.model_dump(mode="json")
     payload["event_id"] = event_id
 
     result = supabase.table("activities").insert(payload).execute()
