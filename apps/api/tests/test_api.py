@@ -2180,6 +2180,57 @@ class TestRepairStoredMappingsTransferRules:
         new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
         assert new_mapping["Room"] == "Room"
 
+    def test_departure_date_column_full_of_venue_names_redirected_retroactively(self):
+        """The exact retroactive case: a PAST run of the old, broken rule 6
+        already corrupted this file's stored mapping to "Hotel": "departure_date"
+        before today's fix existed. Rule 6 alone can't see that anymore --
+        departure_date is a normal target -- so this must be caught by
+        sampling the column's actual raw values and noticing they don't
+        parse as dates at all."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-1d",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Type": "transfer_type",
+                "Hotel": "departure_date",
+            },
+        }
+        sample = [
+            {"raw_data": {"Hotel": "VOAI Diamond Head Conference Hotel"}},
+            {"raw_data": {"Hotel": "VOAI Pacific Grand Honolulu"}},
+        ]
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Hotel"] == "dropoff_location"
+
+    def test_real_departure_date_column_left_alone(self):
+        """A genuine departure_date column, whose sampled raw values DO parse
+        as dates, must never be touched by the retroactive venue-name check."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-1e",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Type": "transfer_type",
+                "Date": "departure_date",
+            },
+        }
+        sample = [
+            {"raw_data": {"Date": "15/06/2027"}},
+            {"raw_data": {"Date": "16/06/2027"}},
+        ]
+        mock_supabase, files_mock = self._mocked_client([file_row], source_records_data=sample)
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 0
+        files_mock.update.assert_not_called()
+
     def test_bare_airport_column_mapped_when_no_other_location_field(self):
         from services.mapping_service import repair_stored_mappings
         file_row = {

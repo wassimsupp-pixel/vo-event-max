@@ -969,6 +969,50 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
                     new[col] = str(col)  # no reliable transfer equivalent — demote, don't guess
                     changed = True
 
+        # 6b. The RETROACTIVE case for the bug rule 6 fixes above: a run of
+        #     the OLD, broken rule 6 (before this fix existed) already
+        #     redirected a transfer file's hotel_name column into
+        #     departure_date/arrival_date. That corrupted mapping is now
+        #     indistinguishable from a legitimate one by header/target alone
+        #     — "departure_date" is a normal, valid transfer field — so rule
+        #     6 above never touches it again on rerun: mappings_repaired
+        #     stays 0 and "sans transfert" never moves, even after this fix
+        #     is deployed and consolidation is relaunched (2026-07-22).
+        #     Detect it the same way rule 7 detects a starved location field
+        #     below: sample the ACTUAL raw values of whatever column is
+        #     mapped to departure_date/arrival_date. A real date column
+        #     parses; a leftover venue name never does.
+        if f.get("source_type") == "transfer":
+            date_cols = [col for col, tgt in new.items() if tgt in ("departure_date", "arrival_date")]
+            if date_cols:
+                try:
+                    sample = (
+                        supabase.table("source_records")
+                        .select("raw_data")
+                        .eq("file_id", f["id"])
+                        .limit(20)
+                        .execute()
+                        .data or []
+                    )
+                    for col in date_cols:
+                        vals = [
+                            str(r["raw_data"][col]).strip()
+                            for r in sample
+                            if r.get("raw_data") and r["raw_data"].get(col) not in (None, "")
+                        ]
+                        if vals and sum(1 for v in vals if _parse_date(v) is None) / len(vals) > 0.5:
+                            used = set(new.values())
+                            for fallback in ("dropoff_location", "pickup_location"):
+                                if fallback not in used:
+                                    new[col] = fallback
+                                    changed = True
+                                    break
+                            else:
+                                new[col] = str(col)  # keep its data as a custom field
+                                changed = True
+                except Exception as exc:
+                    logger.warning("Transfer date-column content check failed for file %s: %s", f["id"], exc)
+
         # 7. That same audit: the file's ONLY location-bearing column (a bare
         #    "Aéroport") was left unmapped for the same reason — no synonym
         #    recognizes an unqualified "Aéroport". Every row then also failed
