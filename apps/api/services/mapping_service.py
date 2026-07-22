@@ -812,7 +812,13 @@ _TRAVEL_DATE_TIME_FIELDS = {
     "date_of_birth", "passport_expiry",
 }
 # A transfer file carries no hotel data at all — a column landing on one of
-# these is always a mis-mapping, never a legitimate reading.
+# these is always a mis-mapping, never a legitimate reading. Split by shape:
+# check_in_date/check_out_date are genuinely DATE-shaped, so a misplaced one
+# belongs on the transfer's own date field. hotel_name is TEXT-shaped — on a
+# transfer file it almost always names the pickup/dropoff VENUE, not a date
+# (see rule 6 below). room_type/early_checkin/late_checkout have no reliable
+# transfer equivalent and are only ever demoted, never redirected.
+_HOTEL_DATE_FIELDS = {"check_in_date", "check_out_date"}
 _HOTEL_ONLY_FIELDS = {"check_in_date", "check_out_date", "room_type", "hotel_name", "early_checkin", "late_checkout"}
 # A bare "Aéroport"/"Airport" header, with no depart/arrivée qualifier, is how
 # real transfer files commonly label their sole location column (the
@@ -917,17 +923,29 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
                 new[col] = str(col)          # keep its data as a custom field
                 changed = True
 
-        # 6. A transfer file's date column landing on a HOTEL-only field
-        #    (check_in_date, room_type...) is always wrong — the file has no
-        #    hotel data. A single ambiguous "Date" header (direction lives in
-        #    "Type", not here) got mapped to check_in_date by mistake once,
-        #    was "remembered" org-wide, and silently reapplied verbatim to a
-        #    real event's real transfer import: 0 of 600 rows extracted,
-        #    because check_in_date is never checked as a date source by the
-        #    transfer-extraction gate (2026-07-21 audit).
+        # 6. A transfer file's column landing on a HOTEL-only field is always
+        #    wrong — the file has no hotel data. A single ambiguous "Date"
+        #    header (direction lives in "Type", not here) got mapped to
+        #    check_in_date by mistake once, was "remembered" org-wide, and
+        #    silently reapplied verbatim to a real event's real transfer
+        #    import: 0 of 600 rows extracted, because check_in_date is never
+        #    checked as a date source by the transfer-extraction gate
+        #    (2026-07-21 audit).
+        #
+        #    hotel_name needs a DIFFERENT fix, not the same one: it is
+        #    TEXT-shaped, not date-shaped. Reusing the date-column fallback
+        #    for it (2026-07-22 regression) stuffed a venue name like "VOAI
+        #    Diamond Head Conference Hotel" into departure_date — a
+        #    nonsensical, unparseable "date de départ" that fired a fresh
+        #    INVALID_FORMAT exception per row — while the real pickup/dropoff
+        #    field it should have gone to stayed empty, so transfers kept
+        #    failing has_location_signal and the count of "sans transfert"
+        #    never moved despite the file being fully imported. On a
+        #    transfer, a "Hotel" column almost always names the pickup or
+        #    dropoff VENUE, so redirect it there instead.
         if f.get("source_type") == "transfer":
             for col, tgt in list(new.items()):
-                if tgt in _HOTEL_ONLY_FIELDS:
+                if tgt in _HOTEL_DATE_FIELDS:
                     used = set(new.values())
                     for fallback in ("departure_date", "arrival_date"):
                         if fallback not in used:
@@ -937,6 +955,19 @@ def repair_stored_mappings(event_id: str, supabase) -> int:
                     else:
                         new[col] = str(col)  # keep its data as a custom field
                         changed = True
+                elif tgt == "hotel_name":
+                    used = set(new.values())
+                    for fallback in ("dropoff_location", "pickup_location"):
+                        if fallback not in used:
+                            new[col] = fallback
+                            changed = True
+                            break
+                    else:
+                        new[col] = str(col)  # keep its data as a custom field
+                        changed = True
+                elif tgt in _HOTEL_ONLY_FIELDS:  # room_type, early_checkin, late_checkout
+                    new[col] = str(col)  # no reliable transfer equivalent — demote, don't guess
+                    changed = True
 
         # 7. That same audit: the file's ONLY location-bearing column (a bare
         #    "Aéroport") was left unmapped for the same reason — no synonym

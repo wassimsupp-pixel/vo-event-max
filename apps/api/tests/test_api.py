@@ -2132,6 +2132,54 @@ class TestRepairStoredMappingsTransferRules:
         new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
         assert new_mapping["Date"] == "departure_date"
 
+    def test_hotel_name_column_redirected_to_dropoff_location_not_a_date_field(self):
+        """2026-07-22 regression: rule 6 used to treat every _HOTEL_ONLY_FIELDS
+        member the same way and redirect it to departure_date/arrival_date.
+        hotel_name is TEXT-shaped (a venue name like "VOAI Diamond Head
+        Conference Hotel"), not date-shaped -- stuffing it into departure_date
+        produced an unparseable "date de départ illisible" exception on every
+        row, while the real pickup/dropoff field it should have gone to
+        stayed empty, so transfers kept failing has_location_signal and the
+        "sans transfert" count never moved despite the file being imported."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-1b",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Type": "transfer_type",
+                "Hotel": "hotel_name",
+            },
+        }
+        mock_supabase, files_mock = self._mocked_client([file_row])
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Hotel"] == "dropoff_location"
+        assert new_mapping["Hotel"] not in ("departure_date", "arrival_date")
+
+    def test_hotel_room_type_column_demoted_to_custom_field(self):
+        """room_type has no reliable transfer equivalent to redirect to --
+        must be demoted to a custom field, never guessed onto a date field
+        either."""
+        from services.mapping_service import repair_stored_mappings
+        file_row = {
+            "id": "file-1c",
+            "source_type": "transfer",
+            "column_mapping": {
+                "Vol": "flight_number", "Type": "transfer_type",
+                "Room": "room_type",
+            },
+        }
+        mock_supabase, files_mock = self._mocked_client([file_row])
+
+        fixed = repair_stored_mappings(self.EVENT_ID, mock_supabase)
+
+        assert fixed == 1
+        new_mapping = files_mock.update.call_args_list[0][0][0]["column_mapping"]
+        assert new_mapping["Room"] == "Room"
+
     def test_bare_airport_column_mapped_when_no_other_location_field(self):
         from services.mapping_service import repair_stored_mappings
         file_row = {
