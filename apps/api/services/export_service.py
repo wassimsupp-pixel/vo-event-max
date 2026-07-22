@@ -57,7 +57,6 @@ def _thin_border() -> Border:
 def _auto_width(ws, min_width: int = 10, max_width: int = 50) -> None:
     """Adjust column widths based on cell content."""
     for col in ws.columns:
-        max_len = max_width
         col_letter = get_column_letter(col[0].column)
         col_max = min_width
         for cell in col:

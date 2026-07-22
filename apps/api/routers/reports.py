@@ -8,7 +8,7 @@ import logging
 from collections import Counter
 from datetime import date
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, verify_event_access

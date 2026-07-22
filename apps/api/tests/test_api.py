@@ -15,7 +15,6 @@ Test groups:
 from __future__ import annotations
 
 import io
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -101,7 +100,7 @@ class TestHealthCheck:
     def test_health_check_body(self):
         """GET /health should return correct JSON body."""
         client = TestClient(app)
-        body = response = client.get("/health").json()
+        body = client.get("/health").json()
         assert body["status"] == "ok"
         assert "version" in body
 

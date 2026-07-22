@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Query
 from supabase import Client
 
 from dependencies import STAFF_ROLES, get_current_user, get_project_membership, get_supabase_client

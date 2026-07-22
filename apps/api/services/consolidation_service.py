@@ -31,7 +31,7 @@ from supabase import Client
 from services import exception_service
 from services.audit_service import log_change
 from services.file_service import download_and_parse_file, download_all_sheets, get_mapped_files_for_event
-from services.mapping_service import apply_mapping, normalise_fields, parse_and_insert_source_records, suggest_mapping
+from services.mapping_service import parse_and_insert_source_records, suggest_mapping
 
 def fetch_all_source_records(supabase: Client, file_ids: list[str]) -> list[dict]:
     all_data = []

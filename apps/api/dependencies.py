@@ -14,7 +14,6 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any
 
-import httpx
 from fastapi import Depends, Header, HTTPException, status
 from supabase import Client, create_client
 

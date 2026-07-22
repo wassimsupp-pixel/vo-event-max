@@ -13,7 +13,6 @@ import logging
 import re
 import uuid
 import unicodedata
-from datetime import date
 from typing import Any, Optional
 
 from supabase import Client

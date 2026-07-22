@@ -14,8 +14,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Optional
-from uuid import UUID
+from typing import Any
 
 from supabase import Client
 

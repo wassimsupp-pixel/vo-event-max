@@ -30,7 +30,6 @@ Deletion order for an event
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from supabase import Client
 
