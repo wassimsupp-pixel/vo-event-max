@@ -200,15 +200,18 @@ export default function DashboardPage() {
   const activitiesPct = totalParticipants > 0 ? Math.round(((totalParticipants - withoutActivitiesCount) / totalParticipants) * 100) : 0
   const commsPct = totalParticipants > 0 ? 90 : 0
 
-  // Monochrome palette (dashboard is black & white only) — shades still need
-  // to differ from each other so the donut's segments stay distinguishable.
   const distributionData = [
-    { name: 'Vols', value: flightsPct, color: '#1F2937' },
-    { name: 'Hôtels', value: hotelsPct, color: '#4B5563' },
-    { name: 'Transferts', value: transfersPct, color: '#6B7280' },
-    { name: 'Activités', value: activitiesPct, color: '#9CA3AF' },
-    { name: 'Comms', value: commsPct, color: '#D1D5DB' },
+    { name: 'Vols', value: flightsPct, color: '#806CAF' },
+    { name: 'Hôtels', value: hotelsPct, color: '#47AB75' },
+    { name: 'Transferts', value: transfersPct, color: '#F99A4C' },
+    { name: 'Activités', value: activitiesPct, color: '#3B82F6' },
+    { name: 'Comms', value: commsPct, color: '#8B5CF6' },
   ]
+
+  // Red/amber/green so a 0% dimension or a low overall score is visible at a
+  // glance, instead of blending into the rest of the monochrome dashboard.
+  const scoreColor = (v: number): string =>
+    v >= 80 ? 'var(--color-success)' : v >= 50 ? 'var(--color-warning)' : 'var(--color-danger)'
 
   // Stepper steps status
   const getStepperSteps = () => {
@@ -369,7 +372,10 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               {/* Score + dimensions */}
               <div className="flex items-center gap-4 lg:col-span-1">
-                <div className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-full border-4 border-[var(--color-text-primary)]">
+                <div
+                  className="flex h-20 w-20 flex-shrink-0 flex-col items-center justify-center rounded-full border-4"
+                  style={{ borderColor: scoreColor(analysis.quality_score) }}
+                >
                   <span className="text-2xl font-bold text-[var(--color-text-primary)]">{analysis.quality_score}</span>
                   <span className="text-[9px] text-[var(--color-text-secondary)]">/ 100</span>
                 </div>
@@ -384,7 +390,7 @@ export default function DashboardPage() {
                           <span className="font-semibold text-[var(--color-text-primary)]">{v}%</span>
                         </div>
                         <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
-                          <div className="h-full rounded-full bg-[var(--color-text-primary)]" style={{ width: `${v}%` }} />
+                          <div className="h-full rounded-full" style={{ width: `${v}%`, backgroundColor: scoreColor(v) }} />
                         </div>
                       </div>
                     )
