@@ -1,7 +1,8 @@
 'use client'
 
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, CheckCircle } from 'lucide-react'
+import { ArrowRight, CheckCircle, Search } from 'lucide-react'
 
 /** One master-list row (subset used to build "concerned participants" cohorts). */
 export interface CohortRow {
@@ -59,15 +60,39 @@ export function ConcernedParticipants({
   onQuickAction?: (row: CohortRow) => void
 }) {
   const router = useRouter()
+  const [searchTerm, setSearchTerm] = useState('')
   const name = (r: CohortRow) => [r.first_name, r.last_name].filter(Boolean).join(' ') || 'N/A'
+
+  const q = searchTerm.trim().toLowerCase()
+  const filteredRows = q
+    ? rows.filter((r) =>
+        name(r).toLowerCase().includes(q) ||
+        (r.company || '').toLowerCase().includes(q) ||
+        (r.email || '').toLowerCase().includes(q)
+      )
+    : rows
 
   return (
     <div className="rounded-[var(--radius-card)] border bg-white shadow-sm overflow-hidden">
-      <div className="flex flex-col gap-0.5 border-b bg-[var(--color-bg-subtle)] p-4">
-        <h3 className="text-sm font-bold text-[var(--color-text-primary)]">
-          {title} · {rows.length}
-        </h3>
-        <p className="text-xs text-[var(--color-text-secondary)]">{action}</p>
+      <div className="flex flex-col gap-3 border-b bg-[var(--color-bg-subtle)] p-4">
+        <div>
+          <h3 className="text-sm font-bold text-[var(--color-text-primary)]">
+            {title} · {rows.length}
+          </h3>
+          <p className="text-xs text-[var(--color-text-secondary)]">{action}</p>
+        </div>
+        {rows.length > 0 && (
+          <div className="flex items-center gap-2 max-w-xs rounded-lg border bg-white px-3 py-1.5">
+            <Search className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Rechercher un participant..."
+              className="w-full text-xs outline-none bg-transparent"
+            />
+          </div>
+        )}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left text-sm">
@@ -90,8 +115,14 @@ export function ConcernedParticipants({
                   </span>
                 </td>
               </tr>
+            ) : filteredRows.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="p-6 text-center text-[var(--color-text-secondary)]">
+                  Aucun participant ne correspond à «&nbsp;{searchTerm}&nbsp;».
+                </td>
+              </tr>
             ) : (
-              rows.map((r) => (
+              filteredRows.map((r) => (
                 <tr key={r.id} className="hover:bg-slate-50 transition-colors">
                   <td className="p-3 font-semibold">{name(r)}</td>
                   <td className="p-3 text-xs text-[var(--color-text-secondary)]">{r.company || '-'}</td>
