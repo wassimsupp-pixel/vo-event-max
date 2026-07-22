@@ -106,8 +106,12 @@ def delete_event(supabase: Client, event_id: str) -> None:
     _delete_in(supabase, "hotel_nights", "participant_id", participant_ids)
     _delete_in(supabase, "hotel_nights", "hotel_id", hotel_ids)
 
-    # 2. Event-scoped tables referencing participants / runs / source_records
-    for table in ("exceptions", "exports", "email_proposals", "flights", "transfers", "change_log"):
+    # 2. Event-scoped tables referencing participants / runs / source_records.
+    #    `communications` has no ON DELETE CASCADE on event_id/participant_id
+    #    (docs/migrations/002_communications.sql) — any confirmation/campaign
+    #    email generated for the event blocks the later participants/events
+    #    delete with a foreign-key violation unless cleared here first.
+    for table in ("exceptions", "exports", "email_proposals", "communications", "flights", "transfers", "change_log"):
         supabase.table(table).delete().eq("event_id", eid).execute()
 
     # 3. Consolidation runs (referenced by exceptions/exports, now removed)

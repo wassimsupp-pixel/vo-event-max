@@ -1963,6 +1963,47 @@ class TestEventProjectDeletion:
         assert response.status_code == 403
 
 
+class TestDeletionServiceCascade:
+    """2026-07-22: deleting an event/project 500'd whenever the event had any
+    row in `communications` (confirmation/campaign emails) — that table has no
+    ON DELETE CASCADE (docs/migrations/002_communications.sql), and
+    deletion_service.delete_event() never cleared it before deleting
+    participants/the event itself, so Postgres raised a foreign-key violation.
+    """
+
+    def test_delete_event_clears_communications_before_deleting_the_event(self):
+        from services import deletion_service
+
+        event_id = "00000000-0000-0000-0000-000000000001"
+        called_tables: list[str] = []
+
+        def table_side_effect(name):
+            called_tables.append(name)
+            m = MagicMock()
+            m.select.return_value.eq.return_value.range.return_value.execute.return_value.data = []
+            m.select.return_value.eq.return_value.execute.return_value.data = []
+            m.delete.return_value.eq.return_value.execute.return_value.data = []
+            m.delete.return_value.in_.return_value.execute.return_value.data = []
+            m.update.return_value.eq.return_value.execute.return_value.data = []
+            return m
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.side_effect = table_side_effect
+
+        deletion_service.delete_event(mock_supabase, event_id)
+
+        assert "communications" in called_tables, (
+            "communications rows must be cleared during event deletion — that "
+            "table has no ON DELETE CASCADE and blocks the participants/events delete otherwise"
+        )
+        # "participants" is queried (SELECT ids) early and deleted later — the
+        # communications cleanup must happen before that final DELETE, i.e.
+        # before the *last* time the participants table is touched.
+        last_participants_call = len(called_tables) - 1 - called_tables[::-1].index("participants")
+        assert called_tables.index("communications") < last_participants_call
+        assert called_tables.index("communications") < called_tables.index("events")
+
+
 class TestRepairStoredMappingsTransferRules:
     """2026-07-21 audit: a transfer file's "Date" column got mapped to
     check_in_date (a hotel-only field) by mistake once, was "remembered"
