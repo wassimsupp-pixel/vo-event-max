@@ -17,8 +17,6 @@ interface ConsolidationStepperProps {
   onStepClick?: (index: number, step: Step) => void
 }
 
-const defaultStepKeys = ['import', 'analysis', 'matching', 'consolidation', 'validation'] as const
-
 export function ConsolidationStepper({ steps, className, onStepClick }: ConsolidationStepperProps) {
   const t = useTranslations('steps')
 

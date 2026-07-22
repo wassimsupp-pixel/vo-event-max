@@ -19,8 +19,6 @@ import {
   ChevronRight,
   CheckCircle2,
   Loader2,
-  Calendar,
-  Play,
   Zap,
   XCircle,
   ShieldCheck,
@@ -54,7 +52,7 @@ export default function DashboardPage() {
 
   // Consolidation state
   const [consolidating, setConsolidating] = useState(false)
-  const [consolidationRun, setConsolidationRun] = useState<ConsolidationRun | null>(null)
+  const [, setConsolidationRun] = useState<ConsolidationRun | null>(null)
   const [consolidationMsg, setConsolidationMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const loadDashboardData = async () => {
@@ -116,12 +114,18 @@ export default function DashboardPage() {
           return poll(consecutiveFailures + 1)
         }
         setConsolidationRun(updated)
-        if (updated.status === 'running' || updated.status === 'pending') {
+        if (updated.status === 'running') {
           await sleep(3000)
           return poll(0)
         }
-        if (updated.status === 'done') {
-          setConsolidationMsg({ type: 'success', text: t('successRun', { matched: updated.stats?.matched ?? 0, conflicts: updated.stats?.conflicts ?? 0 }) })
+        // Bug found in the 2026-07-21/22 audit: this checked status === 'done',
+        // a value the backend never writes (docs/schema.sql only allows
+        // 'running' | 'completed' | 'failed') — every successful consolidation
+        // fell through to the error branch and showed a false failure banner.
+        if (updated.status === 'completed') {
+          const matched = (updated.stats?.matched_certain ?? 0) + (updated.stats?.matched_probable ?? 0)
+          const conflicts = updated.stats?.exceptions_count ?? 0
+          setConsolidationMsg({ type: 'success', text: t('successRun', { matched, conflicts }) })
           await loadDashboardData()   // auto-refresh — no manual reload needed
         } else {
           setConsolidationMsg({ type: 'error', text: t('errorRun') })

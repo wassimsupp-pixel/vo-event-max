@@ -19,7 +19,7 @@ from datetime import date, datetime
 from typing import Any, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +289,16 @@ class ConsolidationRunRequest(BaseModel):
 
 
 class ConsolidationStats(BaseModel):
-    """Statistics summary for a completed consolidation run."""
+    """Statistics summary for a completed consolidation run.
+
+    Mirrors the runtime `stats` dict built incrementally in
+    consolidation_service.py's run_consolidation — several keys are only
+    added conditionally during a run (e.g. mappings_repaired is 0 unless
+    repair_stored_mappings actually changed something), so everything here
+    defaults to 0 rather than being required. Kept in sync manually since
+    that dict has no schema of its own (2026-07-21/22 audit finding: this
+    model previously covered only 8 of the ~18 real keys).
+    """
     total_source_records: int = 0
     matched_certain: int = 0
     matched_probable: int = 0
@@ -298,6 +307,18 @@ class ConsolidationStats(BaseModel):
     participants_created: int = 0
     participants_updated: int = 0
     exceptions_count: int = 0
+    mappings_repaired: int = 0
+    skipped_noise_rows: int = 0
+    stale_records_purged: int = 0
+    junk_participants_purged: int = 0
+    links_sanitized: int = 0
+    names_backfilled: int = 0
+    phantoms_merged: int = 0
+    exact_duplicates_merged: int = 0
+    ai_auto_merged: int = 0
+    match_candidates: int = 0
+
+    model_config = ConfigDict(extra="allow")
 
 
 class ConsolidationRunResponse(ORMBase):

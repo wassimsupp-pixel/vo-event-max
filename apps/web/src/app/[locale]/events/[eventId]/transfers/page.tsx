@@ -36,7 +36,7 @@ export default function TransfersPage() {
   const [windowMinutes, setWindowMinutes] = useState(60)
   const [pickupLoc, setPickupLoc] = useState('Aéroport de Bruxelles (BRU)')
   const [dropoffLoc, setDropoffLoc] = useState('Hôtel de la Conférence')
-  const [vehicle, setVehicle] = useState('Shuttle Bus (50 places)')
+  const vehicle = 'Shuttle Bus (50 places)'
   const [statusMsg, setStatusMsg] = useState('')
 
   const fetchTransfers = async () => {

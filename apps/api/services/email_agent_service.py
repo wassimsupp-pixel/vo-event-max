@@ -13,7 +13,6 @@ import os
 from typing import Any, Optional
 from uuid import UUID
 
-from postgrest.exceptions import APIError
 from supabase import Client
 
 logger = logging.getLogger(__name__)
@@ -114,7 +113,6 @@ class EmailAgentService:
                     .execute()
                 
                 for p in res_all.data:
-                    name_str = f"{p['first_name']} {p['last_name']}".lower()
                     if p["first_name"].lower() in sender_local or p["last_name"].lower() in sender_local:
                         participant_id = p["id"]
                         participant_name = f"{p['first_name']} {p['last_name']}"

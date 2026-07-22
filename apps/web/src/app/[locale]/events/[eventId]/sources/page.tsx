@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Table as TableIcon, Loader2, Trash2, Plus, X, ClipboardCheck } from 'lucide-react'
+import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Loader2, Trash2, Plus, X, ClipboardCheck } from 'lucide-react'
 import type { UploadedFile, FileUploadResponse, MappingReportEntry } from '@/lib/api'
 import { api } from '@/lib/api'
 
@@ -111,34 +111,6 @@ const MAPPING_FIELDS_BY_TYPE: Record<string, { field: string; label: string; req
     { field: 'activity_name', label: 'Nom de l\'Activité', required: true }
   ]
 }
-const ALL_MAPPING_FIELDS = [
-  { field: 'first_name', label: 'Prénom (First Name)' },
-  { field: 'last_name', label: 'Nom (Last Name)' },
-  { field: 'email', label: 'Email' },
-  { field: 'company', label: 'Société / Compagnie' },
-  { field: 'phone', label: 'Téléphone' },
-  { field: 'dietary_requirements', label: 'Régime Alimentaire' },
-  { field: 'nationality', label: 'Nationalité' },
-  { field: 'flight_number', label: 'Numéro de Vol' },
-  { field: 'pnr_code', label: 'Code PNR' },
-  { field: 'airline', label: 'Compagnie Aérienne' },
-  { field: 'departure_airport', label: 'Aéroport Départ' },
-  { field: 'arrival_airport', label: 'Aéroport Arrivée' },
-  { field: 'departure_time', label: 'Date/Heure Départ' },
-  { field: 'arrival_time', label: 'Date/Heure Arrivée' },
-  { field: 'baggage_info', label: 'Infos Bagages' },
-  { field: 'hotel_name', label: 'Nom de l\'Hôtel' },
-  { field: 'check_in_date', label: 'Date Check-in' },
-  { field: 'check_out_date', label: 'Date Check-out' },
-  { field: 'room_type', label: 'Type de Chambre' },
-  { field: 'transfer_type', label: 'Type de Transfert' },
-  { field: 'pickup_location', label: 'Lieu de Prise en charge' },
-  { field: 'dropoff_location', label: 'Destination' },
-  { field: 'pickup_time', label: 'Heure de Prise en charge' },
-  { field: 'vehicle_type', label: 'Type de Véhicule' },
-  { field: 'activity_name', label: 'Nom de l\'Activité' }
-]
-
 const CANONICAL_FIELD_LABELS: Record<string, string> = {
   id: 'ID Participant',
   first_name: 'Prénom (First Name)',

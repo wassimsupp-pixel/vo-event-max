@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
-from typing import Any, Optional
+from typing import Optional
 
 from rapidfuzz import fuzz
 from supabase import Client

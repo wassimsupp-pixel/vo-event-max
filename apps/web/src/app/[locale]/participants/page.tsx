@@ -3,7 +3,7 @@
 import React, { useState } from 'react'
 import { useParams } from 'next/navigation'
 import { AppLayout } from '@/components/layout/AppLayout'
-import { Search, User, Calendar, CheckSquare, Eye } from 'lucide-react'
+import { Search, User, Calendar } from 'lucide-react'
 import { api } from '@/lib/api'
 
 interface HistoryItem {

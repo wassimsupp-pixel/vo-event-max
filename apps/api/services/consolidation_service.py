@@ -31,7 +31,7 @@ from supabase import Client
 from services import exception_service
 from services.audit_service import log_change
 from services.file_service import download_and_parse_file, download_all_sheets, get_mapped_files_for_event
-from services.mapping_service import apply_mapping, normalise_fields, parse_and_insert_source_records, suggest_mapping
+from services.mapping_service import parse_and_insert_source_records, suggest_mapping
 
 def fetch_all_source_records(supabase: Client, file_ids: list[str]) -> list[dict]:
     all_data = []
@@ -1062,7 +1062,14 @@ async def run_consolidation(
                     .in_("id", chunk)
                     .execute()
                 )
-                for sr in sr_resp.data or []:
+                # PostgREST/Postgres does not guarantee `.in_()` results come back in
+                # the input list's order. Re-sort by that order so ParticipantRecord
+                # construction — and therefore any tie-break in match_sources() that
+                # relies on "first encountered wins" — is stable across runs on the
+                # same source data (audit PROP-002).
+                chunk_order = {id_: i for i, id_ in enumerate(chunk)}
+                sorted_rows = sorted(sr_resp.data or [], key=lambda r: chunk_order.get(r["id"], 0))
+                for sr in sorted_rows:
                     pr = ParticipantRecord(sr["id"], sr.get("normalized_data") or {})
                     if source_type in ("registration", "masterfile"):
                         registrations.append(pr)

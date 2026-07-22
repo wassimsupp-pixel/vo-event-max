@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -27,8 +26,6 @@ export default function ParticipantDetailPage() {
   const locale = params.locale as string
   const eventId = params.eventId as string
   const participantId = params.participantId as string
-
-  const t = useTranslations('nav')
 
   const [participant, setParticipant] = useState<Participant | null>(null)
   const [loading, setLoading] = useState(true)

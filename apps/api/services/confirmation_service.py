@@ -16,7 +16,6 @@ import json
 import logging
 import os
 from typing import Any, Optional
-from uuid import UUID
 
 from supabase import Client
 

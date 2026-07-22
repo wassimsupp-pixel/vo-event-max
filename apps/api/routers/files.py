@@ -10,7 +10,6 @@ Routes:
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 import re
@@ -32,7 +31,7 @@ from models.schemas import (
     ColumnMappingSuggestion,
     MessageResponse,
 )
-from services.mapping_service import build_auto_mapping, suggest_mapping, CANONICAL_FIELDS
+from services.mapping_service import suggest_mapping, CANONICAL_FIELDS
 from services.file_service import read_tabular
 from services import consolidation_service, deletion_service
 

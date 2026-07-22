@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from supabase import Client
 
 from dependencies import get_current_user, get_supabase_client, verify_event_access
-from services import arbitration_service, consolidation_service
+from services import consolidation_service
 from services.audit_service import log_change
 
 logger = logging.getLogger(__name__)

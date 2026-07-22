@@ -115,8 +115,11 @@ export default function MasterListPage() {
         try {
           const updated = await api.consolidation.get(eventId, run.id)
           failures = 0
-          if (updated.status === 'done') break
-          if (updated.status === 'error') {
+          // Bug found in the 2026-07-21/22 audit: checked 'done'/'error', values
+          // the backend never writes (only 'running' | 'completed' | 'failed') --
+          // this loop never broke on a real completion and polled forever.
+          if (updated.status === 'completed') break
+          if (updated.status === 'failed') {
             setError('La consolidation a échoué — consulte le dashboard pour le détail.')
             break
           }

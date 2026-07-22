@@ -10,11 +10,8 @@ import {
   FileText,
   Search,
   Sparkles,
-  ShieldAlert,
   Loader2,
   CheckCircle2,
-  XCircle,
-  Plus,
   AlertTriangle,
   User,
   ArrowRight,
@@ -31,14 +28,14 @@ export default function CommunicationsPage() {
   const [proposals, setProposals] = useState<EmailProposal[]>([])
   const [selectedProposal, setSelectedProposal] = useState<EmailProposal | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [, setError] = useState<string | null>(null)
 
   // Simulation form states
   const [simSender, setSimSender] = useState('sophie.martin@livanoba.com')
   const [simSubject, setSimSubject] = useState('Demande spéciale régime alimentaire')
   const [simBody, setSimBody] = useState('Bonjour,\n\nPourriez-vous modifier mon régime alimentaire en "Végétarien" s\'il vous plaît ?\n\nMerci,\nSophie')
   const [simulating, setSimulating] = useState(false)
-  const [simSuccess, setSimSuccess] = useState(false)
+  const [, setSimSuccess] = useState(false)
 
   // Action states
   const [isPending, startTransition] = useTransition()
