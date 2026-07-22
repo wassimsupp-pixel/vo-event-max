@@ -190,15 +190,6 @@ export interface ConsolidationRun {
   }
 }
 
-export interface ConsolidationRunDetail extends ConsolidationRun {
-  steps: Array<{
-    name: string
-    status: 'done' | 'active' | 'pending' | 'error'
-    count?: number
-    duration_ms?: number
-  }>
-}
-
 export interface Export {
   id: string
   event_id: string
@@ -451,70 +442,51 @@ export const api = {
       const run = await request<any>(`/api/events/${eventId}/consolidate`, {
         method: 'POST',
       })
-      let status = run.status
-      if (run.status === 'completed') status = 'done'
-      else if (run.status === 'failed') status = 'error'
-
       return {
         id: run.id,
         event_id: run.event_id,
-        status: status as any,
+        status: run.status,
         started_at: run.started_at,
         finished_at: run.completed_at,
+        stats: run.stats,
       }
     },
 
     async list(eventId: string): Promise<ConsolidationRun[]> {
       const list = await request<any[]>(`/api/events/${eventId}/runs`)
-      return list.map(run => {
-        let status = run.status
-        if (run.status === 'completed') status = 'done'
-        else if (run.status === 'failed') status = 'error'
-        return {
-          id: run.id,
-          event_id: run.event_id,
-          status: status as any,
-          started_at: run.started_at,
-          finished_at: run.completed_at,
-        }
-      })
+      return list.map(run => ({
+        id: run.id,
+        event_id: run.event_id,
+        status: run.status,
+        started_at: run.started_at,
+        finished_at: run.completed_at,
+        stats: run.stats,
+      }))
     },
 
-    async get(eventId: string, runId: string): Promise<ConsolidationRunDetail> {
-      const resp = await request<{
-        run: any
-        exceptions: any[]
-        exception_count: number
-      }>(`/api/events/${eventId}/runs/${runId}`)
-      
+    // Bug found in the 2026-07-21/22 audit and only half-fixed at the time:
+    // this used to translate the backend's real status ('completed'/'failed')
+    // back into old, no-longer-written values ('done'/'error') before handing
+    // it to the caller. dashboard/page.tsx and master-list/page.tsx were
+    // fixed to compare against 'completed'/'failed' directly, but this
+    // function kept producing 'done'/'error' underneath them -- so neither
+    // comparison could ever match, every consolidation showed a false
+    // "échec" banner regardless of outcome, and master-list's poll loop
+    // never broke on completion (2026-07-22, found while chasing a report
+    // of a run that completed successfully on the backend but showed as
+    // failed on the dashboard). Pass the real backend shape straight through.
+    async get(eventId: string, runId: string): Promise<ConsolidationRun> {
+      const resp = await request<{ run: any; exceptions: any[]; exception_count: number }>(
+        `/api/events/${eventId}/runs/${runId}`
+      )
       const run = resp.run || {}
-      let status = run.status
-      if (run.status === 'completed') status = 'done'
-      else if (run.status === 'failed') status = 'error'
-
-      const backendStats = run.stats || {}
-      const stats = {
-        total: backendStats.total_source_records || 0,
-        matched: (backendStats.matched_certain || 0) + (backendStats.matched_probable || 0),
-        conflicts: backendStats.exceptions_count || 0,
-        duplicates: 0,
-        not_found: backendStats.not_found || 0,
-      }
-
       return {
         id: run.id,
         event_id: run.event_id,
-        status: status as any,
+        status: run.status,
         started_at: run.started_at,
         finished_at: run.completed_at,
-        stats,
-        steps: [
-          { name: 'Importation', status: 'done', count: resp.exception_count },
-          { name: 'Analyse', status: 'done' },
-          { name: 'Matching', status: run.status === 'running' ? 'active' : 'done' },
-          { name: 'Consolidation', status: run.status === 'running' ? 'pending' : 'done' },
-          { name: 'Validation', status: run.status === 'running' ? 'pending' : 'done' },
-        ]
+        stats: run.stats,
       }
     },
   },
