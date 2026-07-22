@@ -2079,6 +2079,46 @@ class TestDeletionServiceCascade:
         assert called_tables.index("communications") < called_tables.index("events")
 
 
+class TestTransferExtractionRecognizesReturnDateAsARealDate:
+    """2026-07-22: after the mapping fix (rule 6b) was deployed, a real
+    event's transfer import stopped showing "date illisible" exceptions --
+    but the transfer count still didn't move (still 0 transfers created for
+    500 fully-linked, fully-populated source_records). Root cause: the
+    file's single "Date" column fuzzy-matched `return_date` (a flight-only
+    synonym, SYNONYMS["return_date"]) instead of departure_date/
+    arrival_date/date. The date it carries is genuinely real -- confirmed
+    directly in the database (normalized_data had "return_date":
+    "2026-08-20" on every row) -- but the transfer-extraction gate's
+    _has_real_date() call only checked pickup_date/departure_date/
+    arrival_date/date/pickup_time/departure_time, so a real date sitting
+    right there was invisible to it and every transfer was silently
+    dropped as "undated"."""
+
+    def test_has_real_date_recognizes_return_date_when_asked(self):
+        from services.consolidation_service import _has_real_date
+        data = {"return_date": "2026-08-20", "pickup_time": "14:49"}
+        assert _has_real_date(
+            data, "pickup_date", "departure_date", "arrival_date", "date",
+            "return_date", "pickup_time", "departure_time",
+        ) is True
+
+    def test_transfer_extraction_gate_includes_return_date(self):
+        """Guards the actual call site inside run_consolidation, not just
+        the standalone helper: greps the source for the exact field list
+        passed to _has_real_date in the transfer-extraction block, so a
+        future edit that drops return_date again fails this test even
+        though the code is embedded in a much larger function that isn't
+        practically unit-testable in isolation."""
+        import inspect
+        from services import consolidation_service
+        source = inspect.getsource(consolidation_service)
+        # Anchor on the transfer-specific field list (not the flight extraction's
+        # earlier, differently-worded _has_real_date call a few hundred lines up).
+        anchor = '"pickup_date", "departure_date", "arrival_date", "date",'
+        gate_call = source[source.index(anchor):][:200]
+        assert '"return_date"' in gate_call
+
+
 class TestRepairStoredMappingsTransferRules:
     """2026-07-21 audit: a transfer file's "Date" column got mapped to
     check_in_date (a hotel-only field) by mistake once, was "remembered"

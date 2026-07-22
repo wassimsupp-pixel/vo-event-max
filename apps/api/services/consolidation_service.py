@@ -3415,9 +3415,16 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                     dep_airport = (data.get("departure_airport") or "").strip()
                     arr_airport = (data.get("arrival_airport") or "").strip()
                     has_location_signal = bool(pickup_loc or dropoff_loc or dep_airport or arr_airport)
+                    # `return_date` included: a transfer file's single "Date" column
+                    # commonly fuzzy-matches return_date (a flight-only synonym list,
+                    # SYNONYMS["return_date"]) instead of departure_date/arrival_date/
+                    # date — the mapping is wrong, but the date it carries is real.
+                    # Without this, every transfer whose date landed there had a real
+                    # date sitting right in normalized_data yet was silently dropped
+                    # as if undated (2026-07-22: 500/500 rows had it, 0 transfers created).
                     has_real_date = _has_real_date(
                         data, "pickup_date", "departure_date", "arrival_date", "date",
-                        "pickup_time", "departure_time",
+                        "return_date", "pickup_time", "departure_time",
                     )
                     if (pickup_loc or dropoff_loc or pickup_time_val or transfer_type_val) \
                             and has_location_signal and has_real_date:
@@ -3443,7 +3450,7 @@ def extract_domain_data_from_sources(event_id: str, supabase: Client) -> None:
                         # date instead of its real one.
                         pickup_time_str = combine_to_iso_timestamp(
                             data.get("pickup_date") or data.get("departure_date")
-                            or data.get("arrival_date") or data.get("date"),
+                            or data.get("arrival_date") or data.get("date") or data.get("return_date"),
                             pickup_time_val or data.get("departure_time"),
                             default_date
                         )
