@@ -18,7 +18,6 @@ import {
   GitMerge,
   BarChart3,
   Settings,
-  Zap,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'

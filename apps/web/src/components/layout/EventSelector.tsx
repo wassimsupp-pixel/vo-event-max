@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, Check, Calendar, Plus, Loader2, Folder, Briefcase, AlertTriangle, RotateCw, Trash2, Share2 } from 'lucide-react'
+import { ChevronDown, Check, Calendar, Plus, Loader2, Briefcase, AlertTriangle, RotateCw, Trash2, Share2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
 import { ShareProjectModal } from '@/components/ui/ShareProjectModal'

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react'
 import { useRouter, useParams } from 'next/navigation'
-import { Zap, Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'

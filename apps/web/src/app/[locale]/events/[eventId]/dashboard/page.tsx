@@ -19,8 +19,6 @@ import {
   ChevronRight,
   CheckCircle2,
   Loader2,
-  Calendar,
-  Play,
   Zap,
   XCircle,
   ShieldCheck,
@@ -54,7 +52,7 @@ export default function DashboardPage() {
 
   // Consolidation state
   const [consolidating, setConsolidating] = useState(false)
-  const [consolidationRun, setConsolidationRun] = useState<ConsolidationRun | null>(null)
+  const [, setConsolidationRun] = useState<ConsolidationRun | null>(null)
   const [consolidationMsg, setConsolidationMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const loadDashboardData = async () => {
