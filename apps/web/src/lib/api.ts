@@ -578,6 +578,29 @@ export const api = {
     async delete(eventId: string): Promise<void> {
       await request(`/api/events/${eventId}`, { method: 'DELETE' })
     },
+    async getRegistrationLink(eventId: string): Promise<{ token: string; url: string; is_open: boolean }> {
+      return request<{ token: string; url: string; is_open: boolean }>(`/api/events/${eventId}/registration-link`)
+    },
+    async setRegistrationOpen(eventId: string, isOpen: boolean): Promise<{ is_open: boolean }> {
+      return request<{ is_open: boolean }>(`/api/events/${eventId}/registration-open`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_open: isOpen }),
+      })
+    },
+  },
+  // Public, unauthenticated registration form (routers/public_registration.py).
+  // `request()` only attaches an Authorization header when a session exists,
+  // so it works unchanged for a visitor with no Supabase session at all.
+  publicRegistration: {
+    async getInfo(token: string): Promise<{ event_id: string; event_name: string; is_open: boolean }> {
+      return request<{ event_id: string; event_name: string; is_open: boolean }>(`/api/public/register/${token}`)
+    },
+    async submit(token: string, payload: Record<string, unknown>): Promise<{ status: string; message: string }> {
+      return request<{ status: string; message: string }>(`/api/public/register/${token}`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    },
   },
   exports: {
     async create(eventId: string, runId?: string): Promise<Export> {

@@ -2492,3 +2492,192 @@ class TestFallbackArrivalAirport:
         from services.consolidation_service import _fallback_arrival_airport
         assert _fallback_arrival_airport(None, "BARCELONE BCN") == "BARCELONE BCN"
 
+
+# ---------------------------------------------------------------------------
+# Public registration form (routers/public_registration.py)
+# ---------------------------------------------------------------------------
+
+class TestPublicRegistration:
+    """The public, unauthenticated per-event registration form: a submission
+    becomes a source_records row under a single per-event virtual
+    uploaded_files row, then triggers a background consolidation run so it
+    reuses the existing matching/dedup pipeline instead of a parallel one."""
+
+    TOKEN = "11111111-1111-1111-1111-111111111111"
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+    PROJECT_ID = "00000000-0000-0000-0000-0000000000p1"
+    OWNER_ID = "00000000-0000-0000-0000-0000000000u1"
+
+    def _event_row(self, is_open=True):
+        return {
+            "id": self.EVENT_ID,
+            "name": "Conference 2027",
+            "project_id": self.PROJECT_ID,
+            "registration_open": is_open,
+        }
+
+    def _base_payload(self, **overrides):
+        payload = {
+            "first_name": "Ana", "last_name": "Kaya", "email": "ana.kaya@example.com",
+            "company": "", "phone": "", "nationality": "", "dietary_requirements": "",
+            "food_allergy_info": "", "special_requests": "", "room_preference": "",
+            "pmr_needs": "", "remarks": "", "consent": True, "website": "",
+        }
+        payload.update(overrides)
+        return payload
+
+    def _mocked_client(self, event_row, *, existing_file=None, recent_records=None, source_record_count=0):
+        events_mock = MagicMock()
+        events_mock.select.return_value.eq.return_value.single.return_value.execute.return_value.data = event_row
+
+        projects_mock = MagicMock()
+        projects_mock.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+            "created_by": self.OWNER_ID
+        }
+
+        files_mock = MagicMock()
+        files_mock.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = (
+            [{"id": existing_file}] if existing_file else []
+        )
+        files_mock.insert.return_value.execute.return_value.data = [{"id": existing_file or "file-new-1"}]
+
+        records_mock = MagicMock()
+        records_mock.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = (
+            recent_records or []
+        )
+        records_mock.select.return_value.eq.return_value.execute.return_value.count = source_record_count
+        records_mock.insert.return_value.execute.return_value.data = [{"id": "sr-new-1"}]
+
+        runs_mock = MagicMock()
+        runs_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = []  # not running
+        runs_mock.insert.return_value.execute.return_value.data = [{"id": "run-new-1"}]
+
+        mocks = {
+            "events": events_mock, "projects": projects_mock, "uploaded_files": files_mock,
+            "source_records": records_mock, "consolidation_runs": runs_mock,
+        }
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.side_effect = lambda name: mocks.get(name, MagicMock())
+        return mock_supabase, mocks
+
+    def teardown_method(self):
+        app.dependency_overrides.pop(get_supabase_client, None)
+
+    def test_get_info_valid_token(self):
+        mock_supabase, _ = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.get(f"/api/public/register/{self.TOKEN}")
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["event_name"] == "Conference 2027"
+        assert body["is_open"] is True
+
+    def test_get_info_invalid_token_returns_404(self):
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.side_effect = Exception("not found")
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.get(f"/api/public/register/{self.TOKEN}")
+
+        assert response.status_code == 404
+
+    @patch("routers.public_registration.consolidation_service.run_consolidation", new_callable=AsyncMock)
+    def test_submit_success_creates_source_record_and_triggers_consolidation(self, mock_run):
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+
+        assert response.status_code == 201, response.text
+        mocks["source_records"].insert.assert_called_once()
+        inserted = mocks["source_records"].insert.call_args[0][0]
+        assert inserted["raw_data"]["first_name"] == "Ana"
+        assert inserted["raw_data"]["email"] == "ana.kaya@example.com"
+        assert inserted["event_id"] == self.EVENT_ID
+        mock_run.assert_called_once()
+
+    def test_submit_closed_event_is_rejected(self):
+        mock_supabase, mocks = self._mocked_client(self._event_row(is_open=False))
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+
+        assert response.status_code == 403
+        mocks["source_records"].insert.assert_not_called()
+
+    def test_submit_invalid_token_returns_404(self):
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.single.return_value.execute.side_effect = Exception("not found")
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+
+        assert response.status_code == 404
+
+    def test_submit_missing_consent_is_rejected(self):
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload(consent=False))
+
+        assert response.status_code == 422
+        mocks["source_records"].insert.assert_not_called()
+
+    def test_submit_honeypot_filled_returns_success_without_writing(self):
+        """A bot that fills every field it finds, including the hidden
+        honeypot, gets a plain success response -- so it learns nothing --
+        but nothing is written to the database."""
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload(website="http://spam.example"))
+
+        assert response.status_code == 201
+        mocks["source_records"].insert.assert_not_called()
+        mocks["uploaded_files"].insert.assert_not_called()
+
+    def test_submit_throttled_after_repeated_same_email(self):
+        recent = [{"raw_data": {"email": "ana.kaya@example.com"}} for _ in range(3)]
+        mock_supabase, mocks = self._mocked_client(self._event_row(), existing_file="file-existing-1", recent_records=recent)
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+
+        assert response.status_code == 429
+        mocks["source_records"].insert.assert_not_called()
+
+    def test_submit_extra_fields_pass_through_as_custom_data(self):
+        """special_requests / room_preference / pmr_needs / remarks have no
+        canonical field (yet) -- they must still reach normalized_data so
+        nothing the client asked for is silently dropped."""
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        payload = self._base_payload(
+            special_requests="Fauteuil roulant a l'aeroport",
+            room_preference="Lit double",
+            pmr_needs="Acces rez-de-chaussee",
+            remarks="Arrive la veille",
+        )
+        with patch("routers.public_registration.consolidation_service.run_consolidation", new_callable=AsyncMock):
+            response = client.post(f"/api/public/register/{self.TOKEN}", json=payload)
+
+        assert response.status_code == 201, response.text
+        inserted = mocks["source_records"].insert.call_args[0][0]
+        assert inserted["normalized_data"]["special_requests"] == "Fauteuil roulant a l'aeroport"
+        assert inserted["normalized_data"]["room_preference"] == "Lit double"
+        assert inserted["normalized_data"]["pmr_needs"] == "Acces rez-de-chaussee"
+        assert inserted["normalized_data"]["remarks"] == "Arrive la veille"
+

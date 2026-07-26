@@ -107,6 +107,67 @@ class EventResponse(ORMBase):
     updated_at: datetime
 
 
+class RegistrationOpenUpdate(BaseModel):
+    """Request body to open/close an event's public registration form."""
+    is_open: bool
+
+
+# ---------------------------------------------------------------------------
+# Public registration form (unauthenticated)
+# ---------------------------------------------------------------------------
+
+class PublicRegistrationInfo(BaseModel):
+    """What the public form page needs to render itself: nothing more."""
+    event_id: UUID
+    event_name: str
+    is_open: bool
+
+
+class PublicRegistrationSubmit(BaseModel):
+    """
+    A participant's own submission of the public registration form.
+
+    Mirrors the fields already on the Registration List (first/last name,
+    email, company, phone, nationality, dietary_requirements) plus the
+    fields the client asked for that have no canonical field yet
+    (special_requests, room_preference, pmr_needs, remarks) -- those pass
+    through as extra keys in source_records.normalized_data exactly like an
+    unrecognized column from an uploaded file (mapping_service.py's
+    catch-all: "no information is ever discarded").
+    """
+    first_name: str = Field(..., min_length=1, max_length=255)
+    last_name: str = Field(..., min_length=1, max_length=255)
+    email: str
+    company: Optional[str] = None
+    phone: Optional[str] = None
+    nationality: Optional[str] = None
+    dietary_requirements: Optional[str] = None
+    food_allergy_info: Optional[str] = None
+    special_requests: Optional[str] = None
+    room_preference: Optional[str] = None
+    pmr_needs: Optional[str] = None
+    remarks: Optional[str] = None
+    consent: bool
+    # Honeypot: real visitors never see or fill this field (hidden by CSS on
+    # the form); a non-empty value means a bot filled every input it found.
+    website: str = ""
+
+    @field_validator("email")
+    @classmethod
+    def email_looks_valid(cls, v: str) -> str:
+        import re
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v.strip()):
+            raise ValueError("Adresse email invalide.")
+        return v.strip().lower()
+
+    @field_validator("consent")
+    @classmethod
+    def consent_is_required(cls, v: bool) -> bool:
+        if not v:
+            raise ValueError("Le consentement est requis pour s'inscrire.")
+        return v
+
+
 # ---------------------------------------------------------------------------
 # Files & Column Mapping
 # ---------------------------------------------------------------------------

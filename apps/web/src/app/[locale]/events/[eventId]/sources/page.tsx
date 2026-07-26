@@ -7,7 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Loader2, Trash2, Plus, X, ClipboardCheck } from 'lucide-react'
+import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Loader2, Trash2, Plus, X, ClipboardCheck, Link2, Copy, Check } from 'lucide-react'
 import type { UploadedFile, FileUploadResponse, MappingReportEntry } from '@/lib/api'
 import { api } from '@/lib/api'
 
@@ -258,6 +258,54 @@ export default function SourcesPage() {
     loadFiles()
   }, [loadFiles])
 
+  // Public registration form link (routers/public_registration.py) — lets
+  // participants fill in their own info instead of a manual Excel export;
+  // submissions feed the exact same consolidation pipeline as any file.
+  const [regLink, setRegLink] = useState<{ url: string; is_open: boolean } | null>(null)
+  const [regLoading, setRegLoading] = useState(true)
+  const [regToggling, setRegToggling] = useState(false)
+  const [regCopied, setRegCopied] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    async function loadLink() {
+      try {
+        const info = await api.events.getRegistrationLink(eventId)
+        if (!cancelled) setRegLink({ url: info.url, is_open: info.is_open })
+      } catch {
+        // Migration 006 not applied yet, or access issue — hide the card
+        // rather than show a broken feature.
+        if (!cancelled) setRegLink(null)
+      } finally {
+        if (!cancelled) setRegLoading(false)
+      }
+    }
+    if (eventId) loadLink()
+    return () => { cancelled = true }
+  }, [eventId])
+
+  const handleCopyRegLink = async () => {
+    if (!regLink) return
+    try {
+      await navigator.clipboard.writeText(regLink.url)
+      setRegCopied(true)
+      setTimeout(() => setRegCopied(false), 2000)
+    } catch { /* clipboard unavailable — link is still selectable/visible */ }
+  }
+
+  const handleToggleRegOpen = async () => {
+    if (!regLink || regToggling) return
+    setRegToggling(true)
+    try {
+      const res = await api.events.setRegistrationOpen(eventId, !regLink.is_open)
+      setRegLink((prev) => (prev ? { ...prev, is_open: res.is_open } : prev))
+    } catch {
+      /* leave state unchanged on failure */
+    } finally {
+      setRegToggling(false)
+    }
+  }
+
   // While a file is still being auto-mapped in the background ('pending'), poll
   // so the list reflects its next state (review / processed) without a manual
   // refresh. Stops as soon as nothing is pending.
@@ -492,6 +540,56 @@ export default function SourcesPage() {
           <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">{t('sources')}</h1>
           <p className="mt-1 text-sm text-[var(--color-text-secondary)]">Importez et configurez vos fichiers sources</p>
         </div>
+
+        {/* Public registration form link */}
+        {!regLoading && regLink && (
+          <Card className="p-4 border-[var(--color-border)] shadow-[var(--shadow-card)]">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <Link2 className="mt-0.5 h-5 w-5 flex-shrink-0 text-[var(--color-accent)]" />
+                <div>
+                  <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+                    Lien d&apos;inscription en ligne
+                  </p>
+                  <p className="text-xs text-[var(--color-text-secondary)]">
+                    Envoyez ce lien aux participants : leurs réponses alimentent automatiquement la master list.
+                  </p>
+                </div>
+              </div>
+              <Badge
+                variant="outline"
+                className={regLink.is_open
+                  ? 'border-[var(--color-success)] text-[var(--color-success)] bg-[var(--color-success-light)]'
+                  : 'border-[var(--color-text-secondary)] text-[var(--color-text-secondary)] bg-slate-50'}
+              >
+                {regLink.is_open ? 'Ouvert' : 'Fermé'}
+              </Badge>
+            </div>
+            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+              <input
+                readOnly
+                value={regLink.url}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full flex-1 truncate rounded-md border border-[var(--color-border)] bg-slate-50 px-3 py-2 text-xs text-[var(--color-text-secondary)] outline-none"
+              />
+              <div className="flex gap-2">
+                <Button variant="outline" type="button" onClick={handleCopyRegLink} className="flex items-center gap-1.5 whitespace-nowrap">
+                  {regCopied ? <Check className="h-3.5 w-3.5 text-[var(--color-success)]" /> : <Copy className="h-3.5 w-3.5" />}
+                  {regCopied ? 'Copié' : 'Copier'}
+                </Button>
+                <Button
+                  variant="outline"
+                  type="button"
+                  onClick={handleToggleRegOpen}
+                  disabled={regToggling}
+                  className="whitespace-nowrap"
+                >
+                  {regToggling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : (regLink.is_open ? 'Fermer' : 'Rouvrir')}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Prominent call-to-action for the import step (§8) */}
         {!isMappingMode && (

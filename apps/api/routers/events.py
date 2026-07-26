@@ -15,8 +15,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 
+import config
 from dependencies import STAFF_ROLES, get_current_user, get_supabase_client, require_role, verify_event_access
-from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse, ProjectCreate, ProjectResponse
+from models.schemas import EventCreate, EventResponse, EventUpdate, MessageResponse, ProjectCreate, ProjectResponse, RegistrationOpenUpdate
 from services import deletion_service
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,69 @@ async def update_event(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found.")
 
     return EventResponse(**result.data[0])
+
+
+@router.get(
+    "/events/{event_id}/registration-link",
+    summary="Get the public registration form link for an event",
+)
+async def get_registration_link(
+    event_id: str,
+    current_user: dict[str, Any] = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """
+    Return the public, unauthenticated registration form URL for an event
+    (routers/public_registration.py), plus whether it currently accepts
+    submissions.
+    """
+    await verify_event_access(event_id, current_user, supabase)
+
+    try:
+        resp = (
+            supabase.table("events")
+            .select("registration_token, registration_open")
+            .eq("id", event_id)
+            .single()
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Event not found, or migration 006 has not been applied yet.",
+        ) from exc
+
+    token = resp.data["registration_token"]
+    return {
+        "token": token,
+        "url": f"{config.WEB_APP_URL}/fr/register/{token}",
+        "is_open": resp.data["registration_open"],
+    }
+
+
+@router.patch(
+    "/events/{event_id}/registration-open",
+    summary="Open or close the public registration form for an event",
+)
+async def set_registration_open(
+    event_id: str,
+    body: RegistrationOpenUpdate,
+    current_user: dict[str, Any] = Depends(require_role(["admin", "pm"])),
+    supabase: Client = Depends(get_supabase_client),
+) -> dict[str, Any]:
+    """Only admin/pm may open or close registration for an event."""
+    await verify_event_access(event_id, current_user, supabase, write=True)
+
+    try:
+        supabase.table("events").update({"registration_open": body.is_open}).eq("id", event_id).execute()
+    except Exception as exc:
+        logger.error("Failed to toggle registration_open for event %s: %s", event_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update registration status.",
+        ) from exc
+
+    return {"is_open": body.is_open}
 
 
 @router.delete(
