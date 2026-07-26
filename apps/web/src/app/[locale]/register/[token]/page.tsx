@@ -6,6 +6,7 @@ import { Loader2, AlertCircle, CheckCircle2, Lock } from 'lucide-react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { EventMaxLogo } from '@/components/ui/EventMaxLogo'
+import { COUNTRIES, suggestCountries } from '@/lib/countries'
 
 type LoadState =
   | { status: 'loading' }
@@ -65,11 +66,17 @@ export default function PublicRegistrationPage() {
   const [error, setError] = useState<string | null>(null)
 
   const [form, setForm] = useState({
-    first_name: '', last_name: '', email: '', company: '', phone: '', nationality: '',
+    first_name: '', last_name: '', email: '', company: '', nationality: '',
     dietary_requirements: '', food_allergy_info: '', special_requests: '', room_preference: '',
     pmr_needs: '', remarks: '', consent: false,
     website: '', // honeypot — left empty by real visitors, never shown
   })
+  // Phone is split so a country code is always attached to the number
+  // (ex. +32 for la Belgique, +213 pour l'Algérie) instead of a bare local
+  // number that's meaningless once mixed with other countries' participants.
+  const [phoneCountryCode, setPhoneCountryCode] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
+  const [showNationalityDropdown, setShowNationalityDropdown] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -100,9 +107,14 @@ export default function PublicRegistrationPage() {
       setError('Merci de cocher la case de consentement pour continuer.')
       return
     }
+    if (phoneNumber.trim() && !phoneCountryCode) {
+      setError("Merci de sélectionner l'indicatif de votre numéro de téléphone (ex. +32 pour la Belgique, +213 pour l'Algérie).")
+      return
+    }
     setSubmitting(true)
     try {
-      await api.publicRegistration.submit(token, form)
+      const phone = phoneCountryCode && phoneNumber.trim() ? `${phoneCountryCode} ${phoneNumber.trim()}` : ''
+      await api.publicRegistration.submit(token, { ...form, phone })
       setState({ status: 'submitted' })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Une erreur est survenue. Merci de réessayer.")
@@ -198,18 +210,74 @@ export default function PublicRegistrationPage() {
           <input id="email" type="email" required value={form.email} onChange={setField('email')} className={fieldClass} disabled={submitting} />
         </Field>
 
-        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
-          <Field id="company" label="Société">
-            <input id="company" type="text" value={form.company} onChange={setField('company')} className={fieldClass} disabled={submitting} />
-          </Field>
-          <Field id="phone" label="Téléphone">
-            <input id="phone" type="tel" value={form.phone} onChange={setField('phone')} className={fieldClass} disabled={submitting} />
-          </Field>
-        </div>
-
-        <Field id="nationality" label="Nationalité">
-          <input id="nationality" type="text" value={form.nationality} onChange={setField('nationality')} className={fieldClass} disabled={submitting} />
+        <Field id="company" label="Société">
+          <input id="company" type="text" value={form.company} onChange={setField('company')} className={fieldClass} disabled={submitting} />
         </Field>
+
+        <Field id="phone_number" label="Téléphone">
+          <div className="flex gap-2">
+            <select
+              id="phone_country_code"
+              value={phoneCountryCode}
+              onChange={(e) => setPhoneCountryCode(e.target.value)}
+              disabled={submitting}
+              className={cn(fieldClass, 'w-[130px] flex-shrink-0')}
+            >
+              <option value="">Indicatif</option>
+              {COUNTRIES.map((c) => (
+                <option key={c.iso2} value={c.dialCode}>{c.dialCode} — {c.name}</option>
+              ))}
+            </select>
+            <input
+              id="phone_number"
+              type="tel"
+              placeholder="4xx xx xx xx"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value)}
+              className={fieldClass}
+              disabled={submitting}
+            />
+          </div>
+          <p className="mt-1 text-xs text-[var(--color-text-secondary)]">
+            Sélectionnez votre indicatif (ex. +32 Belgique, +213 Algérie) si vous renseignez un numéro.
+          </p>
+        </Field>
+
+        <div className="relative">
+          <Field id="nationality" label="Nationalité">
+            <input
+              id="nationality"
+              type="text"
+              autoComplete="off"
+              value={form.nationality}
+              onChange={(e) => {
+                setForm((f) => ({ ...f, nationality: e.target.value }))
+                setShowNationalityDropdown(true)
+              }}
+              onFocus={() => setShowNationalityDropdown(true)}
+              onBlur={() => setTimeout(() => setShowNationalityDropdown(false), 150)}
+              className={fieldClass}
+              disabled={submitting}
+            />
+          </Field>
+          {showNationalityDropdown && (
+            <div className="absolute z-10 -mt-3 max-h-56 w-full overflow-y-auto rounded-lg border border-[var(--color-border)] bg-white shadow-lg">
+              {suggestCountries(form.nationality).map((c) => (
+                <button
+                  key={c.iso2}
+                  type="button"
+                  onMouseDown={() => {
+                    setForm((f) => ({ ...f, nationality: c.name }))
+                    setShowNationalityDropdown(false)
+                  }}
+                  className="block w-full px-3 py-2 text-left text-sm hover:bg-slate-50"
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className="my-5 border-t border-[var(--color-border)] pt-5">
           <h2 className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">Informations complémentaires</h2>

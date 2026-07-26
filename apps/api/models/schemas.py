@@ -152,6 +152,17 @@ class PublicRegistrationSubmit(BaseModel):
     # the form); a non-empty value means a bot filled every input it found.
     website: str = ""
 
+    @field_validator("phone")
+    @classmethod
+    def phone_requires_a_country_code(cls, v: Optional[str]) -> Optional[str]:
+        """The form's own UI requires picking a dial code before a number can
+        be typed (ex. +32 Belgique, +213 Algérie) — this is the server-side
+        backstop for a client that skips the browser form entirely."""
+        import re
+        if v and not re.match(r"^\+\d{1,4}\s", v.strip()):
+            raise ValueError("Le numéro de téléphone doit inclure un indicatif pays (ex. +32, +213).")
+        return v
+
     @field_validator("email")
     @classmethod
     def email_looks_valid(cls, v: str) -> str:

@@ -2645,6 +2645,30 @@ class TestPublicRegistration:
         assert response.status_code == 422
         mocks["source_records"].insert.assert_not_called()
 
+    def test_submit_phone_without_country_code_is_rejected(self):
+        """Server-side backstop for the form's own requirement (the UI
+        forces a dial-code select) — a client that skips the browser form
+        must not be able to save a bare local number."""
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload(phone="0465191575"))
+
+        assert response.status_code == 422
+        mocks["source_records"].insert.assert_not_called()
+
+    def test_submit_phone_with_country_code_is_accepted(self):
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload(phone="+32 465191575"))
+
+        assert response.status_code == 201, response.text
+        inserted = mocks["source_records"].insert.call_args[0][0]
+        assert inserted["raw_data"]["phone"] == "+32 465191575"
+
     def test_submit_honeypot_filled_returns_success_without_writing(self):
         """A bot that fills every field it finds, including the hidden
         honeypot, gets a plain success response -- so it learns nothing --
