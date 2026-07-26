@@ -472,6 +472,14 @@ def detect_duplicate_participant_emails(
 # Main orchestrator
 # ---------------------------------------------------------------------------
 
+def _is_public_form_file(uploaded_file: dict) -> bool:
+    """True for the per-event virtual uploaded_files row that
+    routers/public_registration.py creates for public form submissions —
+    storage_path is set to ``f"public-form/{event_id}"`` there, which never
+    collides with a real upload's ``{event_id}/{file_id}/{filename}`` path."""
+    return (uploaded_file.get("storage_path") or "").startswith("public-form/")
+
+
 def _name_key(first: Any, last: Any) -> str:
     """Normalised 'first last' key (lowercased, accent-stripped) for deduping the
     same person across files when the email is missing or inconsistent."""
@@ -1005,49 +1013,75 @@ async def run_consolidation(
             file_id     = uploaded_file["id"]
             source_type = uploaded_file["source_type"]
             mapping     = uploaded_file.get("column_mapping") or {}
+            primary_ids: list[str] = []
 
-            if not mapping:
+            # Public registration-form submissions (routers/public_registration.py)
+            # are inserted directly as already-normalized source_records — there
+            # is no real document in Storage to download for this "file", and it
+            # has no column_mapping (nothing to map: the data arrives pre-shaped).
+            # Read back what's already there instead of trying to parse a
+            # document that doesn't exist. Found via a real submission: the
+            # empty-mapping guard below silently skipped this file every run, so
+            # the participant's own fields (phone/company/nationality/dietary_
+            # requirements) never merged in even though the raw submission was
+            # correctly linked and visible on their fiche via the separate
+            # orphan-record linking step (2026-07-26).
+            if _is_public_form_file(uploaded_file):
+                try:
+                    existing_resp = (
+                        supabase.table("source_records")
+                        .select("id")
+                        .eq("file_id", file_id)
+                        .execute()
+                    )
+                    primary_ids = [r["id"] for r in (existing_resp.data or [])]
+                except Exception as exc:
+                    logger.warning("Failed to load public-form source_records for file %s: %s", file_id, exc)
+                    primary_ids = []
+                stats["total_source_records"] += len(primary_ids)
+                fresh_record_ids.update(primary_ids)
+                parsed_file_ids.add(file_id)
+            elif not mapping:
                 logger.warning("File %s has no column_mapping — skipping.", file_id)
                 continue
+            else:
+                # Read EVERY sheet. The first sheet uses the human-validated mapping;
+                # additional sheets (hotel / transfers / departures in a combined
+                # master file) are auto-mapped so their data is not lost. Rows that
+                # carry a person's name merge into the same participant, and their
+                # hotel/transfer columns are extracted afterwards.
+                try:
+                    sheets = download_all_sheets(
+                        supabase, uploaded_file["storage_path"], uploaded_file["original_filename"]
+                    )
+                except Exception as exc:
+                    logger.warning("Multi-sheet read failed for %s (%s); falling back to first sheet", file_id, exc)
+                    sheets = {"main": download_and_parse_file(
+                        supabase, uploaded_file["storage_path"], uploaded_file["original_filename"])}
 
-            # Read EVERY sheet. The first sheet uses the human-validated mapping;
-            # additional sheets (hotel / transfers / departures in a combined
-            # master file) are auto-mapped so their data is not lost. Rows that
-            # carry a person's name merge into the same participant, and their
-            # hotel/transfer columns are extracted afterwards.
-            try:
-                sheets = download_all_sheets(
-                    supabase, uploaded_file["storage_path"], uploaded_file["original_filename"]
-                )
-            except Exception as exc:
-                logger.warning("Multi-sheet read failed for %s (%s); falling back to first sheet", file_id, exc)
-                sheets = {"main": download_and_parse_file(
-                    supabase, uploaded_file["storage_path"], uploaded_file["original_filename"])}
-
-            sheet_names = list(sheets.keys())
-            primary_ids: list[str] = []
-            for si, sname in enumerate(sheet_names):
-                sdf = sheets[sname]
-                if si == 0:
-                    sheet_mapping = mapping                       # human-validated
-                else:
-                    sheet_mapping = _auto_sheet_mapping(sdf)      # auto (secondary sheet)
-                    if not sheet_mapping:
-                        continue
-                raw_rows = sdf.to_dict(orient="records")
-                inserted_ids = parse_and_insert_source_records(
-                    supabase=supabase,
-                    file_id=file_id,
-                    event_id=event_id,
-                    df_rows=raw_rows,
-                    mapping=sheet_mapping,
-                    sheet_key=str(si),
-                )
-                stats["total_source_records"] += len(inserted_ids)
-                fresh_record_ids.update(inserted_ids)
-                parsed_file_ids.add(file_id)
-                if si == 0:
-                    primary_ids = inserted_ids
+                sheet_names = list(sheets.keys())
+                for si, sname in enumerate(sheet_names):
+                    sdf = sheets[sname]
+                    if si == 0:
+                        sheet_mapping = mapping                       # human-validated
+                    else:
+                        sheet_mapping = _auto_sheet_mapping(sdf)      # auto (secondary sheet)
+                        if not sheet_mapping:
+                            continue
+                    raw_rows = sdf.to_dict(orient="records")
+                    inserted_ids = parse_and_insert_source_records(
+                        supabase=supabase,
+                        file_id=file_id,
+                        event_id=event_id,
+                        df_rows=raw_rows,
+                        mapping=sheet_mapping,
+                        sheet_key=str(si),
+                    )
+                    stats["total_source_records"] += len(inserted_ids)
+                    fresh_record_ids.update(inserted_ids)
+                    parsed_file_ids.add(file_id)
+                    if si == 0:
+                        primary_ids = inserted_ids
 
             # Build ParticipantRecord objects from the PRIMARY sheet ONLY (the
             # human-validated profile source). Secondary-sheet rows are NOT turned

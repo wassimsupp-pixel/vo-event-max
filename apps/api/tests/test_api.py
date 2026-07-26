@@ -2586,8 +2586,7 @@ class TestPublicRegistration:
 
         assert response.status_code == 404
 
-    @patch("routers.public_registration.consolidation_service.run_consolidation", new_callable=AsyncMock)
-    def test_submit_success_creates_source_record_and_triggers_consolidation(self, mock_run):
+    def test_submit_success_creates_source_record(self):
         mock_supabase, mocks = self._mocked_client(self._event_row())
         app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
         client = TestClient(app)
@@ -2600,7 +2599,21 @@ class TestPublicRegistration:
         assert inserted["raw_data"]["first_name"] == "Ana"
         assert inserted["raw_data"]["email"] == "ana.kaya@example.com"
         assert inserted["event_id"] == self.EVENT_ID
-        mock_run.assert_called_once()
+
+    def test_submit_does_not_auto_trigger_a_consolidation_run(self):
+        """2026-07-26: a real submission took ~58s to respond because
+        BackgroundTasks only finalizes the HTTP response once the task
+        completes -- the visitor's browser sat waiting the whole time. New
+        registrations now just sit in source_records, picked up by the next
+        consolidation (manual or otherwise), exactly like an Excel import."""
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+
+        assert response.status_code == 201, response.text
+        mocks["consolidation_runs"].insert.assert_not_called()
 
     def test_submit_closed_event_is_rejected(self):
         mock_supabase, mocks = self._mocked_client(self._event_row(is_open=False))
@@ -2671,8 +2684,7 @@ class TestPublicRegistration:
             pmr_needs="Acces rez-de-chaussee",
             remarks="Arrive la veille",
         )
-        with patch("routers.public_registration.consolidation_service.run_consolidation", new_callable=AsyncMock):
-            response = client.post(f"/api/public/register/{self.TOKEN}", json=payload)
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=payload)
 
         assert response.status_code == 201, response.text
         inserted = mocks["source_records"].insert.call_args[0][0]
@@ -2680,4 +2692,29 @@ class TestPublicRegistration:
         assert inserted["normalized_data"]["room_preference"] == "Lit double"
         assert inserted["normalized_data"]["pmr_needs"] == "Acces rez-de-chaussee"
         assert inserted["normalized_data"]["remarks"] == "Arrive la veille"
+
+
+class TestIsPublicFormFile:
+    """2026-07-26: a form submission's raw source data reached the
+    participant's fiche (via the separate orphan-record linking step) but
+    company/phone/nationality/dietary_requirements never merged into the
+    participant record itself. Root cause: the virtual uploaded_files row
+    (routers/public_registration.py) has no column_mapping, so the empty-
+    mapping guard in run_consolidation's file loop skipped it every run --
+    its already-inserted source_records never became ParticipantRecords, so
+    they never reached merge_participant_fields. _is_public_form_file is the
+    predicate that now routes this "file" to a different branch instead."""
+
+    def test_recognizes_the_exact_path_public_registration_uses(self):
+        from services.consolidation_service import _is_public_form_file
+        event_id = "00000000-0000-0000-0000-000000000001"
+        assert _is_public_form_file({"storage_path": f"public-form/{event_id}"}) is True
+
+    def test_does_not_match_a_real_uploaded_file_path(self):
+        from services.consolidation_service import _is_public_form_file
+        assert _is_public_form_file({"storage_path": "evt-1/file-1/registrations.xlsx"}) is False
+
+    def test_handles_missing_storage_path(self):
+        from services.consolidation_service import _is_public_form_file
+        assert _is_public_form_file({}) is False
 

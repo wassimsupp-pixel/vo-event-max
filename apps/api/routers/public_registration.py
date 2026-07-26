@@ -11,25 +11,25 @@ migration 006 is applied, `registration_token` doesn't exist and every
 request here 404s; nothing else in the app is affected.
 
 A submission becomes a normal ``source_records`` row (source_type
-'registration') under a single per-event "virtual" uploaded_files row, then
-triggers a background consolidation run — reusing the existing
-import/matching/dedup pipeline entirely rather than a parallel
-implementation, exactly like a real uploaded file would.
+'registration') under a single per-event "virtual" uploaded_files row.
+consolidation_service.run_consolidation has a matching branch that reads
+these back directly (there's no real document in Storage to parse for this
+"file") — the organizer picks them up like any other source by running a
+consolidation, same as after an Excel import; submitting the form does not
+auto-trigger one (see the comment above the return statement below for why).
 """
 
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
 
-from dependencies import get_supabase_client, is_consolidation_running
+from dependencies import get_supabase_client
 from models.schemas import PublicRegistrationInfo, PublicRegistrationSubmit
-from services import consolidation_service
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,6 @@ async def get_registration_info(
 async def submit_registration(
     token: str,
     body: PublicRegistrationSubmit,
-    background_tasks: BackgroundTasks,
     supabase: Client = Depends(get_supabase_client),
 ) -> dict[str, str]:
     event = _find_event_by_token(supabase, token)
@@ -204,30 +203,14 @@ async def submit_registration(
             detail="Échec de l'enregistrement. Réessayez.",
         ) from exc
 
-    # Merge the new registration into the master list promptly by reusing the
-    # existing consolidation pipeline — same matching/dedup/exception logic
-    # as any file import, no parallel code path. If a run is already in
-    # flight, skip triggering another one (the pipeline wipes and rebuilds
-    # from its first step, so two concurrent runs would stomp on each
-    # other) — this submission is picked up by the NEXT consolidation,
-    # whether that's the next registration or a manual run.
-    if not is_consolidation_running(supabase, event_id):
-        run_id = str(uuid.uuid4())
-        try:
-            supabase.table("consolidation_runs").insert({
-                "id": run_id,
-                "event_id": event_id,
-                "triggered_by": system_user_id,
-                "status": "running",
-            }).execute()
-            background_tasks.add_task(
-                consolidation_service.run_consolidation,
-                event_id=event_id,
-                run_id=run_id,
-                user_id=system_user_id,
-                supabase=supabase,
-            )
-        except Exception as exc:
-            logger.warning("Failed to auto-trigger consolidation after public registration for event %s: %s", event_id, exc)
-
+    # Deliberately NOT auto-triggering a consolidation here (2026-07-26): a
+    # real submission measured ~58s end to end because FastAPI's
+    # BackgroundTasks only finalizes the HTTP response after the task
+    # completes, so the visitor's browser sat waiting the whole time instead
+    # of seeing "Merci !" right away. This also matches how every other
+    # source already works in this app — uploading an Excel file doesn't
+    # auto-consolidate either; the organizer reviews and clicks "Lancer la
+    # consolidation" when ready. The new submission sits in source_records
+    # (picked up correctly by run_consolidation's public-form branch above)
+    # until the next consolidation, manual or otherwise.
     return {"status": "ok", "message": "Inscription bien reçue. Merci !"}
