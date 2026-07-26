@@ -67,15 +67,20 @@ export default function PublicRegistrationPage() {
 
   const [form, setForm] = useState({
     first_name: '', last_name: '', email: '', company: '', nationality: '',
+    date_of_birth: '', passport_number: '', passport_expiry: '',
+    job_title: '', badge_name: '', language: '',
     dietary_requirements: '', food_allergy_info: '', special_requests: '', room_preference: '',
-    pmr_needs: '', remarks: '', consent: false,
+    pmr_needs: '', remarks: '', emergency_contact_name: '', consent: false,
     website: '', // honeypot — left empty by real visitors, never shown
   })
   // Phone is split so a country code is always attached to the number
   // (ex. +32 for la Belgique, +213 pour l'Algérie) instead of a bare local
   // number that's meaningless once mixed with other countries' participants.
+  // Same reasoning applies to the emergency contact's number.
   const [phoneCountryCode, setPhoneCountryCode] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
+  const [emergencyCountryCode, setEmergencyCountryCode] = useState('')
+  const [emergencyNumber, setEmergencyNumber] = useState('')
   const [showNationalityDropdown, setShowNationalityDropdown] = useState(false)
 
   useEffect(() => {
@@ -111,10 +116,15 @@ export default function PublicRegistrationPage() {
       setError("Merci de sélectionner l'indicatif de votre numéro de téléphone (ex. +32 pour la Belgique, +213 pour l'Algérie).")
       return
     }
+    if (emergencyNumber.trim() && !emergencyCountryCode) {
+      setError("Merci de sélectionner l'indicatif du contact d'urgence (ex. +32 pour la Belgique, +213 pour l'Algérie).")
+      return
+    }
     setSubmitting(true)
     try {
       const phone = phoneCountryCode && phoneNumber.trim() ? `${phoneCountryCode} ${phoneNumber.trim()}` : ''
-      await api.publicRegistration.submit(token, { ...form, phone })
+      const emergency_contact_phone = emergencyCountryCode && emergencyNumber.trim() ? `${emergencyCountryCode} ${emergencyNumber.trim()}` : ''
+      await api.publicRegistration.submit(token, { ...form, phone, emergency_contact_phone })
       setState({ status: 'submitted' })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Une erreur est survenue. Merci de réessayer.")
@@ -279,6 +289,38 @@ export default function PublicRegistrationPage() {
           )}
         </div>
 
+        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+          <Field id="date_of_birth" label="Date de naissance">
+            <input id="date_of_birth" type="date" value={form.date_of_birth} onChange={setField('date_of_birth')} className={fieldClass} disabled={submitting} />
+          </Field>
+          <Field id="job_title" label="Fonction / Poste">
+            <input id="job_title" type="text" value={form.job_title} onChange={setField('job_title')} className={fieldClass} disabled={submitting} />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+          <Field id="badge_name" label="Nom sur badge">
+            <input id="badge_name" type="text" placeholder="Ex. Ana" value={form.badge_name} onChange={setField('badge_name')} className={fieldClass} disabled={submitting} />
+          </Field>
+          <Field id="language" label="Langue préférée">
+            <select id="language" value={form.language} onChange={setField('language')} className={cn(fieldClass, 'bg-white')} disabled={submitting}>
+              <option value="">Sélectionner...</option>
+              <option value="Français">Français</option>
+              <option value="English">English</option>
+              <option value="Nederlands">Nederlands</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 gap-x-4 sm:grid-cols-2">
+          <Field id="passport_number" label="Numéro de passeport">
+            <input id="passport_number" type="text" value={form.passport_number} onChange={setField('passport_number')} className={fieldClass} disabled={submitting} />
+          </Field>
+          <Field id="passport_expiry" label="Expiration du passeport">
+            <input id="passport_expiry" type="date" value={form.passport_expiry} onChange={setField('passport_expiry')} className={fieldClass} disabled={submitting} />
+          </Field>
+        </div>
+
         <div className="my-5 border-t border-[var(--color-border)] pt-5">
           <h2 className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">Informations complémentaires</h2>
         </div>
@@ -299,6 +341,40 @@ export default function PublicRegistrationPage() {
           <input id="pmr_needs" type="text" placeholder="Ex. Accès fauteuil roulant, chambre accessible..." value={form.pmr_needs} onChange={setField('pmr_needs')} className={fieldClass} disabled={submitting} />
         </Field>
 
+        <div className="my-5 border-t border-[var(--color-border)] pt-5">
+          <h2 className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">Contact d&apos;urgence</h2>
+        </div>
+
+        <Field id="emergency_contact_name" label="Nom du contact">
+          <input id="emergency_contact_name" type="text" value={form.emergency_contact_name} onChange={setField('emergency_contact_name')} className={fieldClass} disabled={submitting} />
+        </Field>
+
+        <Field id="emergency_contact_phone" label="Téléphone du contact">
+          <div className="flex gap-2">
+            <select
+              id="emergency_country_code"
+              value={emergencyCountryCode}
+              onChange={(e) => setEmergencyCountryCode(e.target.value)}
+              disabled={submitting}
+              className={cn(fieldClass, 'w-[130px] flex-shrink-0')}
+            >
+              <option value="">Indicatif</option>
+              {COUNTRIES.map((c) => (
+                <option key={c.iso2} value={c.dialCode}>{c.dialCode} — {c.name}</option>
+              ))}
+            </select>
+            <input
+              id="emergency_contact_phone"
+              type="tel"
+              placeholder="4xx xx xx xx"
+              value={emergencyNumber}
+              onChange={(e) => setEmergencyNumber(e.target.value)}
+              className={fieldClass}
+              disabled={submitting}
+            />
+          </div>
+        </Field>
+
         <Field id="special_requests" label="Demandes spéciales">
           <textarea id="special_requests" rows={2} value={form.special_requests} onChange={setField('special_requests')} className={fieldClass} disabled={submitting} />
         </Field>
@@ -316,9 +392,9 @@ export default function PublicRegistrationPage() {
             className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-[var(--color-border)]"
           />
           <span>
-            J&apos;accepte que les informations transmises ci-dessus, y compris mes préférences alimentaires et mes besoins
-            d&apos;accessibilité le cas échéant, soient utilisées par l&apos;organisateur dans le seul cadre de la préparation
-            de cet événement. <span className="text-[var(--color-danger)]">*</span>
+            J&apos;accepte que les informations transmises ci-dessus, y compris mes préférences alimentaires, mes besoins
+            d&apos;accessibilité, mes données de passeport et mon contact d&apos;urgence le cas échéant, soient utilisées par
+            l&apos;organisateur dans le seul cadre de la préparation de cet événement. <span className="text-[var(--color-danger)]">*</span>
           </span>
         </label>
 

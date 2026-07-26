@@ -2520,8 +2520,11 @@ class TestPublicRegistration:
         payload = {
             "first_name": "Ana", "last_name": "Kaya", "email": "ana.kaya@example.com",
             "company": "", "phone": "", "nationality": "", "dietary_requirements": "",
+            "date_of_birth": "", "passport_number": "", "passport_expiry": "",
+            "job_title": "", "badge_name": "", "language": "",
             "food_allergy_info": "", "special_requests": "", "room_preference": "",
-            "pmr_needs": "", "remarks": "", "consent": True, "website": "",
+            "pmr_needs": "", "remarks": "", "emergency_contact_name": "",
+            "emergency_contact_phone": "", "consent": True, "website": "",
         }
         payload.update(overrides)
         return payload
@@ -2716,6 +2719,50 @@ class TestPublicRegistration:
         assert inserted["normalized_data"]["room_preference"] == "Lit double"
         assert inserted["normalized_data"]["pmr_needs"] == "Acces rez-de-chaussee"
         assert inserted["normalized_data"]["remarks"] == "Arrive la veille"
+
+    def test_submit_travel_and_emergency_contact_fields_reach_normalized_data(self):
+        """date_of_birth/passport_number/passport_expiry/job_title/badge_name/
+        language are canonical fields elsewhere in the app but were never
+        captured at registration time; emergency_contact_name/phone have no
+        canonical field at all. Both groups must reach normalized_data."""
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        payload = self._base_payload(
+            date_of_birth="1990-05-12",
+            passport_number="X1234567",
+            passport_expiry="2030-01-01",
+            job_title="Directrice Marketing",
+            badge_name="Ana K.",
+            language="Français",
+            emergency_contact_name="Deniz Kaya",
+            emergency_contact_phone="+90 5321234567",
+        )
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=payload)
+
+        assert response.status_code == 201, response.text
+        inserted = mocks["source_records"].insert.call_args[0][0]
+        nd = inserted["normalized_data"]
+        assert nd["date_of_birth"] == "1990-05-12"
+        assert nd["passport_number"] == "X1234567"
+        assert nd["passport_expiry"] == "2030-01-01"
+        assert nd["job_title"] == "Directrice Marketing"
+        assert nd["badge_name"] == "Ana K."
+        assert nd["language"] == "Français"
+        assert nd["emergency_contact_name"] == "Deniz Kaya"
+        assert nd["emergency_contact_phone"] == "+90 5321234567"
+
+    def test_submit_emergency_phone_without_country_code_is_rejected(self):
+        mock_supabase, mocks = self._mocked_client(self._event_row())
+        app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+        client = TestClient(app)
+
+        payload = self._base_payload(emergency_contact_phone="0475123456")
+        response = client.post(f"/api/public/register/{self.TOKEN}", json=payload)
+
+        assert response.status_code == 422
+        mocks["source_records"].insert.assert_not_called()
 
 
 class TestIsPublicFormFile:

@@ -128,10 +128,13 @@ class PublicRegistrationSubmit(BaseModel):
     A participant's own submission of the public registration form.
 
     Mirrors the fields already on the Registration List (first/last name,
-    email, company, phone, nationality, dietary_requirements) plus the
-    fields the client asked for that have no canonical field yet
-    (special_requests, room_preference, pmr_needs, remarks) -- those pass
-    through as extra keys in source_records.normalized_data exactly like an
+    email, company, phone, nationality, dietary_requirements), the ones
+    already canonical elsewhere in the app but never captured at
+    registration time (date_of_birth, passport_number, passport_expiry,
+    job_title, badge_name, language), plus the fields the client asked for
+    that have no canonical field yet (special_requests, room_preference,
+    pmr_needs, remarks, emergency_contact_name/phone) -- those pass through
+    as extra keys in source_records.normalized_data exactly like an
     unrecognized column from an uploaded file (mapping_service.py's
     catch-all: "no information is ever discarded").
     """
@@ -141,18 +144,26 @@ class PublicRegistrationSubmit(BaseModel):
     company: Optional[str] = None
     phone: Optional[str] = None
     nationality: Optional[str] = None
+    date_of_birth: Optional[str] = None
+    passport_number: Optional[str] = None
+    passport_expiry: Optional[str] = None
+    job_title: Optional[str] = None
+    badge_name: Optional[str] = None
+    language: Optional[str] = None
     dietary_requirements: Optional[str] = None
     food_allergy_info: Optional[str] = None
     special_requests: Optional[str] = None
     room_preference: Optional[str] = None
     pmr_needs: Optional[str] = None
     remarks: Optional[str] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
     consent: bool
     # Honeypot: real visitors never see or fill this field (hidden by CSS on
     # the form); a non-empty value means a bot filled every input it found.
     website: str = ""
 
-    @field_validator("phone")
+    @field_validator("phone", "emergency_contact_phone")
     @classmethod
     def phone_requires_a_country_code(cls, v: Optional[str]) -> Optional[str]:
         """The form's own UI requires picking a dial code before a number can
