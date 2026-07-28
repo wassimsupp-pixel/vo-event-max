@@ -157,14 +157,25 @@ export default function ParticipantDetailPage() {
     e.preventDefault()
     if (!participant) return
     setSaving(true)
+    setError(null)
     try {
       const formData = new FormData(e.currentTarget)
-      const update: Record<string, string> = {}
-      EDITABLE_FIELDS.forEach(f => {
-        const val = formData.get(f)
-        if (val !== null) update[f] = val as string
-      })
-      const updated = await api.participants.update(participantId, update)
+      // The backend writes one change_log entry per field (non-repudiation),
+      // so a multi-field form save is one PATCH per changed field, not one
+      // bulk PATCH — see routers/participants.py's ParticipantUpdate.
+      let updated = participant
+      for (const field of EDITABLE_FIELDS) {
+        const val = formData.get(field)
+        if (val === null) continue
+        const newValue = val as string
+        const oldValue = (participant as unknown as Record<string, string | undefined>)[field] ?? ''
+        if (newValue === oldValue) continue
+        updated = await api.participants.update(participantId, {
+          field,
+          value: newValue,
+          reason: 'manual_edit',
+        })
+      }
       setParticipant(updated)
       setIsSaved(true)
       setTimeout(() => setIsSaved(false), 2000)

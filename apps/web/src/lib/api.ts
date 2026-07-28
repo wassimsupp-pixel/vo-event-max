@@ -70,13 +70,11 @@ export interface PaginatedParticipants {
   total_pages: number
 }
 
-export interface ParticipantUpdate {
-  first_name?: string
-  last_name?: string
-  email?: string
-  company?: string
-  phone?: string
-  [key: string]: string | undefined
+export interface ParticipantFieldUpdate {
+  field: string
+  value: string | null
+  reason: string
+  lock?: boolean
 }
 
 export interface ColumnMappingSuggestion {
@@ -539,7 +537,7 @@ export const api = {
       return request(`/api/participants/${participantId}/consolidated`)
     },
 
-    async update(participantId: string, update: ParticipantUpdate): Promise<Participant> {
+    async update(participantId: string, update: ParticipantFieldUpdate): Promise<Participant> {
       const p = await request<any>(`/api/participants/${participantId}`, {
         method: 'PATCH',
         body: JSON.stringify(update),
@@ -548,17 +546,11 @@ export const api = {
     },
 
     async lockField(participantId: string, field: string): Promise<void> {
-      await request(`/api/participants/${participantId}/lock`, {
-        method: 'POST',
-        body: JSON.stringify({ field }),
-      })
+      await request(`/api/participants/${participantId}/lock/${field}`, { method: 'POST' })
     },
 
     async unlockField(participantId: string, field: string): Promise<void> {
-      await request(`/api/participants/${participantId}/lock`, {
-        method: 'DELETE',
-        body: JSON.stringify({ field }),
-      })
+      await request(`/api/participants/${participantId}/unlock/${field}`, { method: 'POST' })
     },
   },
   events: {
