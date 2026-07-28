@@ -385,6 +385,25 @@ class TestParticipantFieldAllowlist:
         assert response.status_code == 400
 
 
+class TestParticipantListPhoneField:
+    """2026-07-28: the participants list table renders a Téléphone column
+    (apps/web/.../participants/page.tsx renders p.phone), but
+    PARTICIPANT_LIST_SELECT and ParticipantListItem never included phone --
+    a phone number saved correctly (visible on the detail fiche, which uses
+    PARTICIPANT_FULL_SELECT) still showed as "—" in the list because the
+    list query never fetched it and the response model would have stripped
+    it out even if it had."""
+
+    def test_phone_is_selected_in_list_query(self):
+        from routers.participants import PARTICIPANT_LIST_SELECT
+        columns = [c.strip() for c in PARTICIPANT_LIST_SELECT.split(",")]
+        assert "phone" in columns
+
+    def test_phone_is_a_list_item_field(self):
+        from models.schemas import ParticipantListItem
+        assert "phone" in ParticipantListItem.model_fields
+
+
 class TestEmailAgentAccessControl:
     """The Email Agent router had NO ownership check at all (2026-07-21 audit):
     any authenticated user, any org, could list another org's email

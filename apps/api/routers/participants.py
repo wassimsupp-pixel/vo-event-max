@@ -72,7 +72,7 @@ PARTICIPANT_FULL_SELECT = (
 
 # Fields returned in list view (no dietary_requirements)
 PARTICIPANT_LIST_SELECT = (
-    "id, event_id, first_name, last_name, email, company, "
+    "id, event_id, first_name, last_name, email, company, phone, "
     "completeness_status, has_flight, has_hotel, has_transfer, has_activities"
 )
 

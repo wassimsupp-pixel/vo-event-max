@@ -317,6 +317,7 @@ class ParticipantListItem(ORMBase):
     last_name: str
     email: Optional[str] = None
     company: Optional[str] = None
+    phone: Optional[str] = None
     completeness_status: str
     has_flight: bool
     has_hotel: bool
