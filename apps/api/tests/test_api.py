@@ -2500,8 +2500,9 @@ class TestFallbackArrivalAirport:
 class TestPublicRegistration:
     """The public, unauthenticated per-event registration form: a submission
     becomes a source_records row under a single per-event virtual
-    uploaded_files row, then triggers a background consolidation run so it
-    reuses the existing matching/dedup pipeline instead of a parallel one."""
+    uploaded_files row, then fires a background-thread consolidation run so
+    it reuses the existing matching/dedup pipeline instead of a parallel
+    one, without the visitor's browser waiting on it."""
 
     TOKEN = "11111111-1111-1111-1111-111111111111"
     EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
@@ -2603,20 +2604,48 @@ class TestPublicRegistration:
         assert inserted["raw_data"]["email"] == "ana.kaya@example.com"
         assert inserted["event_id"] == self.EVENT_ID
 
-    def test_submit_does_not_auto_trigger_a_consolidation_run(self):
+    def test_submit_triggers_background_consolidation_thread(self):
         """2026-07-26: a real submission took ~58s to respond because
-        BackgroundTasks only finalizes the HTTP response once the task
-        completes -- the visitor's browser sat waiting the whole time. New
-        registrations now just sit in source_records, picked up by the next
-        consolidation (manual or otherwise), exactly like an Excel import."""
+        FastAPI's BackgroundTasks awaits the consolidation coroutine on the
+        same event loop that still has to flush the response. The fix is a
+        real OS thread (routers.public_registration._trigger_background_consolidation)
+        that runs fully independently -- verify it's invoked with the right
+        event/user without actually spinning up a thread in this test."""
         mock_supabase, mocks = self._mocked_client(self._event_row())
         app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
         client = TestClient(app)
 
-        response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
+        with patch("routers.public_registration._trigger_background_consolidation") as mock_trigger:
+            response = client.post(f"/api/public/register/{self.TOKEN}", json=self._base_payload())
 
         assert response.status_code == 201, response.text
+        mock_trigger.assert_called_once_with(self.EVENT_ID, self.OWNER_ID)
         mocks["consolidation_runs"].insert.assert_not_called()
+
+    def test_submit_background_thread_runs_start_and_run_consolidation(self):
+        """The thread target itself (not the trigger wrapper) must build its
+        own Supabase client and call the same start_and_run_consolidation
+        used by mapped Excel uploads -- catches a regression where the
+        thread silently no-ops or calls the wrong function."""
+        from routers.public_registration import _run_consolidation_in_thread
+
+        with patch("dependencies._build_supabase_client") as mock_build, \
+             patch("services.consolidation_service.start_and_run_consolidation", new_callable=AsyncMock) as mock_start:
+            mock_client = MagicMock()
+            mock_build.return_value = mock_client
+
+            _run_consolidation_in_thread(self.EVENT_ID, self.OWNER_ID)
+
+            mock_build.assert_called_once()
+            mock_start.assert_awaited_once_with(self.EVENT_ID, self.OWNER_ID, mock_client)
+
+    def test_submit_background_thread_swallows_consolidation_errors(self):
+        """A failed background consolidation must not surface anywhere the
+        (long-gone) HTTP client could see it -- just log and move on."""
+        from routers.public_registration import _run_consolidation_in_thread
+
+        with patch("dependencies._build_supabase_client", side_effect=RuntimeError("boom")):
+            _run_consolidation_in_thread(self.EVENT_ID, self.OWNER_ID)  # must not raise
 
     def test_submit_closed_event_is_rejected(self):
         mock_supabase, mocks = self._mocked_client(self._event_row(is_open=False))

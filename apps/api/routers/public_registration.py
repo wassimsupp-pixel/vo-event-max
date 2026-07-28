@@ -14,14 +14,18 @@ A submission becomes a normal ``source_records`` row (source_type
 'registration') under a single per-event "virtual" uploaded_files row.
 consolidation_service.run_consolidation has a matching branch that reads
 these back directly (there's no real document in Storage to parse for this
-"file") — the organizer picks them up like any other source by running a
-consolidation, same as after an Excel import; submitting the form does not
-auto-trigger one (see the comment above the return statement below for why).
+"file"). A successful submit then fires a real OS thread (see
+_trigger_background_consolidation below) that runs start_and_run_consolidation
+so the new participant lands in the master list within seconds, without the
+visitor's browser waiting on it — see that function's docstring for why a
+plain FastAPI BackgroundTask isn't used here.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import threading
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -30,6 +34,7 @@ from supabase import Client
 
 from dependencies import get_supabase_client
 from models.schemas import PublicRegistrationInfo, PublicRegistrationSubmit
+from services import consolidation_service
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +98,34 @@ def _get_or_create_form_file(supabase: Client, event_id: str, imported_by: str |
         .execute()
     )
     return result.data[0]["id"]
+
+
+def _run_consolidation_in_thread(event_id: str, user_id: str) -> None:
+    """Executed inside the dedicated thread started by
+    _trigger_background_consolidation. Builds its own Supabase client (a
+    request-scoped one shouldn't be assumed safe to reuse once the request
+    that created it has returned) and its own asyncio event loop (threads
+    don't have one by default) to run the same consolidation path a mapped
+    Excel upload uses."""
+    try:
+        from dependencies import _build_supabase_client
+        thread_supabase = _build_supabase_client()
+        asyncio.run(consolidation_service.start_and_run_consolidation(event_id, user_id, thread_supabase))
+    except Exception:
+        logger.exception("Background consolidation thread failed for event %s", event_id)
+
+
+def _trigger_background_consolidation(event_id: str, user_id: str) -> None:
+    """Fire-and-forget on a real OS thread, deliberately NOT FastAPI's
+    BackgroundTasks: a real submission measured ~58s end to end (2026-07-26)
+    because BackgroundTasks awaits the consolidation coroutine on the same
+    event loop that still has to flush this request's response, and
+    run_consolidation makes many synchronous (blocking) Supabase calls on
+    that loop. A plain thread runs fully independently, so the visitor sees
+    "Merci !" immediately while the master list updates in the background.
+    start_and_run_consolidation no-ops if a run is already fresh for this
+    event, so concurrent submissions don't pile up overlapping runs."""
+    threading.Thread(target=_run_consolidation_in_thread, args=(event_id, user_id), daemon=True).start()
 
 
 @router.get(
@@ -203,14 +236,5 @@ async def submit_registration(
             detail="Échec de l'enregistrement. Réessayez.",
         ) from exc
 
-    # Deliberately NOT auto-triggering a consolidation here (2026-07-26): a
-    # real submission measured ~58s end to end because FastAPI's
-    # BackgroundTasks only finalizes the HTTP response after the task
-    # completes, so the visitor's browser sat waiting the whole time instead
-    # of seeing "Merci !" right away. This also matches how every other
-    # source already works in this app — uploading an Excel file doesn't
-    # auto-consolidate either; the organizer reviews and clicks "Lancer la
-    # consolidation" when ready. The new submission sits in source_records
-    # (picked up correctly by run_consolidation's public-form branch above)
-    # until the next consolidation, manual or otherwise.
+    _trigger_background_consolidation(event_id, system_user_id)
     return {"status": "ok", "message": "Inscription bien reçue. Merci !"}
