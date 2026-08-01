@@ -480,6 +480,79 @@ def _is_public_form_file(uploaded_file: dict) -> bool:
     return (uploaded_file.get("storage_path") or "").startswith("public-form/")
 
 
+def _load_public_form_record_ids(supabase: Client, file_id: str) -> list[str]:
+    """All source_record ids for the public-form virtual file, paginated
+    (PostgREST caps a single select at 1000 rows) and in a deterministic
+    order (row_index, then id for the rare duplicate row_index produced by
+    the router's count-then-insert) so match_sources' first-encountered-wins
+    tie-break stays stable across runs (audit PROP-002)."""
+    ids: list[str] = []
+    offset = 0
+    limit = 1000
+    while True:
+        resp = (
+            supabase.table("source_records")
+            .select("id")
+            .eq("file_id", file_id)
+            .order("row_index")
+            .order("id")
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+        data = resp.data or []
+        ids.extend(r["id"] for r in data)
+        if len(data) < limit:
+            break
+        offset += limit
+    return ids
+
+
+def _purge_scope(mapped_files: list[dict], parsed_file_ids: set[str]) -> set[str]:
+    """Files whose source_records the stale-copy purge may touch. Public-form
+    virtual files are excluded: their rows are inserted exactly once by
+    routers/public_registration.py and never re-inserted by a run, so they
+    can never have stale copies — but a submission that lands *while* a run
+    is in flight (after the run read the file's ids, before the purge) would
+    look exactly like a stray and be deleted, destroying a visitor's
+    registration. Same for rows beyond the read's pagination horizon."""
+    public_form_ids = {f["id"] for f in mapped_files if _is_public_form_file(f)}
+    return parsed_file_ids - public_form_ids
+
+
+def _late_public_form_submissions(
+    supabase: Client,
+    event_id: str,
+    public_form_counts: dict[str, int],
+) -> bool:
+    """True when public-form submissions exist that this run did not read —
+    either rows added to a known virtual file after step 3 read it, or a
+    virtual file created mid-run by a first-ever submission (it wasn't in
+    mapped_files at all). Pure count comparison on the DB side, so it does
+    not depend on clock agreement between the API server and Postgres."""
+    try:
+        files_resp = (
+            supabase.table("uploaded_files")
+            .select("id")
+            .eq("event_id", event_id)
+            .eq("storage_path", f"public-form/{event_id}")
+            .execute()
+        )
+        for row in files_resp.data or []:
+            fid = row["id"]
+            cnt_resp = (
+                supabase.table("source_records")
+                .select("id", count="exact")
+                .eq("file_id", fid)
+                .limit(1)
+                .execute()
+            )
+            if (cnt_resp.count or 0) > public_form_counts.get(fid, 0):
+                return True
+    except Exception as exc:
+        logger.warning("Late public-form submission check failed for event %s: %s", event_id, exc)
+    return False
+
+
 def _name_key(first: Any, last: Any) -> str:
     """Normalised 'first last' key (lowercased, accent-stripped) for deduping the
     same person across files when the email is missing or inconsistent."""
@@ -1005,6 +1078,10 @@ async def run_consolidation(
         # (records used to be re-inserted with random UUIDs) and gets purged.
         fresh_record_ids: set[str] = set()
         parsed_file_ids: set[str] = set()
+        # Per public-form file: how many submissions step 3 read. Compared
+        # against a fresh count at the end of the run to catch submissions
+        # that landed while the run was already past its read step.
+        public_form_counts: dict[str, int] = {}
 
         # ---------------------------------------------------------------
         # 3. Parse files, insert source_records, build in-memory lists
@@ -1028,19 +1105,16 @@ async def run_consolidation(
             # orphan-record linking step (2026-07-26).
             if _is_public_form_file(uploaded_file):
                 try:
-                    existing_resp = (
-                        supabase.table("source_records")
-                        .select("id")
-                        .eq("file_id", file_id)
-                        .execute()
-                    )
-                    primary_ids = [r["id"] for r in (existing_resp.data or [])]
+                    primary_ids = _load_public_form_record_ids(supabase, file_id)
                 except Exception as exc:
                     logger.warning("Failed to load public-form source_records for file %s: %s", file_id, exc)
                     primary_ids = []
                 stats["total_source_records"] += len(primary_ids)
                 fresh_record_ids.update(primary_ids)
                 parsed_file_ids.add(file_id)
+                # Remembered so the tail of the run can detect submissions
+                # that arrived after this read and chain a follow-up run.
+                public_form_counts[file_id] = len(primary_ids)
             elif not mapping:
                 logger.warning("File %s has no column_mapping — skipping.", file_id)
                 continue
@@ -1397,10 +1471,13 @@ async def run_consolidation(
         #       used to be re-inserted with random UUIDs each run — the stale
         #       copies carried pre-repair data: junk passports, inflated
         #       hotel counts). Participants were repointed in step 5.
+        #       Public-form files are excluded (_purge_scope): their rows are
+        #       never re-inserted, so a submission that landed mid-run would
+        #       be the only copy — purging it would destroy the registration.
         # ---------------------------------------------------------------
         try:
             stats["stale_records_purged"] = cleanup_stale_source_records(
-                event_id, fresh_record_ids, parsed_file_ids, supabase
+                event_id, fresh_record_ids, _purge_scope(mapped_files, parsed_file_ids), supabase
             )
         except Exception as exc:
             logger.warning("Stale source-record cleanup failed: %s", exc)
@@ -1610,7 +1687,9 @@ async def run_consolidation(
 
         # Re-fuse if a file was uploaded DURING this run (rapid multi-file drop):
         # such a file is still 'mapped' (this run only marked its own snapshot
-        # 'processed'). Chain one more run, depth-capped to avoid loops.
+        # 'processed'). Same for a public-form submission that landed after
+        # step 3 read the virtual file — without this it would sit invisible
+        # until the next trigger. Chain one more run, depth-capped to avoid loops.
         if _depth < 5:
             try:
                 late = (
@@ -1621,7 +1700,7 @@ async def run_consolidation(
                     .limit(1)
                     .execute()
                 )
-                if late.data:
+                if late.data or _late_public_form_submissions(supabase, event_id, public_form_counts):
                     next_run_id = str(uuid.uuid4())
                     supabase.table("consolidation_runs").insert({
                         "id": next_run_id,

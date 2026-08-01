@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import traceback
 
 from fastapi import FastAPI, Request
@@ -49,14 +50,39 @@ app = FastAPI(
 # Filter out '*' wildcard from allowed_origins to prevent Starlette crash when allow_credentials=True
 safe_origins = [origin.strip() for origin in config.ALLOWED_ORIGINS if origin.strip() and origin.strip() != "*"]
 
+# Single source of truth for the origin regex: the middleware AND the global
+# exception handler below must agree, otherwise unhandled 500s reach the
+# browser without CORS headers (see the handler for why).
+CORS_ORIGIN_REGEX = "https://.*\\.vercel\\.app|https://.*\\.railway\\.app|http://localhost:3000"
+_cors_origin_re = re.compile(CORS_ORIGIN_REGEX)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=safe_origins,
-    allow_origin_regex="https://.*\\.vercel\\.app|https://.*\\.railway\\.app|http://localhost:3000",
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _cors_headers_for(request: Request) -> dict[str, str]:
+    """CORS headers for responses produced OUTSIDE the middleware stack.
+
+    Starlette handles the catch-all Exception handler in ServerErrorMiddleware,
+    which sits outside CORSMiddleware — so its response never gets CORS
+    headers, and the browser surfaces an opaque "Failed to fetch" instead of
+    the JSON error (this is exactly what made the 2026-07 hotel-assignment
+    500 hard to diagnose). Echo the origin here iff it would have been
+    allowed by the middleware."""
+    origin = request.headers.get("origin", "")
+    if origin and (origin in safe_origins or _cors_origin_re.fullmatch(origin)):
+        return {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary": "Origin",
+        }
+    return {}
 
 # ---------------------------------------------------------------------------
 # Global exception handler
@@ -88,7 +114,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
     if not is_production:
         body["debug_traceback"] = traceback.format_exc()
 
-    return JSONResponse(status_code=500, content=body)
+    return JSONResponse(status_code=500, content=body, headers=_cors_headers_for(request))
 
 
 # ---------------------------------------------------------------------------

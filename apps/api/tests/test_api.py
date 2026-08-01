@@ -2837,3 +2837,153 @@ class TestIsPublicFormFile:
         from services.consolidation_service import _is_public_form_file
         assert _is_public_form_file({}) is False
 
+
+class TestPublicFormPurgeSafety:
+    """2026-08-01 audit: the stale-copy purge (cleanup_stale_source_records)
+    deletes any source_record whose file was parsed this run but whose id
+    wasn't (re)read by it. Public-form rows are inserted exactly once by the
+    router and never re-inserted -- so a submission landing DURING a run
+    (after step 3 read the virtual file, before the purge) looked exactly
+    like a stray and was permanently deleted: a visitor's registration
+    silently destroyed. Same fate for rows beyond the unpaginated read's
+    1000-row PostgREST cap. The fix: public-form files are excluded from the
+    purge scope, the read is paginated, and the end of each run counts the
+    file's rows again to chain a follow-up run for late arrivals."""
+
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+
+    def test_purge_scope_excludes_public_form_files(self):
+        from services.consolidation_service import _purge_scope
+        mapped_files = [
+            {"id": "f-excel", "storage_path": "evt/f-excel/reg.xlsx"},
+            {"id": "f-form", "storage_path": f"public-form/{self.EVENT_ID}"},
+        ]
+        scope = _purge_scope(mapped_files, {"f-excel", "f-form"})
+        assert scope == {"f-excel"}
+
+    def test_purge_scope_keeps_normal_files_untouched(self):
+        from services.consolidation_service import _purge_scope
+        mapped_files = [{"id": "f1", "storage_path": "evt/f1/a.xlsx"}]
+        assert _purge_scope(mapped_files, {"f1", "f2"}) == {"f1", "f2"}
+
+    def test_load_public_form_record_ids_paginates_past_1000(self):
+        from services.consolidation_service import _load_public_form_record_ids
+
+        page1 = [{"id": f"sr-{i}"} for i in range(1000)]
+        page2 = [{"id": "sr-1000"}, {"id": "sr-1001"}]
+        mock_supabase = MagicMock()
+        chain = mock_supabase.table.return_value.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute
+        chain.side_effect = [MagicMock(data=page1), MagicMock(data=page2)]
+
+        ids = _load_public_form_record_ids(mock_supabase, "f-form")
+
+        assert len(ids) == 1002
+        assert ids[0] == "sr-0" and ids[-1] == "sr-1001"
+
+    def test_late_submissions_detected_when_count_grew(self):
+        from services.consolidation_service import _late_public_form_submissions
+
+        mock_supabase = MagicMock()
+        files_exec = mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute
+        files_exec.return_value.data = [{"id": "f-form"}]
+        count_exec = mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute
+        count_exec.return_value.count = 5
+
+        assert _late_public_form_submissions(mock_supabase, self.EVENT_ID, {"f-form": 3}) is True
+        assert _late_public_form_submissions(mock_supabase, self.EVENT_ID, {"f-form": 5}) is False
+
+    def test_late_submissions_detected_for_file_created_mid_run(self):
+        """First-ever submission arriving mid-run creates the virtual file
+        itself -- it was never in mapped_files, so its count baseline is 0."""
+        from services.consolidation_service import _late_public_form_submissions
+
+        mock_supabase = MagicMock()
+        files_exec = mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute
+        files_exec.return_value.data = [{"id": "f-brand-new"}]
+        count_exec = mock_supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute
+        count_exec.return_value.count = 1
+
+        assert _late_public_form_submissions(mock_supabase, self.EVENT_ID, {}) is True
+
+    def test_late_submissions_check_failure_is_not_fatal(self):
+        from services.consolidation_service import _late_public_form_submissions
+
+        mock_supabase = MagicMock()
+        mock_supabase.table.side_effect = RuntimeError("db down")
+        assert _late_public_form_submissions(mock_supabase, self.EVENT_ID, {}) is False
+
+
+class TestPublicFormDebounce:
+    """Anti-burst pacing for the per-submission consolidation trigger: runs
+    stay >= 60s apart during a registration wave instead of one full
+    master-list rebuild per submission."""
+
+    def test_no_wait_when_no_previous_run(self):
+        from routers.public_registration import _debounce_wait_seconds
+        from datetime import datetime, timezone
+        assert _debounce_wait_seconds(None, datetime.now(timezone.utc)) == 0.0
+
+    def test_no_wait_when_previous_run_is_old(self):
+        from routers.public_registration import _debounce_wait_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        old = (now - timedelta(minutes=10)).isoformat()
+        assert _debounce_wait_seconds(old, now) == 0.0
+
+    def test_waits_out_the_remainder_when_previous_run_is_fresh(self):
+        from routers.public_registration import _debounce_wait_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        recent = (now - timedelta(seconds=20)).isoformat()
+        wait = _debounce_wait_seconds(recent, now)
+        assert 39.0 < wait <= 40.0
+
+    def test_future_timestamp_from_clock_skew_means_no_wait(self):
+        from routers.public_registration import _debounce_wait_seconds
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        future = (now + timedelta(seconds=30)).isoformat()
+        assert _debounce_wait_seconds(future, now) == 0.0
+
+    def test_unparsable_timestamp_means_no_wait(self):
+        from routers.public_registration import _debounce_wait_seconds
+        from datetime import datetime, timezone
+        assert _debounce_wait_seconds("not-a-date", datetime.now(timezone.utc)) == 0.0
+
+
+class TestGlobalExceptionHandlerCors:
+    """Starlette serves the catch-all Exception handler from
+    ServerErrorMiddleware, OUTSIDE CORSMiddleware -- so unhandled 500s used
+    to reach the browser without CORS headers and surface as an opaque
+    'Failed to fetch' (exactly what obscured the 2026-07 hotel 500).
+    _cors_headers_for echoes the origin iff the middleware would allow it."""
+
+    def _request_with_origin(self, origin):
+        req = MagicMock()
+        req.headers = {"origin": origin} if origin else {}
+        return req
+
+    def test_allowed_origin_is_echoed(self):
+        from main import _cors_headers_for
+        headers = _cors_headers_for(self._request_with_origin("https://web-beta-seven-wurgbjii1c.vercel.app"))
+        assert headers["Access-Control-Allow-Origin"] == "https://web-beta-seven-wurgbjii1c.vercel.app"
+        assert headers["Access-Control-Allow-Credentials"] == "true"
+
+    def test_localhost_dev_origin_is_echoed(self):
+        from main import _cors_headers_for
+        headers = _cors_headers_for(self._request_with_origin("http://localhost:3000"))
+        assert headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
+
+    def test_unknown_origin_gets_no_cors_headers(self):
+        from main import _cors_headers_for
+        assert _cors_headers_for(self._request_with_origin("https://evil.example.com")) == {}
+
+    def test_no_origin_header_gets_no_cors_headers(self):
+        from main import _cors_headers_for
+        assert _cors_headers_for(self._request_with_origin(None)) == {}
+
+    def test_regex_does_not_match_lookalike_suffix_domain(self):
+        """fullmatch, not search: 'https://x.vercel.app.evil.com' must NOT pass."""
+        from main import _cors_headers_for
+        assert _cors_headers_for(self._request_with_origin("https://x.vercel.app.evil.com")) == {}
+

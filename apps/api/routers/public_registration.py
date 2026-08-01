@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -100,6 +101,31 @@ def _get_or_create_form_file(supabase: Client, event_id: str, imported_by: str |
     return result.data[0]["id"]
 
 
+# A registration wave (organizer mails the link to hundreds of people) must
+# not turn into one full master-list rebuild per submission. Each run takes
+# 30-60s of DB work; one per minute keeps the list near-live at a fraction
+# of the load, and a submission that lands during someone else's run is
+# picked up by that run's end-of-run chain (consolidation_service's
+# _late_public_form_submissions), so nothing is ever left behind.
+_MIN_SECONDS_BETWEEN_RUNS = 60.0
+
+
+def _debounce_wait_seconds(last_run_started_at: str | None, now: datetime) -> float:
+    """Seconds to sleep before starting a run so runs stay at least
+    _MIN_SECONDS_BETWEEN_RUNS apart. 0 when there's no previous run, the
+    previous one is old enough, or its timestamp is unparsable."""
+    if not last_run_started_at:
+        return 0.0
+    try:
+        started = datetime.fromisoformat(last_run_started_at.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0
+    elapsed = (now - started).total_seconds()
+    if elapsed < 0:  # clock skew — don't sleep on a future timestamp
+        return 0.0
+    return max(0.0, _MIN_SECONDS_BETWEEN_RUNS - elapsed)
+
+
 def _run_consolidation_in_thread(event_id: str, user_id: str) -> None:
     """Executed inside the dedicated thread started by
     _trigger_background_consolidation. Builds its own Supabase client (a
@@ -110,6 +136,41 @@ def _run_consolidation_in_thread(event_id: str, user_id: str) -> None:
     try:
         from dependencies import _build_supabase_client
         thread_supabase = _build_supabase_client()
+
+        # Anti-burst debounce (best-effort — any failure falls through to a
+        # normal immediate run rather than losing the trigger).
+        try:
+            triggered_at = datetime.now(timezone.utc)
+            last = (
+                thread_supabase.table("consolidation_runs")
+                .select("started_at")
+                .eq("event_id", event_id)
+                .order("started_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            wait = _debounce_wait_seconds(
+                (last.data or [{}])[0].get("started_at"), triggered_at
+            )
+            if wait > 0:
+                time.sleep(wait)
+                # A run that started after this submission was inserted has
+                # already read it (the public-form branch reads at step 3) —
+                # nothing left to do. If clock skew makes this skip wrongly,
+                # that run's end-of-run count check chains a follow-up anyway.
+                newer = (
+                    thread_supabase.table("consolidation_runs")
+                    .select("id")
+                    .eq("event_id", event_id)
+                    .gte("started_at", triggered_at.isoformat())
+                    .limit(1)
+                    .execute()
+                )
+                if newer.data:
+                    return
+        except Exception:
+            pass
+
         asyncio.run(consolidation_service.start_and_run_consolidation(event_id, user_id, thread_supabase))
     except Exception:
         logger.exception("Background consolidation thread failed for event %s", event_id)
