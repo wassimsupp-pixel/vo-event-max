@@ -9,9 +9,14 @@ pour validation humaine avant toute implémentation.
 
 ---
 
-## PROP-001 [CRITIQUE] — L'IA fusionne des participants de façon autonome, sans validation humaine
+## PROP-001 [CRITIQUE] — **APPLIQUÉ le 2026-08-01, validation explicite reçue en chat ("fait tout ce qui reste").** L'IA fusionnait des participants de façon autonome, sans validation humaine
 
-**Statut : violation confirmée du principe non-négociable énoncé dans le brief d'audit.**
+**Statut : corrigé.** La branche d'auto-fusion (verdict "fusionner" à confiance ≥ 75) a été supprimée
+de `detect_ambiguous_duplicate_participants` : tout verdict non-"separer" passe désormais par
+`ARB.create_candidate(...)` (file "Fusions à vérifier"), quelle que soit la confiance. La file est déjà
+triée par score décroissant côté API, les cas évidents remontent donc en tête. Deux tests de
+non-régression couvrent le comportement (TestAIArbitrationNeverAutoMerges) : un "fusionner" à
+confiance 99 est mis en file sans fusion, un "separer" est écarté sans mise en file.
 
 ### Où
 - `apps/api/services/consolidation_service.py`, fonction `detect_ambiguous_duplicate_participants`, ligne **2854** :

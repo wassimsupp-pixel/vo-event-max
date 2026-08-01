@@ -2859,10 +2859,14 @@ def detect_ambiguous_duplicate_participants(
     Step 6f — AI arbitration of the ambiguous middle band. Find participant pairs
     whose names are similar enough to be suspicious but not certain (rapidfuzz
     ~78-93), skip the ones the data already settles (two different non-empty
-    emails = two people), and let the reasoning LLM arbitrate the rest. Confident
-    "fusionner" verdicts are merged on the spot; everything else becomes a
-    ``match_candidates`` row for side-by-side human review. Bounded by
-    ``MAX_ARBITRATIONS_PER_RUN``. Returns ``{"auto_merged", "candidates"}``.
+    emails = two people), and let the reasoning LLM arbitrate the rest. EVERY
+    non-"separer" verdict — including a high-confidence "fusionner" — becomes a
+    ``match_candidates`` row for side-by-side human review; the AI never merges
+    on its own (PROP-001, applied 2026-08-01: _merge_participant_into is
+    destructive and irreversible, and the LLM's confidence score is
+    self-declared — a human must see every merge). Bounded by
+    ``MAX_ARBITRATIONS_PER_RUN``. Returns ``{"auto_merged", "candidates"}``
+    (auto_merged is always 0 now, kept for the stats contract).
     """
     from services import arbitration_service as ARB
 
@@ -2926,16 +2930,13 @@ def detect_ambiguous_duplicate_participants(
     except Exception as exc:
         logger.warning("Could not clear pending match candidates: %s", exc)
 
-    auto_merged = 0
+    auto_merged = 0  # always 0 since PROP-001 — kept for the stats contract
     candidates = 0
-    merged_ids: set = set()
     calls = 0
     for score, i, j in scored_pairs:
         if candidates >= MAX_CANDIDATES:
             break
         a, b = parts[i], parts[j]
-        if a["id"] in merged_ids or b["id"] in merged_ids:
-            continue
         ea = (a.get("email") or "").strip().lower()
         eb = (b.get("email") or "").strip().lower()
         diff_email = bool(ea and eb and ea != eb)
@@ -2971,25 +2972,14 @@ def detect_ambiguous_duplicate_participants(
         calls += 1
         verdict = ARB.arbitrate_pair(a, b, score)
 
-        if verdict["decision"] == "fusionner" and verdict["confidence"] >= 75:
-            if _merge_participant_into(supabase, loser["id"], winner["id"]):
-                merged_ids.add(loser["id"])
-                auto_merged += 1
-                try:
-                    log_change(
-                        supabase=supabase, event_id=event_id, user_id=user_id,
-                        entity_type="participant", entity_id=winner["id"],
-                        field_name="merge", old_value=loser["id"], new_value=winner["id"],
-                        reason="ai_arbitration",
-                    )
-                except Exception:
-                    pass
-        elif verdict["decision"] == "separer":
+        if verdict["decision"] == "separer":
             continue
-        else:
-            # 'incertain' or a low-confidence 'fusionner' -> human review.
-            if ARB.create_candidate(supabase, event_id, run_id, loser, winner, score, verdict):
-                candidates += 1
+        # 'fusionner' (any confidence) or 'incertain' -> mandatory human
+        # review via the "Fusions à vérifier" queue (PROP-001: the AI never
+        # merges on its own; ai_confidence is stored on the candidate so the
+        # UI can sort obvious ones first).
+        if ARB.create_candidate(supabase, event_id, run_id, loser, winner, score, verdict):
+            candidates += 1
 
     if auto_merged or candidates:
         logger.info(
