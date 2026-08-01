@@ -2559,9 +2559,19 @@ class TestPublicRegistration:
         }
 
         files_mock = MagicMock()
-        files_mock.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = (
-            [{"id": existing_file}] if existing_file else []
+        # _get_or_create_form_file chain: select→eq×3→order→execute. When no
+        # file exists yet, the first read returns [] and the post-insert
+        # re-read (racer-convergence) returns the new row.
+        files_select_exec = (
+            files_mock.select.return_value.eq.return_value.eq.return_value
+            .eq.return_value.order.return_value.execute
         )
+        if existing_file:
+            files_select_exec.return_value.data = [{"id": existing_file}]
+        else:
+            empty, created = MagicMock(), MagicMock()
+            empty.data, created.data = [], [{"id": "file-new-1"}]
+            files_select_exec.side_effect = [empty, created, created, created]
         files_mock.insert.return_value.execute.return_value.data = [{"id": existing_file or "file-new-1"}]
 
         records_mock = MagicMock()

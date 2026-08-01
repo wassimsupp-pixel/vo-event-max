@@ -75,30 +75,41 @@ def _system_actor(supabase: Client, project_id: str) -> str | None:
 
 
 def _get_or_create_form_file(supabase: Client, event_id: str, imported_by: str | None) -> str:
+    # Ordered so that if two first-ever submissions raced and both inserted a
+    # virtual file (no unique constraint on this tuple), every later call
+    # converges on the same winner instead of scattering rows across both.
     existing = (
         supabase.table("uploaded_files")
         .select("id")
         .eq("event_id", event_id)
         .eq("source_type", "registration")
         .eq("original_filename", _FORM_FILENAME)
+        .order("id")
         .execute()
     )
     if existing.data:
         return existing.data[0]["id"]
-    result = (
+    supabase.table("uploaded_files").insert({
+        "event_id": event_id,
+        "original_filename": _FORM_FILENAME,
+        "storage_path": f"public-form/{event_id}",
+        "source_type": "registration",
+        "import_status": "processed",
+        "imported_by": imported_by,
+        "column_mapping": {},
+    }).execute()
+    # Re-read instead of trusting our own insert: the concurrent racer's row
+    # may sort first, and both writers must agree on the winning file id.
+    settled = (
         supabase.table("uploaded_files")
-        .insert({
-            "event_id": event_id,
-            "original_filename": _FORM_FILENAME,
-            "storage_path": f"public-form/{event_id}",
-            "source_type": "registration",
-            "import_status": "processed",
-            "imported_by": imported_by,
-            "column_mapping": {},
-        })
+        .select("id")
+        .eq("event_id", event_id)
+        .eq("source_type", "registration")
+        .eq("original_filename", _FORM_FILENAME)
+        .order("id")
         .execute()
     )
-    return result.data[0]["id"]
+    return settled.data[0]["id"]
 
 
 # A registration wave (organizer mails the link to hundreds of people) must
