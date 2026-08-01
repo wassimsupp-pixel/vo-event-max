@@ -200,7 +200,7 @@ export interface Export {
 export interface Exception {
   id: string
   event_id: string
-  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field'
+  type: 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field' | 'mapping_health'
   exception_type?: string
   severity: 'critical' | 'warning' | 'info'
   participant_id?: string
@@ -320,7 +320,12 @@ function mapException(exc: any): Exception {
     PARTICIPANT_NO_FLIGHT: 'coverage', PARTICIPANT_NO_HOTEL: 'coverage',
     PARTICIPANT_NO_TRANSFER: 'coverage', PARTICIPANT_NO_DIETARY: 'coverage',
   }
-  const category: Exception['type'] = ctx.category === 'missing_field'
+  // systemic_anomaly outranks everything: a gap covering ~all participants is
+  // a suspected mapping failure (backend exception_service._is_systemic), not
+  // an ordinary coverage/missing-field card — it gets its own filter chip.
+  const category: Exception['type'] = ctx.systemic_anomaly
+    ? 'mapping_health'
+    : ctx.category === 'missing_field'
     ? 'missing_field'
     : ctx.aggregate
     ? 'coverage'

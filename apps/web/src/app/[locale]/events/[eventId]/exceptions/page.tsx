@@ -54,8 +54,8 @@ export default function ExceptionsPage() {
 
   // Optional deep-link filter, e.g. /exceptions?type=conflict from the dashboard.
   // Read from window on mount to avoid a static-prerender bail-out on useSearchParams.
-  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field'
-  const validTypes: ExceptionType[] = ['conflict', 'duplicate', 'not_found', 'to_verify', 'coverage', 'missing_field']
+  type ExceptionType = 'conflict' | 'duplicate' | 'not_found' | 'to_verify' | 'coverage' | 'missing_field' | 'mapping_health'
+  const validTypes: ExceptionType[] = ['mapping_health', 'conflict', 'duplicate', 'not_found', 'to_verify', 'coverage', 'missing_field']
   const [typeFilter, setTypeFilter] = useState<ExceptionType | null>(null)
   const [openSubs, setOpenSubs] = useState<Record<string, boolean>>({})
 
@@ -70,6 +70,7 @@ export default function ExceptionsPage() {
   }, [])
 
   const typeLabels: Record<ExceptionType, string> = {
+    mapping_health: '⚠️ Anomalie de mapping suspectée',
     conflict: tExc('conflict'),
     duplicate: tExc('duplicate'),
     not_found: tExc('notFound'),
@@ -172,9 +173,18 @@ export default function ExceptionsPage() {
     : exceptions
 
   // "Champs manquants" get a dedicated grouped-by-field rendering (one row per
-  // participant with an "Ajouter" button). Everything else stays a flat list.
+  // participant with an "Ajouter" button). Everything else stays a flat list,
+  // suspected mapping anomalies first — they usually explain the OTHER cards
+  // (300 missing nationalities is one bad column, not 300 problems), so the
+  // reader must see them before wading into the noise they generated.
   const missingFieldExcs = filteredExceptions.filter((e) => e.type === 'missing_field')
-  const flatExcs = filteredExceptions.filter((e) => e.type !== 'missing_field')
+  const SEVERITY_RANK: Record<string, number> = { critical: 0, warning: 1, info: 2 }
+  const flatExcs = filteredExceptions
+    .filter((e) => e.type !== 'missing_field')
+    .sort((a, b) =>
+      (a.type === 'mapping_health' ? -1 : 0) - (b.type === 'mapping_health' ? -1 : 0)
+      || (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
+    )
   const missingBySub: Record<string, Exception[]> = {}
   for (const f of MISSING_FIELD_ORDER) missingBySub[f] = []
   for (const e of missingFieldExcs) {

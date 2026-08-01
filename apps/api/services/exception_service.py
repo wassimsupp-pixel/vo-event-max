@@ -31,6 +31,26 @@ logger = logging.getLogger(__name__)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _DATE_RE  = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?([+-]\d{2}:?\d{2}|Z)?)?$")  # ISO 8601 (date, optional time)
 
+# Systemic-anomaly escalation (2026-08-01, mapping-health plan phase 1): when a
+# coverage gap or a missing profile field hits nearly EVERY participant of a
+# real event, the odds that hundreds of people genuinely lack that data are
+# negligible next to the odds that a column mapping silently sent it to the
+# wrong field — the exact failure mode behind the two 2026-07 incidents (600
+# transfer rows → 0 transfers; a Country column → 300 blank nationalities),
+# which nothing surfaced until a manual audit. Ratio at/above this on events
+# with a meaningful population escalates the alert to a warning that points at
+# the mapping, instead of an info card nobody reads.
+_SYSTEMIC_ANOMALY_RATIO = 0.9
+_SYSTEMIC_ANOMALY_MIN_PARTICIPANTS = 20
+
+
+def _is_systemic(missing_count: int, total_participants: int) -> bool:
+    """True when a gap is too widespread to plausibly be real data."""
+    return (
+        total_participants >= _SYSTEMIC_ANOMALY_MIN_PARTICIPANTS
+        and missing_count / total_participants >= _SYSTEMIC_ANOMALY_RATIO
+    )
+
 
 def _insert_exception(
     supabase: Client,
@@ -101,11 +121,27 @@ def detect_all(
     except Exception as exc:
         logger.warning("Could not load imported source types: %s", exc)
 
+    # Event population, computed once — the systemic-anomaly escalation in the
+    # coverage/missing-field detectors compares gap sizes against it.
+    total_participants = 0
+    try:
+        count_resp = (
+            supabase.table("participants")
+            .select("id", count="exact")
+            .eq("event_id", event_id)
+            .limit(1)
+            .execute()
+        )
+        total_participants = count_resp.count or 0
+    except Exception as exc:
+        logger.warning("Could not count participants for event %s: %s", event_id, exc)
+
     if "fcm" in imported_types:
         _aggregate_coverage_exception(
             event_id, run_id, supabase, exceptions_to_insert,
             flag="has_flight", exception_type="PARTICIPANT_NO_FLIGHT",
             message_fr="{count} participant(s) n'ont pas encore de vol enregistré — voir la master list (filtre « Sans vol »).",
+            total_participants=total_participants,
         )
     _detect_flight_no_participant(event_id, run_id, supabase, exceptions_to_insert)
     _detect_missing_required_fields(event_id, run_id, supabase, exceptions_to_insert)
@@ -123,6 +159,7 @@ def detect_all(
             event_id, run_id, supabase, exceptions_to_insert,
             flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
             message_fr="{count} participant(s) n'ont pas encore d'hébergement — voir la master list (filtre « Sans hôtel »).",
+            total_participants=total_participants,
         )
     if "transfer" in imported_types:
         # The exception_type ENUM has no PARTICIPANT_NO_TRANSFER value — reuse
@@ -131,10 +168,14 @@ def detect_all(
             event_id, run_id, supabase, exceptions_to_insert,
             flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
             message_fr="{count} participant(s) n'ont pas encore de transfert — voir la master list (filtre « Sans transfert »).",
+            total_participants=total_participants,
         )
     # Actionable per-participant missing profile fields (email/phone/nationality/
     # dietary) → the "Champs manquants" category with per-field sub-categories.
-    _detect_missing_profile_fields(event_id, run_id, supabase, exceptions_to_insert)
+    _detect_missing_profile_fields(
+        event_id, run_id, supabase, exceptions_to_insert,
+        total_participants=total_participants,
+    )
 
     total = len(exceptions_to_insert)
     
@@ -176,11 +217,16 @@ def _aggregate_coverage_exception(
     flag: str,
     exception_type: str,
     message_fr: str,
+    total_participants: int = 0,
 ) -> int:
     """
     COVERAGE gaps ("no flight / no hotel / no transfer") are NOT per-person
     errors: they get ONE aggregated info card with the count and the list of
     concerned participants — the master-list filters show the detail.
+
+    When the gap covers ~everyone (_is_systemic), it stops being a data gap
+    and almost certainly means the source file's column mapping sent the data
+    to the wrong field — escalate to a warning that says so.
     """
     try:
         result = (
@@ -198,20 +244,32 @@ def _aggregate_coverage_exception(
     if not people:
         return 0
     names = [f"{p.get('first_name', '')} {p.get('last_name', '')}".strip() for p in people]
+    systemic = _is_systemic(len(people), total_participants)
+    severity = "warning" if systemic else "info"
+    message = message_fr.format(count=len(people))
+    if systemic:
+        message += (
+            " Cette proportion est anormalement élevée pour des données réelles — "
+            "vérifiez le mapping de colonnes du fichier source correspondant."
+        )
+    context_data = {
+        "aggregate": True,
+        "count": len(people),
+        "participant_ids": [p["id"] for p in people[:500]],
+        "sample_names": names[:15],
+    }
+    if systemic:
+        context_data["systemic_anomaly"] = True
+        context_data["total_participants"] = total_participants
     _insert_exception(
         supabase=supabase,
         run_id=run_id,
         event_id=event_id,
         exception_type=exception_type,
-        severity="info",
-        message=message_fr.format(count=len(people)),
+        severity=severity,
+        message=message,
         participant_id=None,
-        context_data={
-            "aggregate": True,
-            "count": len(people),
-            "participant_ids": [p["id"] for p in people[:500]],
-            "sample_names": names[:15],
-        },
+        context_data=context_data,
         exceptions_list=exceptions_list,
     )
     return 1
@@ -333,7 +391,13 @@ def _detect_missing_required_fields(event_id: str, run_id: str, supabase: Client
 _MISSING_PROFILE_FIELDS = ("first_name", "email", "phone", "nationality", "dietary_requirements")
 
 
-def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client, exceptions_list: list[dict]) -> int:
+def _detect_missing_profile_fields(
+    event_id: str,
+    run_id: str,
+    supabase: Client,
+    exceptions_list: list[dict],
+    total_participants: int = 0,
+) -> int:
     """
     MISSING_FIELD ("Champs manquants") — ONE exception per participant that is
     missing any of the actionable profile fields (email, phone, nationality,
@@ -341,6 +405,12 @@ def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client,
     right sub-category (Email / Téléphone / Nationalité / Régime), each with an
     "Ajouter" button that opens their fiche. One exception per person (not per
     field) keeps the volume sane.
+
+    On top of the per-person cards: a field missing on ~everyone (_is_systemic)
+    is almost never 300 people forgetting the same box — it's a source column
+    mapped to the wrong field (the 2026-07 nationality incident: a "Country"
+    column silently routed to an internal field, 300 blank nationalities, zero
+    signal). One extra aggregated warning per such field points at the mapping.
     """
     try:
         result = (
@@ -354,8 +424,11 @@ def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client,
         return 0
 
     count = 0
+    field_gap_counts: dict[str, int] = {}
     for p in result.data or []:
         missing = [f for f in _MISSING_PROFILE_FIELDS if not (p.get(f) or "").strip()]
+        for f in missing:
+            field_gap_counts[f] = field_gap_counts.get(f, 0) + 1
         if not missing:
             continue
         # A fiche with no name at all is already reported as critical — don't
@@ -376,6 +449,38 @@ def _detect_missing_profile_fields(event_id: str, run_id: str, supabase: Client,
                 "category": "missing_field",
                 "missing_fields": missing,
                 "participant_name": name,
+            },
+            exceptions_list=exceptions_list,
+        )
+        count += 1
+
+    _FIELD_LABELS = {
+        "email": "email", "phone": "téléphone",
+        "nationality": "nationalité", "dietary_requirements": "régime alimentaire",
+    }
+    for field, gap in sorted(field_gap_counts.items()):
+        if not _is_systemic(gap, total_participants):
+            continue
+        label = _FIELD_LABELS.get(field, field)
+        _insert_exception(
+            supabase=supabase,
+            run_id=run_id,
+            event_id=event_id,
+            exception_type="MISSING_REQUIRED_FIELD",
+            severity="warning",
+            message=(
+                f"{gap} participant(s) sur {total_participants} n'ont aucune valeur "
+                f"pour « {label} ». Cette proportion est anormalement élevée pour des "
+                f"données réelles — vérifiez le mapping de colonnes du fichier source "
+                f"correspondant."
+            ),
+            participant_id=None,
+            context_data={
+                "category": "missing_field",
+                "systemic_anomaly": True,
+                "field": field,
+                "missing_count": gap,
+                "total_participants": total_participants,
             },
             exceptions_list=exceptions_list,
         )
