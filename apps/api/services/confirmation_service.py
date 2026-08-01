@@ -14,22 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Optional
 
 from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai
-    if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        GEMINI_AVAILABLE = True
-except ImportError:
-    pass
-
+# (dead google-generativeai import block removed 2026-08-01: this module
+# talks to AI only through services/ai_service.py's unified gateway.)
 
 def _gather(supabase: Client, participant_id: str) -> dict[str, Any]:
     """Collect the participant's core + consolidated logistics (best-effort)."""

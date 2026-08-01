@@ -9,20 +9,12 @@ from an uploaded event poster/flyer image using Gemini Vision.
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai
-    if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        GEMINI_AVAILABLE = True
-except ImportError:
-    pass
-
+# (dead google-generativeai import block removed 2026-08-01: this module
+# talks to AI only through services/ai_service.py's unified gateway.)
 _PROMPT = """
 Tu analyses une affiche / un poster d'événement. Extrais les informations présentes
 en JSON strict, avec ces champs (mets null si l'information n'est pas visible —

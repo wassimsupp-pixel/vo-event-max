@@ -12,7 +12,6 @@ recommendations (feedback §6 + §15).
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
@@ -45,15 +44,8 @@ _SOURCE_TYPE_LABELS = {
     "masterfile": "Fichier maître",
 }
 
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai
-    if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        GEMINI_AVAILABLE = True
-except ImportError:
-    pass
-
+# (dead google-generativeai import block removed 2026-08-01: this module
+# talks to AI only through services/ai_service.py's unified gateway.)
 
 def _first_non_empty(values: list[Any]) -> Optional[Any]:
     for v in values:

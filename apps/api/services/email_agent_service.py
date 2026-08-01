@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Optional
 from uuid import UUID
 
@@ -17,16 +16,8 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-# Try importing Gemini, but degrade gracefully
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai
-    if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        GEMINI_AVAILABLE = True
-except ImportError:
-    pass
-
+# (dead google-generativeai import block removed 2026-08-01: this module
+# talks to AI only through services/ai_service.py's unified gateway.)
 
 # The prompt below instructs the model to only propose these fields, but
 # that instruction was never enforced in code — apply_proposal wrote

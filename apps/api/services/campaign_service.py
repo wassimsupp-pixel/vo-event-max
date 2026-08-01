@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 from supabase import Client
@@ -22,15 +21,8 @@ from services import master_list_service, mail_connection_service
 
 logger = logging.getLogger(__name__)
 
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai
-    if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        GEMINI_AVAILABLE = True
-except ImportError:
-    pass
-
+# (dead google-generativeai import block removed 2026-08-01: this module
+# talks to AI only through services/ai_service.py's unified gateway.)
 # Placeholders offered to the user for template mode
 PLACEHOLDERS = [
     "first_name", "last_name", "full_name", "email", "company",

@@ -48,12 +48,19 @@ _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 _OPENAI_MODEL = "gpt-4o-mini"
 _openai_disabled = False
 
+# google-genai (successor of the EOL google-generativeai package — same API
+# key, same models; only the client surface changed). The old package was
+# never in requirements.txt, so this fallback only ever worked on machines
+# that happened to have it installed — google-genai is now a declared
+# dependency and the fallback is real everywhere.
 _GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_AVAILABLE = False
+_gemini_client = None
 try:
-    import google.generativeai as genai
+    from google import genai as _genai
+    from google.genai import types as _genai_types
     if os.getenv("GEMINI_API_KEY"):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+        _gemini_client = _genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         GEMINI_AVAILABLE = True
 except ImportError:
     pass
@@ -159,15 +166,21 @@ def _openai_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
 
 
 def _gemini_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None) -> Optional[str]:
-    if not GEMINI_AVAILABLE:
+    if not GEMINI_AVAILABLE or _gemini_client is None:
         return None
     try:
-        model = genai.GenerativeModel(_GEMINI_MODEL)
-        parts: list[Any] = [prompt]
+        contents: list[Any] = [prompt]
         if image_bytes is not None:
-            parts.append({"mime_type": mime_type or "image/png", "data": image_bytes})
-        opts = {"timeout": timeout_s} if timeout_s else None
-        resp = model.generate_content(parts, request_options=opts) if opts else model.generate_content(parts)
+            contents.append(_genai_types.Part.from_bytes(data=image_bytes, mime_type=mime_type or "image/png"))
+        kwargs: dict[str, Any] = {}
+        if timeout_s:
+            # google-genai HttpOptions.timeout is in MILLISECONDS.
+            kwargs["config"] = _genai_types.GenerateContentConfig(
+                http_options=_genai_types.HttpOptions(timeout=int(timeout_s * 1000))
+            )
+        resp = _gemini_client.models.generate_content(
+            model=_GEMINI_MODEL, contents=contents, **kwargs
+        )
         return (resp.text or "").strip()
     except Exception as exc:
         logger.warning("Gemini call failed: %s", exc)

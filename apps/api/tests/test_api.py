@@ -2923,6 +2923,215 @@ class TestPublicFormPurgeSafety:
         assert _late_public_form_submissions(mock_supabase, self.EVENT_ID, {}) is False
 
 
+class TestSystemicMappingAnomalyDetection:
+    """Mapping-health phase 1 (2026-08-01): when a coverage gap or missing
+    profile field hits >= 90% of an event's participants (min 20), it is
+    almost never real data -- it's a column mapping that silently routed the
+    data to the wrong field (the July incidents: 600 transfer rows -> 0
+    transfers; a Country column -> 300 blank nationalities, zero signal
+    either time). Such gaps escalate from an info card to a warning that
+    tells the organizer to check the source file's mapping, and carry a
+    context_data.systemic_anomaly marker the frontend routes to a dedicated
+    'Anomalie de mapping suspectée' filter chip."""
+
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+
+    # -- _is_systemic threshold arithmetic ---------------------------------
+    def test_is_systemic_above_ratio_and_population(self):
+        from services.exception_service import _is_systemic
+        assert _is_systemic(19, 20) is True      # 95%
+        assert _is_systemic(270, 300) is True    # 90% exactly
+
+    def test_not_systemic_below_ratio(self):
+        from services.exception_service import _is_systemic
+        assert _is_systemic(10, 100) is False    # 10%
+        assert _is_systemic(267, 300) is False   # 89%
+
+    def test_not_systemic_on_tiny_events(self):
+        """A 5-person test event with 5/5 missing hotels is normal setup
+        noise, not a mapping alarm."""
+        from services.exception_service import _is_systemic
+        assert _is_systemic(19, 19) is False
+        assert _is_systemic(5, 5) is False
+
+    # -- coverage detector escalation --------------------------------------
+    def _coverage_supabase(self, people):
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = people
+        return mock_supabase
+
+    def _people(self, n):
+        return [{"id": f"p{i}", "first_name": "A", "last_name": f"B{i}"} for i in range(n)]
+
+    def test_coverage_gap_on_everyone_escalates_to_warning(self):
+        from services.exception_service import _aggregate_coverage_exception
+
+        collected: list[dict] = []
+        _aggregate_coverage_exception(
+            self.EVENT_ID, "run-1", self._coverage_supabase(self._people(285)), collected,
+            flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
+            message_fr="{count} participant(s) n'ont pas encore de transfert.",
+            total_participants=300,
+        )
+
+        assert len(collected) == 1
+        exc = collected[0]
+        assert exc["severity"] == "warning"
+        assert exc["context_data"]["systemic_anomaly"] is True
+        assert exc["context_data"]["total_participants"] == 300
+        assert "mapping" in exc["message"]
+
+    def test_normal_coverage_gap_stays_info(self):
+        from services.exception_service import _aggregate_coverage_exception
+
+        collected: list[dict] = []
+        _aggregate_coverage_exception(
+            self.EVENT_ID, "run-1", self._coverage_supabase(self._people(30)), collected,
+            flag="has_transfer", exception_type="MISSING_REQUIRED_FIELD",
+            message_fr="{count} participant(s) n'ont pas encore de transfert.",
+            total_participants=300,
+        )
+
+        assert len(collected) == 1
+        exc = collected[0]
+        assert exc["severity"] == "info"
+        assert "systemic_anomaly" not in (exc["context_data"] or {})
+        assert "mapping" not in exc["message"]
+
+    def test_full_gap_on_tiny_event_stays_info(self):
+        from services.exception_service import _aggregate_coverage_exception
+
+        collected: list[dict] = []
+        _aggregate_coverage_exception(
+            self.EVENT_ID, "run-1", self._coverage_supabase(self._people(5)), collected,
+            flag="has_hotel", exception_type="PARTICIPANT_NO_HOTEL",
+            message_fr="{count} participant(s) n'ont pas encore d'hébergement.",
+            total_participants=5,
+        )
+
+        assert collected[0]["severity"] == "info"
+
+    # -- missing-profile-field detector escalation --------------------------
+    def test_field_missing_on_everyone_adds_one_aggregate_warning(self):
+        from services.exception_service import _detect_missing_profile_fields
+
+        # 25 participants, every one of them with a name+email but NO
+        # nationality -- the exact shape of the July "Country column routed
+        # to an internal field" incident.
+        participants = [
+            {"id": f"p{i}", "first_name": "A", "last_name": f"B{i}",
+             "email": f"a{i}@x.com", "phone": "+32 1", "nationality": "",
+             "dietary_requirements": "aucun"}
+            for i in range(25)
+        ]
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = participants
+
+        collected: list[dict] = []
+        _detect_missing_profile_fields(
+            self.EVENT_ID, "run-1", mock_supabase, collected, total_participants=25
+        )
+
+        systemic = [e for e in collected if (e.get("context_data") or {}).get("systemic_anomaly")]
+        individual = [e for e in collected if not (e.get("context_data") or {}).get("systemic_anomaly")]
+        assert len(individual) == 25  # per-person cards unchanged
+        assert len(systemic) == 1
+        agg = systemic[0]
+        assert agg["severity"] == "warning"
+        assert agg["context_data"]["field"] == "nationality"
+        assert agg["context_data"]["missing_count"] == 25
+        assert agg["participant_id"] is None
+        assert "mapping" in agg["message"]
+
+    def test_scattered_missing_fields_add_no_aggregate(self):
+        from services.exception_service import _detect_missing_profile_fields
+
+        # 25 participants, only 3 missing a phone: normal life, no alarm.
+        participants = [
+            {"id": f"p{i}", "first_name": "A", "last_name": f"B{i}",
+             "email": f"a{i}@x.com", "phone": "" if i < 3 else "+32 1",
+             "nationality": "BE", "dietary_requirements": "aucun"}
+            for i in range(25)
+        ]
+        mock_supabase = MagicMock()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = participants
+
+        collected: list[dict] = []
+        _detect_missing_profile_fields(
+            self.EVENT_ID, "run-1", mock_supabase, collected, total_participants=25
+        )
+
+        assert not [e for e in collected if (e.get("context_data") or {}).get("systemic_anomaly")]
+        assert len(collected) == 3
+
+
+class TestAIArbitrationNeverAutoMerges:
+    """PROP-001 (applied 2026-08-01, explicit go-ahead in chat): the AI
+    arbitration step used to call _merge_participant_into directly for
+    'fusionner' verdicts with self-declared confidence >= 75 -- a
+    destructive, irreversible merge (the losing fiche is DELETEd) with no
+    human in the loop, violating the audit brief's non-negotiable 'the AI
+    never autonomously decides participant data outcomes'. Every
+    non-'separer' verdict must now land in the match_candidates queue for
+    side-by-side human review, whatever the confidence."""
+
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+
+    def _two_ambiguous_participants(self):
+        # token_set_ratio('jean dupont', 'jean dupond') ~= 90.9: inside the
+        # ambiguous band [78, 93) so the pair reaches the LLM arbitration.
+        return [
+            {"id": "p-a", "first_name": "Jean", "last_name": "Dupont", "email": "",
+             "phone": "", "company": "", "nationality": "", "has_flight": True,
+             "has_hotel": False, "has_transfer": False, "has_activities": False,
+             "registration_source_id": "sr-1"},
+            {"id": "p-b", "first_name": "Jean", "last_name": "Dupond", "email": "",
+             "phone": "", "company": "", "nationality": "", "has_flight": False,
+             "has_hotel": False, "has_transfer": False, "has_activities": False,
+             "registration_source_id": None},
+        ]
+
+    def _mocked_supabase(self):
+        mock_supabase = MagicMock()
+        participants_page = MagicMock()
+        participants_page.data = self._two_ambiguous_participants()
+        mock_supabase.table.return_value.select.return_value.eq.return_value.range.return_value.execute.return_value = participants_page
+        return mock_supabase
+
+    def test_high_confidence_fusionner_is_queued_not_merged(self):
+        from services import consolidation_service
+
+        with patch("services.arbitration_service.arbitrate_pair") as mock_arb, \
+             patch("services.arbitration_service.create_candidate") as mock_queue, \
+             patch("services.consolidation_service._merge_participant_into") as mock_merge:
+            mock_arb.return_value = {"decision": "fusionner", "confidence": 99.0, "justification": "quasi certain"}
+            mock_queue.return_value = True
+
+            result = consolidation_service.detect_ambiguous_duplicate_participants(
+                self.EVENT_ID, "run-1", "user-1", self._mocked_supabase()
+            )
+
+        mock_merge.assert_not_called()
+        mock_queue.assert_called_once()
+        assert result == {"auto_merged": 0, "candidates": 1}
+
+    def test_separer_verdict_is_dropped_without_queueing(self):
+        from services import consolidation_service
+
+        with patch("services.arbitration_service.arbitrate_pair") as mock_arb, \
+             patch("services.arbitration_service.create_candidate") as mock_queue, \
+             patch("services.consolidation_service._merge_participant_into") as mock_merge:
+            mock_arb.return_value = {"decision": "separer", "confidence": 90.0, "justification": "deux personnes"}
+
+            result = consolidation_service.detect_ambiguous_duplicate_participants(
+                self.EVENT_ID, "run-1", "user-1", self._mocked_supabase()
+            )
+
+        mock_merge.assert_not_called()
+        mock_queue.assert_not_called()
+        assert result == {"auto_merged": 0, "candidates": 0}
+
+
 class TestPublicFormDebounce:
     """Anti-burst pacing for the per-submission consolidation trigger: runs
     stay >= 60s apart during a registration wave instead of one full
