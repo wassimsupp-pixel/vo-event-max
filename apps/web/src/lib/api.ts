@@ -557,12 +557,14 @@ export const api = {
     async list(): Promise<any[]> {
       return request<any[]>('/api/events')
     },
-    async create(name: string, projectId?: string): Promise<any> {
-      const projId = projectId ?? '00000000-0000-0000-0000-000000000002'
+    async create(name: string, projectId: string): Promise<any> {
+      if (!projectId) {
+        throw new Error('Sélectionnez un projet avant de créer un événement.')
+      }
       return request<any>('/api/events', {
         method: 'POST',
         body: JSON.stringify({
-          project_id: projId,
+          project_id: projectId,
           name,
         }),
       })
@@ -627,12 +629,6 @@ export const api = {
     async list(eventId: string): Promise<any[]> {
       return request<any[]>(`/api/events/${eventId}/flights`)
     },
-    async update(flightId: string, payload: any): Promise<any> {
-      return request<any>(`/api/flights/${flightId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      })
-    },
     async extract(eventId: string): Promise<any> {
       return request<any>(`/api/events/${eventId}/flights/extract`, {
         method: 'POST',
@@ -647,12 +643,6 @@ export const api = {
     async create(eventId: string, payload: any): Promise<any> {
       return request<any>(`/api/events/${eventId}/hotels`, {
         method: 'POST',
-        body: JSON.stringify(payload),
-      })
-    },
-    async update(hotelId: string, payload: any): Promise<any> {
-      return request<any>(`/api/hotels/${hotelId}`, {
-        method: 'PATCH',
         body: JSON.stringify(payload),
       })
     },
@@ -671,12 +661,6 @@ export const api = {
         body: JSON.stringify(payload),
       })
     },
-    async updateRooming(roomingId: string, payload: any): Promise<any> {
-      return request<any>(`/api/hotels/rooming/${roomingId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      })
-    },
     async deleteRooming(roomingId: string): Promise<any> {
       return request<any>(`/api/hotels/rooming/${roomingId}`, {
         method: 'DELETE',
@@ -687,23 +671,6 @@ export const api = {
   transfers: {
     async list(eventId: string): Promise<any[]> {
       return request<any[]>(`/api/events/${eventId}/transfers`)
-    },
-    async create(eventId: string, payload: any): Promise<any> {
-      return request<any>(`/api/events/${eventId}/transfers`, {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      })
-    },
-    async update(transferId: string, payload: any): Promise<any> {
-      return request<any>(`/api/transfers/${transferId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      })
-    },
-    async delete(transferId: string): Promise<any> {
-      return request<any>(`/api/transfers/${transferId}`, {
-        method: 'DELETE',
-      })
     },
     async group(eventId: string, params: { window_minutes?: number; pickup_location?: string; dropoff_location?: string; vehicle_type?: string }): Promise<any> {
       const query = qs(params)
@@ -721,17 +688,6 @@ export const api = {
       return request<any>(`/api/events/${eventId}/activities`, {
         method: 'POST',
         body: JSON.stringify(payload),
-      })
-    },
-    async update(activityId: string, payload: any): Promise<any> {
-      return request<any>(`/api/activities/${activityId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
-      })
-    },
-    async delete(activityId: string): Promise<any> {
-      return request<any>(`/api/activities/${activityId}`, {
-        method: 'DELETE',
       })
     },
     async listParticipants(activityId: string): Promise<any[]> {

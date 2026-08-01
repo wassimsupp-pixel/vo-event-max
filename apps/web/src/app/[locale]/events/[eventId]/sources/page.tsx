@@ -271,7 +271,12 @@ export default function SourcesPage() {
     async function loadLink() {
       try {
         const info = await api.events.getRegistrationLink(eventId)
-        if (!cancelled) setRegLink({ url: info.url, is_open: info.is_open })
+        // Build the link from the browser's own origin + current locale
+        // instead of the backend's URL (which hardcodes WEB_APP_URL + /fr/):
+        // an organizer working in EN/NL shares a link in their language, and
+        // the link always matches the domain actually being used.
+        const url = `${window.location.origin}/${locale}/register/${info.token}`
+        if (!cancelled) setRegLink({ url, is_open: info.is_open })
       } catch {
         // Migration 006 not applied yet, or access issue — hide the card
         // rather than show a broken feature.
@@ -282,7 +287,7 @@ export default function SourcesPage() {
     }
     if (eventId) loadLink()
     return () => { cancelled = true }
-  }, [eventId])
+  }, [eventId, locale])
 
   const handleCopyRegLink = async () => {
     if (!regLink) return

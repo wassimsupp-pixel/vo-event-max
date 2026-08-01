@@ -8,6 +8,7 @@ import { KPICard } from '@/components/ui/KPICard'
 import { TableSkeleton } from '@/components/ui/TableSkeleton'
 import { Hotel, Bed, Calendar, Plus, Search, UserX, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { api, type ParticipantLookupItem } from '@/lib/api'
+import { formatDateOnly } from '@/lib/dates'
 import { ConcernedParticipants, type CohortRow } from '@/components/ui/ConcernedParticipants'
 
 interface HotelProperty {
@@ -193,12 +194,7 @@ export default function HotelsPage() {
   // Group nights per (participant · hotel · room type) into one stay: instead of
   // one row per night, show the client with the date range and the night count
   // (e.g. 21/07/2026 - 22/07/2026 => 2).
-  const fmtDate = (iso: string) => {
-    const d = new Date(iso)
-    return isNaN(d.getTime())
-      ? iso
-      : `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
-  }
+  const fmtDate = (iso: string) => formatDateOnly(iso)
   interface Stay {
     key: string
     participant_name?: string

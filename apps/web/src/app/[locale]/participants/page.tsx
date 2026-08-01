@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { Search, User, Calendar } from 'lucide-react'
 import { api } from '@/lib/api'
+import { formatDateOnly } from '@/lib/dates'
 
 interface HistoryItem {
   event_name: string
@@ -122,9 +123,7 @@ export default function GlobalParticipantsPage() {
                         {event.event_date && (
                           <p className="text-[10px] text-gray-400 font-mono mt-0.5">
                             Début de l&apos;événement :{' '}
-                            {new Date(event.event_date).toLocaleDateString('fr-FR', {
-                              dateStyle: 'medium',
-                            })}
+                            {formatDateOnly(event.event_date, 'fr-FR', { dateStyle: 'medium' })}
                           </p>
                         )}
                         <div className="mt-2 flex flex-wrap gap-2">

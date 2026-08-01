@@ -7,6 +7,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { KPICard } from '@/components/ui/KPICard'
 import { BarChart3, Plane, Hotel, Truck, Users, Activity, FileText, Loader2, Sparkles, Lightbulb, AlertTriangle, ShieldCheck } from 'lucide-react'
 import { api } from '@/lib/api'
+import { formatDateOnly } from '@/lib/dates'
 
 interface ReportSummary {
   total_registered: number
@@ -256,7 +257,7 @@ export default function ReportsPage() {
                 {hotelNights.map((item) => (
                   <div key={item.night_date} className="flex items-center gap-4">
                     <span className="w-24 text-sm font-semibold text-[var(--color-text-secondary)]">
-                      {new Date(item.night_date).toLocaleDateString(locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
+                      {formatDateOnly(item.night_date, locale === 'fr' ? 'fr-FR' : locale === 'nl' ? 'nl-NL' : 'en-US', {
                         weekday: 'short',
                         day: 'numeric',
                         month: 'short',

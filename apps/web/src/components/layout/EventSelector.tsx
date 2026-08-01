@@ -160,6 +160,11 @@ export function EventSelector({ currentEventId }: EventSelectorProps) {
       }
 
       // 2. Create the event under that project
+      if (!targetProjectId) {
+        alert('Veuillez d\'abord créer ou sélectionner un projet.')
+        setCreatingLoading(false)
+        return
+      }
       const newEvent = await api.events.create(newEventName.trim(), targetProjectId)
       setEvents((prev) => [...prev, newEvent])
       

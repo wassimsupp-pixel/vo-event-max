@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2, Plane, Hotel, Bus, Sparkles, Database, Mail, Send, AlertTriangle } from 'lucide-react'
 import { api } from '@/lib/api'
+import { formatDateOnly } from '@/lib/dates'
 import type { Participant } from '@/lib/api'
 
 interface ConsolidatedView {
@@ -435,7 +436,7 @@ export default function ParticipantDetailPage() {
                 {consolidated.hotel_nights.map((h) => (
                   <div key={h.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
                     <span className="font-semibold">{h.hotels?.name || 'Hôtel'}</span>
-                    {h.night_date && <span>{new Date(h.night_date).toLocaleDateString('fr-FR', { dateStyle: 'medium' })}</span>}
+                    {h.night_date && <span>{formatDateOnly(h.night_date, 'fr-FR', { dateStyle: 'medium' })}</span>}
                     {h.room_type && <span className="text-[var(--color-text-secondary)]">{h.room_type}</span>}
                     {h.status && <span className="text-[var(--color-text-secondary)]">{h.status}</span>}
                   </div>
