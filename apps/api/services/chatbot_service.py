@@ -497,64 +497,76 @@ _INTENTS: dict[str, dict[str, Any]] = {
         "fn": _intent_flight_no_transfer,
         "desc": "lister les participants qui ont un vol mais aucun transfert",
         "keywords": [r"vol .*(mais|sans) .*transfert", r"vol.*aucun transfert"],
+        "own_words": {"vol","vols","transfert","transferts"},
     },
     "participants_without_flight": {
         "fn": _intent_without_flight,
         "desc": "lister les participants sans vol",
         "keywords": [r"sans vol", r"pas .*de vol", r"aucun vol", r"n.*ont pas .*vol"],
+        "own_words": {"vol","vols"},
     },
     "participants_without_hotel": {
         "fn": _intent_without_hotel,
         "desc": "lister les participants sans hébergement/hôtel",
         "keywords": [r"sans (hotel|hebergement)", r"pas .*(hotel|hebergement)", r"aucun (hotel|hebergement)"],
+        "own_words": {"hotel","hotels","hebergement","hebergements"},
     },
     "participants_without_transfer": {
         "fn": _intent_without_transfer,
         "desc": "lister les participants sans transfert",
         "keywords": [r"sans transfert", r"pas .*de transfert", r"aucun transfert"],
+        "own_words": {"transfert","transferts"},
     },
     "participants_without_activity": {
         "fn": _intent_without_activity,
         "desc": "lister les participants sans activité",
         "keywords": [r"sans activite", r"pas .*d.activite", r"aucune activite"],
+        "own_words": {"activite","activites"},
     },
     "participant_missing_info": {
         "fn": _intent_participant_missing_info,
         "desc": "dire quelles informations manquent pour UN participant donné (nécessite son nom)",
         "keywords": [r"(quelles?|quel).*manque.*pour", r"informations? manquantes? pour"],
+        "own_words": set(),
     },
     "participant_exceptions": {
         "fn": _intent_participant_exceptions,
         "desc": "expliquer pourquoi UN participant donné est signalé en exception (nécessite son nom)",
         "keywords": [r"pourquoi.*(exception|signale)", r"exceptions? (de|pour|du)"],
+        "own_words": set(),
     },
     "participant_detail": {
         "fn": _intent_participant_detail,
         "desc": "donner la fiche d'UN participant donné (nécessite son nom)",
         "keywords": [r"(fiche|infos?|informations?|donnees?) (de|du|sur|pour)\b"],
+        "own_words": set(),
     },
     "data_conflicts": {
         "fn": _intent_data_conflicts,
         "desc": "lister les contradictions/conflits entre les fichiers importés",
         "keywords": [r"contradiction", r"conflit", r"incoherence"],
+        "own_words": {"fichier","fichiers","source","sources","donnees","import","importes"},
     },
     "pending_communications": {
         "fn": _intent_pending_communications,
         "desc": "lister les participants/clients qui doivent encore recevoir un e-mail",
         "keywords": [r"(mail|email|e-mail|communication).*(pas|encore|attente|envoyer)",
                      r"(doivent|doit).*recevoir"],
+        "own_words": {"mail","mails","email","emails","client","clients","communication","communications","envoye","envoyes","attente"},
     },
     "today_actions": {
         "fn": _intent_today_actions,
         "desc": "résumer les actions à réaliser aujourd'hui sur l'événement",
         "keywords": [r"(actions?|taches?|faire).*(aujourd|jour|prioritaire)", r"que dois.je faire",
                      r"quoi faire"],
+        "own_words": {"action","actions","aujourd","hui","jour","journee","realisees","realiser","faire","prioritaire","prioritaires","tache","taches"},
     },
     "event_overview": {
         "fn": _intent_event_overview,
         "desc": "donner les chiffres généraux de l'événement (nombre de participants, couverture)",
         "keywords": [r"combien de participants", r"(vue d.ensemble|resume|apercu) .*evenement",
                      r"^combien\b"],
+        "own_words": {"evenement","event","general","generaux","ensemble","apercu","resume","total","chiffres"},
     },
 }
 
@@ -581,42 +593,83 @@ CAPABILITIES_FR = [
 # Routing — the ONLY place the LLM is involved, and it never sees the data
 # ---------------------------------------------------------------------------
 
-# Words that carry no filtering meaning of their own. Used to decide whether a
-# question is ONLY a canonical question, or a canonical question plus extra
-# criteria. Deliberately small: a word missing here just sends the question to
-# the planner (right answer, slightly slower), whereas a word wrongly added
-# here would let a compound question be answered as if a criterion weren't
-# there — a confidently wrong answer, which is the failure we care about.
+# Grammar and framing words that never express a criterion. Deliberately
+# small: a word missing here just sends the question to the planner (right
+# answer, slightly slower), whereas a word wrongly added would let a compound
+# question be answered as if a criterion weren't there — a confidently wrong
+# answer, which is the failure that matters.
+#
+# Domain vocabulary is NOT here. It lives per-intent in "own_words" below,
+# because a domain word is only noise for the intent it belongs to: leaving
+# "hébergement" in a global list made "sans vols ET sans hébergement" look
+# like a plain no-flight question, and it was answered as one (2026-08-03).
 _FILLER = {
     "quels", "quelles", "quel", "quelle", "que", "qui", "quoi", "combien",
-    "participants", "participant", "personnes", "personne", "gens", "clients", "client",
-    "ont", "on", "a", "as", "est", "sont", "etre", "doivent", "doit", "avoir",
+    "participants", "participant", "personnes", "personne", "gens", "monde",
+    "ont", "on", "ya", "as", "est", "sont", "etre", "doivent", "doit", "avoir",
     "n", "ne", "pas", "plus", "encore", "aucun", "aucune", "sans", "avec",
-    "de", "des", "du", "d", "le", "la", "les", "l", "un", "une", "au", "aux",
-    "ce", "cet", "cette", "ces", "y", "il", "elle", "ils", "elles", "t", "s",
+    "de", "des", "du", "le", "la", "les", "un", "une", "au", "aux",
+    "ce", "cet", "cette", "ces", "elle", "ils", "elles",
     "et", "ou", "en", "dans", "sur", "pour", "entre", "par", "moi", "me", "je",
     "tu", "donne", "donnez", "montre", "montrez", "affiche", "liste", "lister",
-    "veux", "voudrais", "peux", "peut", "stp", "merci", "svp",
-    # domain words already implied by the matched intent itself
-    "vol", "vols", "hotel", "hotels", "hebergement", "hebergements",
-    "transfert", "transferts", "activite", "activites", "mail", "mails",
-    "email", "emails", "e", "fichier", "fichiers", "source", "sources",
-    "action", "actions", "aujourd", "hui", "jour", "realisees", "realiser",
-    "contradiction", "contradictions", "conflit", "conflits", "exception",
-    "exceptions", "information", "informations", "info", "infos", "manque",
-    "manquent", "manquantes", "recevoir", "envoyer", "planifie", "renseigne",
-    "evenement", "event", "master", "list", "liste",
+    "veux", "voudrais", "peux", "peut", "stp", "merci", "svp", "nombre",
 }
 
 
-def _leftover_terms(question: str, matched_span: tuple[int, int]) -> list[str]:
-    """Meaningful words left once the matched canonical phrase is removed."""
+def _leftover_terms(question: str, matched_span: tuple[int, int], own_words: set[str]) -> list[str]:
+    """Meaningful words left once the matched canonical phrase and the matched
+    intent's OWN vocabulary are removed. Anything still standing is a criterion
+    this intent cannot express."""
     q = _norm(question)
     rest = q[:matched_span[0]] + " " + q[matched_span[1]:]
     return [
         w for w in re.split(r"[^\w]+", rest)
-        if len(w) >= 3 and w not in _FILLER and not w.isdigit()
+        if len(w) >= 3 and w not in _FILLER and w not in own_words and not w.isdigit()
     ]
+
+
+# ---------------------------------------------------------------------------
+# Offline composition of coverage combinations
+#
+# "sans vol et sans hébergement" is the commonest compound question there is.
+# Sending it to the LLM planner works, but makes the most ordinary question
+# slower than the simplest one — and unanswerable during a provider outage.
+# These are unambiguous enough to compose locally.
+# ---------------------------------------------------------------------------
+
+_COVERAGE_MARKERS: dict[str, tuple[str, list[str]]] = {
+    "has_flight": ("vol", [
+        r"sans vols?\b", r"pas .{0,15}\bvols?\b", r"aucun vol", r"\bni .{0,12}\bvols?\b",
+    ]),
+    "has_hotel": ("hébergement", [
+        r"sans (hotel|hebergement)", r"pas .{0,15}(hotel|hebergement)",
+        r"aucun (hotel|hebergement)", r"\bni .{0,12}(hotel|hebergement)",
+    ]),
+    "has_transfer": ("transfert", [
+        r"sans transferts?\b", r"pas .{0,15}\btransferts?\b", r"aucun transfert",
+        r"\bni .{0,12}\btransferts?\b",
+    ]),
+    "has_activities": ("activité", [
+        r"sans activites?\b", r"pas .{0,15}\bactivites?\b", r"aucune activite",
+        r"\bni .{0,12}\bactivites?\b",
+    ]),
+}
+
+
+def _compose_coverage_plan(question: str) -> Optional[tuple[dict, list[str]]]:
+    """A plan for questions negating SEVERAL coverage dimensions at once.
+    Returns (plan, labels) or None. No model involved, so these stay instant
+    and keep working when no AI provider does."""
+    q = _norm(question)
+    hits = [(flag, label) for flag, (label, patterns) in _COVERAGE_MARKERS.items()
+            if any(re.search(p, q) for p in patterns)]
+    if len(hits) < 2:
+        return None
+    plan = {
+        "filters": [{"field": flag, "op": "is", "value": False} for flag, _ in hits],
+        "logic": "and", "output": "list", "group_by": None,
+    }
+    return plan, [label for _, label in hits]
 
 
 def _keyword_route(question: str) -> Optional[str]:
@@ -629,6 +682,13 @@ def _keyword_route(question: str) -> Optional[str]:
     hands back a confidently wrong answer. Those go to the planner, which can
     express both conditions.
     """
+    # Several coverage dimensions negated at once always outranks a single
+    # intent — including "participants_with_flight_no_transfer", whose pattern
+    # ("vol ... sans ... transfert") otherwise also matches "SANS vol et sans
+    # transfert" and would answer the exact opposite of what was asked.
+    if _compose_coverage_plan(question):
+        return None
+
     q = _norm(question)
     for name, spec in _INTENTS.items():
         for pattern in spec["keywords"]:
@@ -638,7 +698,7 @@ def _keyword_route(question: str) -> Optional[str]:
             # Per-participant intents legitimately carry a name as extra text.
             if name.startswith("participant_"):
                 return name
-            if _leftover_terms(question, m.span()):
+            if _leftover_terms(question, m.span(), spec.get("own_words", set())):
                 return None      # compound question -> let the planner handle it
             return name
     return None
@@ -1008,6 +1068,31 @@ def _answer_by_plan(
     d'Europe" into a real ``nationality in [...]`` filter instead of a guess.
     """
     people = _fetch_participants(supabase, event_id)
+
+    # Multiple coverage dimensions negated at once ("sans vol et sans
+    # hébergement") compose without a model: the commonest compound question
+    # stays instant and survives a provider outage.
+    composed = _compose_coverage_plan(question)
+    if composed:
+        plan, labels = composed
+        result = _execute_plan(plan, people, user_role)
+        total, shown = result["total"], len(result["rows"])
+        template = (
+            f"{total} participant(s) n’ont ni {' ni '.join(labels)} (sur {len(people)})."
+            if total else
+            f"Aucun participant n’est à la fois sans {' et sans '.join(labels)}."
+        )
+        if total > shown:
+            template += f" Les {shown} premiers sont listés ci-dessous."
+        return {
+            "answer": template,
+            "rows": result["rows"],
+            "references": ["Master list — "
+                           + ", ".join(f"champ « {f['field']} »" for f in plan["filters"])],
+            "intent": "coverage_combination",
+            "plan": plan,
+        }, "ok"
+
     catalogue = _value_catalogue(people, user_role)
     plan, reason = _plan_query(question, user_role, history, catalogue)
     if not plan:

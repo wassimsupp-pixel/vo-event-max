@@ -3778,3 +3778,92 @@ class TestCompoundQuestionsNeverSilentlyLoseCriteria:
         from services.chatbot_service import _keyword_route
         assert _keyword_route("Pourquoi Ana Kaya est-elle signalee en exception ?") == "participant_exceptions"
         assert _keyword_route("Quelles informations manquent pour Chloe Nilsson ?") == "participant_missing_info"
+
+
+class TestCoverageCombinationsAnsweredWithoutAI:
+    """2026-08-03: "ya combien de personne sans vols et sans hebergement" was
+    answered with the plain no-flight list (62 people), silently dropping
+    "sans hebergement". Two separate flaws:
+
+      * domain vocabulary lived in ONE global filler set, so "hebergement"
+        counted as noise even when the matched intent was about flights —
+        the compound guard saw nothing left over and let it through;
+      * "participants_with_flight_no_transfer" (pattern "vol ... sans ...
+        transfert") also matches "SANS vol et sans transfert", answering the
+        exact opposite of the question.
+
+    Negating several coverage dimensions now composes locally, before any
+    intent matching and without a model, so the commonest compound question
+    is both correct and instant."""
+
+    def _fields(self, question):
+        from services.chatbot_service import _compose_coverage_plan
+        composed = _compose_coverage_plan(question)
+        return [f["field"] for f in composed[0]["filters"]] if composed else None
+
+    def test_the_reported_question_composes_both_criteria(self):
+        assert self._fields("ya combien de personne sans vols et sans hebergement") == [
+            "has_flight", "has_hotel"]
+
+    def test_sans_vol_et_sans_transfert_is_not_the_flight_but_no_transfer_intent(self):
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("combien sans vol et sans transfert") is None
+        assert self._fields("combien sans vol et sans transfert") == [
+            "has_flight", "has_transfer"]
+
+    def test_ni_x_ni_y_construction(self):
+        assert self._fields("qui n'a ni hotel ni activite") == ["has_hotel", "has_activities"]
+
+    def test_three_dimensions(self):
+        assert self._fields("sans vol, sans hotel et sans transfert") == [
+            "has_flight", "has_hotel", "has_transfer"]
+
+    def test_single_dimension_does_not_compose(self):
+        assert self._fields("Quels participants n'ont pas de vol ?") is None
+        assert self._fields("participants sans hebergement") is None
+
+    def test_composition_outranks_keyword_routing(self):
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("sans vol et sans hebergement") is None
+
+    def test_single_dimension_questions_still_route_offline(self):
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("Quels participants n'ont pas de vol ?") == "participants_without_flight"
+        assert _keyword_route("participants sans hebergement") == "participants_without_hotel"
+
+    def test_own_words_are_scoped_to_their_own_intent(self):
+        """The root cause, pinned directly: a domain word belonging to another
+        dimension must count as a leftover criterion."""
+        from services.chatbot_service import _leftover_terms
+        flight_words = {"vol", "vols"}
+        # "sans vol" removed (span 0-8); "hebergement" must survive as a criterion
+        assert "hebergement" in _leftover_terms("sans vol et sans hebergement", (0, 8), flight_words)
+        # its own word does not
+        assert _leftover_terms("sans vol", (0, 8), flight_words) == []
+
+    def test_end_to_end_returns_both_criteria_and_needs_no_ai(self):
+        from services import chatbot_service
+        people = [
+            {"id": "p1", "first_name": "A", "last_name": "X", "email": "a@x.com",
+             "company": "", "phone": "", "nationality": "", "dietary_requirements": "",
+             "completeness_status": "incomplete",
+             "has_flight": False, "has_hotel": False, "has_transfer": True, "has_activities": True},
+            {"id": "p2", "first_name": "B", "last_name": "Y", "email": "b@x.com",
+             "company": "", "phone": "", "nationality": "", "dietary_requirements": "",
+             "completeness_status": "incomplete",
+             "has_flight": False, "has_hotel": True, "has_transfer": True, "has_activities": True},
+        ]
+        mock = MagicMock()
+        pm = MagicMock()
+        pm.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute.return_value.data = people
+        mock.table.side_effect = lambda n: pm if n == "participants" else MagicMock()
+
+        with patch("services.ai_service.ai_json", side_effect=AssertionError("no AI expected")),              patch("services.ai_service.ai_text", side_effect=AssertionError("no AI expected")):
+            r = chatbot_service.answer_question(
+                "ya combien de personne sans vols et sans hebergement",
+                "00000000-0000-0000-0000-0000000000e1", mock, user_role="admin")
+
+        assert r["answered"] is True
+        assert r["intent"] == "coverage_combination"
+        assert len(r["rows"]) == 1 and r["rows"][0]["nom"] == "A X"   # only p1 lacks both
+        assert "ni vol ni" in r["answer"]
