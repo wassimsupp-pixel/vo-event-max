@@ -8,7 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AlertCircle, AlertTriangle, Info, CheckCircle2, UserCheck, ShieldAlert, Sparkles, Loader2, Mail, Phone, Globe, Utensils, Plus, ChevronDown, ChevronRight, ClipboardList } from 'lucide-react'
-import { api, type Exception } from '@/lib/api'
+import { api, errorMessage, type Exception } from '@/lib/api'
 
 // Sub-categories of "Champs manquants" — the actionable editable fiche fields.
 const MISSING_FIELD_META: Record<string, { label: string; icon: React.ElementType }> = {
@@ -113,8 +113,8 @@ export default function ExceptionsPage() {
       setTimeout(() => setSuccessMessage(null), 3000)
       setActiveResolve(null)
       await loadExceptions()
-    } catch {
-      setError('Erreur lors de la résolution du conflit.')
+    } catch (err) {
+      setError(errorMessage(err, 'Erreur lors de la résolution du conflit.'))
     } finally {
       setResolving(null)
     }
@@ -127,8 +127,8 @@ export default function ExceptionsPage() {
       setSuccessMessage(`Exception marquée comme résolue.`)
       setTimeout(() => setSuccessMessage(null), 3000)
       await loadExceptions()
-    } catch {
-      setError('Erreur lors de la résolution.')
+    } catch (err) {
+      setError(errorMessage(err, 'Erreur lors de la résolution.'))
     } finally {
       setResolving(null)
     }

@@ -513,6 +513,13 @@ class TestDeleteFileConcurrencyGuard:
 
         response = client.delete(f"/api/files/{self.FILE_ID}")
         assert response.status_code == 409
+        # 2026-08-03: the user hit this and saw only "Erreur lors de la
+        # suppression du fichier." — the frontend now shows `detail` verbatim,
+        # so this string IS the user-facing message: French, and it must say
+        # the block is temporary rather than leaving them stuck.
+        detail = response.json()["detail"]
+        assert "consolidation est en cours" in detail
+        assert "Réessayez" in detail
 
     @patch("routers.files.deletion_service")
     @patch("routers.files.verify_event_access")

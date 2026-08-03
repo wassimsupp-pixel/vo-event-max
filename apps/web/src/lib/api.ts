@@ -369,6 +369,17 @@ export class ApiError extends Error {
   }
 }
 
+/** The backend's own explanation when there is one, else `fallback`.
+ *
+ *  Use this in a catch instead of a hardcoded string whenever the user could
+ *  act on the reason. The API answers with an actionable French message —
+ *  "une consolidation est déjà en cours, patientez", "aucun fichier mappé" —
+ *  and replacing it with a generic line is precisely how a perfectly clear
+ *  409 reached the user as an unexplained "Erreur lors de la suppression". */
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {}

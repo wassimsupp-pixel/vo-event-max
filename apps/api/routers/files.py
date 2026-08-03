@@ -495,7 +495,11 @@ async def delete_file(
     if is_consolidation_running(supabase, meta["event_id"]):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A consolidation is currently running for this event. Please wait for it to finish before deleting files.",
+            detail=(
+                "Une consolidation est en cours sur cet événement : la suppression "
+                "est bloquée le temps qu’elle se termine (sans quoi le fichier "
+                "laisserait des données orphelines). Réessayez dans une minute."
+            ),
         )
 
     # 1. Delete from Supabase Storage

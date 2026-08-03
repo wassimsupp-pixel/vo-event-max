@@ -7,7 +7,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Lock, Unlock, ArrowLeft, Save, User, Clock, FileText, CheckCircle2, Loader2, Plane, Hotel, Bus, Sparkles, Database, Mail, Send, AlertTriangle } from 'lucide-react'
-import { api } from '@/lib/api'
+import { api, errorMessage } from '@/lib/api'
 import { formatDateOnly } from '@/lib/dates'
 import type { Participant } from '@/lib/api'
 
@@ -120,8 +120,8 @@ export default function ParticipantDetailPage() {
         persisted: r.persisted,
       })
       if (!r.persisted) setConfirmMsg('Aperçu généré. Exécutez la migration communications pour activer le suivi et l’envoi.')
-    } catch {
-      setConfirmMsg('Erreur lors de la génération de la confirmation.')
+    } catch (err) {
+      setConfirmMsg(errorMessage(err, 'Erreur lors de la génération de la confirmation.'))
     } finally {
       setGenConfirm(false)
     }
@@ -133,8 +133,8 @@ export default function ParticipantDetailPage() {
     try {
       await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body, status: 'ready' })
       setConfirmMsg('Confirmation enregistrée (prête à envoyer).')
-    } catch {
-      setConfirmMsg('Erreur lors de l’enregistrement.')
+    } catch (err) {
+      setConfirmMsg(errorMessage(err, 'Erreur lors de l’enregistrement.'))
     } finally {
       setSavingConfirm(false)
     }
@@ -147,8 +147,8 @@ export default function ParticipantDetailPage() {
       await api.communications.update(confirmation.commId, { subject: confirmation.subject, body: confirmation.body })
       await api.communications.send(confirmation.commId)
       setConfirmMsg('Confirmation marquée comme envoyée.')
-    } catch {
-      setConfirmMsg('Erreur lors de l’envoi.')
+    } catch (err) {
+      setConfirmMsg(errorMessage(err, 'Erreur lors de l’envoi.'))
     } finally {
       setSendingConfirm(false)
     }
@@ -180,8 +180,8 @@ export default function ParticipantDetailPage() {
       setParticipant(updated)
       setIsSaved(true)
       setTimeout(() => setIsSaved(false), 2000)
-    } catch {
-      setError('Erreur lors de la sauvegarde.')
+    } catch (err) {
+      setError(errorMessage(err, 'Erreur lors de la sauvegarde.'))
     } finally {
       setSaving(false)
     }

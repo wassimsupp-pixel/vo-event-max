@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Upload, CheckCircle2, AlertTriangle, ArrowRight, Loader2, Trash2, Plus, X, ClipboardCheck, Link2, Copy, Check } from 'lucide-react'
 import type { UploadedFile, FileUploadResponse, MappingReportEntry } from '@/lib/api'
-import { api } from '@/lib/api'
+import { api, errorMessage } from '@/lib/api'
 
 const SOURCE_TYPES = [
   { key: 'masterfile', name: 'Master File (infos mixtes)', icon: '🗂️', subtitle: 'Un seul fichier: participants + vols + hôtel + transferts + activités' },
@@ -419,7 +419,10 @@ export default function SourcesPage() {
       router.refresh()
     } catch (err) {
       console.error('Failed to delete file:', err)
-      alert('Erreur lors de la suppression du fichier.')
+      // Deletion is refused (409) while a consolidation is running on the
+      // event — a real, temporary, self-resolving condition the API spells
+      // out. Show it: "erreur" alone left the user with nothing to act on.
+      alert(errorMessage(err, 'Erreur lors de la suppression du fichier.'))
     } finally {
       setDeletingFileId(null)
     }
