@@ -3494,3 +3494,239 @@ class TestConsolidationStepOrdering:
             "_update_completeness_statuses reads the DATA_CONFLICT exceptions "
             "that detect_all writes, so it must stay after it"
         )
+
+
+class TestChatbotQueryPlanner:
+    """Tier 2 of the assistant: the model translates a free-form question into
+    a STRUCTURED filter spec, which this code validates and executes over real
+    rows. That is what lets it answer combinations nobody hard-coded, without
+    ever letting it state a fact.
+
+    The tests that matter most here are the negative ones: an invented field,
+    an invented operator, or a phrased answer containing a number that is not
+    in the computed facts must all be rejected rather than served."""
+
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+
+    def _people(self):
+        def p(pid, first, last, nat, comp, flight, hotel, transfer, activity):
+            return {
+                "id": pid, "first_name": first, "last_name": last,
+                "email": f"{first.lower()}@x.com", "company": comp, "phone": "+32 1",
+                "nationality": nat, "dietary_requirements": "halal",
+                "completeness_status": "complete", "has_flight": flight,
+                "has_hotel": hotel, "has_transfer": transfer, "has_activities": activity,
+            }
+        return [
+            p("p1", "Ana", "Kaya", "Belgique", "ACME", True, True, False, True),
+            p("p2", "Bruno", "Costa", "France", "ACME", True, False, True, True),
+            p("p3", "Chloe", "Nilsson", "Belgique", "Zenith", False, True, True, False),
+            p("p4", "Dan", "Meyer", "France", "Zenith", True, True, False, False),
+        ]
+
+    def _supabase(self):
+        mock = MagicMock()
+        pm = MagicMock()
+        pm.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute.return_value.data = self._people()
+        mock.table.side_effect = lambda name: pm if name == "participants" else MagicMock()
+        return mock
+
+    # -- validation: the allowlist is the safety boundary -------------------
+    def test_valid_plan_is_accepted(self):
+        from services.chatbot_service import _validate_plan
+        plan = _validate_plan(
+            {"filters": [{"field": "has_transfer", "op": "is", "value": False}],
+             "output": "count"}, "admin")
+        assert plan is not None
+        assert plan["filters"][0]["field"] == "has_transfer"
+
+    def test_invented_field_is_rejected(self):
+        from services.chatbot_service import _validate_plan
+        assert _validate_plan(
+            {"filters": [{"field": "salary", "op": "is", "value": 1}]}, "admin") is None
+
+    def test_invented_operator_is_rejected(self):
+        from services.chatbot_service import _validate_plan
+        assert _validate_plan(
+            {"filters": [{"field": "nationality", "op": "DROP TABLE", "value": "x"}]},
+            "admin") is None
+
+    def test_garbage_plan_is_rejected(self):
+        from services.chatbot_service import _validate_plan
+        for junk in (None, [], "hello", {"filters": "nope"}, {"filters": [42]}):
+            assert _validate_plan(junk, "admin") is None
+
+    def test_group_by_must_also_be_an_allowed_field(self):
+        from services.chatbot_service import _validate_plan
+        assert _validate_plan({"filters": [], "output": "group",
+                               "group_by": "secret"}, "admin") is None
+        assert _validate_plan({"filters": [], "output": "group",
+                               "group_by": "nationality"}, "admin") is not None
+
+    def test_dietary_is_not_plannable_for_non_staff(self):
+        """RGPD: the planner must not become a way to filter on a field the
+        rest of the app hides from this role."""
+        from services.chatbot_service import _validate_plan
+        spec = {"filters": [{"field": "dietary_requirements", "op": "contains", "value": "halal"}]}
+        assert _validate_plan(spec, "client") is None
+        assert _validate_plan(spec, "pm") is not None
+
+    # -- execution: real filtering over real rows ---------------------------
+    def _run(self, plan, role="admin"):
+        from services.chatbot_service import _execute_plan, _validate_plan
+        validated = _validate_plan(plan, role)
+        assert validated is not None, plan
+        return _execute_plan(validated, self._people(), role)
+
+    def test_combined_filters_are_applied(self):
+        r = self._run({"filters": [
+            {"field": "has_flight", "op": "is", "value": True},
+            {"field": "has_transfer", "op": "is", "value": False},
+        ], "logic": "and", "output": "list"})
+        assert r["total"] == 2
+        assert {row["nom"] for row in r["rows"]} == {"Ana Kaya", "Dan Meyer"}
+
+    def test_or_logic_is_applied(self):
+        r = self._run({"filters": [
+            {"field": "nationality", "op": "is", "value": "France"},
+            {"field": "company", "op": "is", "value": "Zenith"},
+        ], "logic": "or", "output": "list"})
+        assert r["total"] == 3           # Bruno, Dan (FR) + Chloe (Zenith)
+
+    def test_in_operator(self):
+        r = self._run({"filters": [
+            {"field": "nationality", "op": "in", "value": ["France", "Belgique"]},
+        ], "output": "count"})
+        assert r["total"] == 4
+
+    def test_grouping_counts_real_buckets(self):
+        r = self._run({"filters": [], "output": "group", "group_by": "nationality"})
+        assert r["kind"] == "group"
+        assert {b["nationality"]: b["participants"] for b in r["rows"]} == {
+            "Belgique": 2, "France": 2}
+
+    def test_execution_strips_dietary_for_non_staff(self):
+        r = self._run({"filters": [{"field": "has_flight", "op": "is", "value": True}],
+                       "output": "list"}, role="client")
+        assert all("dietary_requirements" not in row for row in r["rows"])
+
+    # -- the phrasing guard -------------------------------------------------
+    def test_generated_answer_with_an_invented_number_is_discarded(self):
+        """The whole point: if the phrasing model drifts into a figure that is
+        not in the computed facts, we serve the deterministic template."""
+        from services import chatbot_service
+        with patch("services.ai_service.ai_text", return_value="Il y a 47 participants concernés."):
+            out = chatbot_service._phrase("combien ?", {"resultats": 2}, "2 participant(s).")
+        assert out == "2 participant(s)."
+
+    def test_generated_answer_with_grounded_numbers_is_kept(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_text", return_value="2 participants sont concernés."):
+            out = chatbot_service._phrase("combien ?", {"resultats": 2}, "fallback")
+        assert out == "2 participants sont concernés."
+
+    def test_phrasing_without_numbers_is_kept(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_text", return_value="Personne n'est concerné."):
+            out = chatbot_service._phrase("combien ?", {"resultats": 0}, "fallback")
+        assert out == "Personne n'est concerné."
+
+    def test_phrasing_failure_falls_back_to_template(self):
+        from services import chatbot_service
+        for bad in (None, "", "   "):
+            with patch("services.ai_service.ai_text", return_value=bad):
+                assert chatbot_service._phrase("q", {"resultats": 1}, "template") == "template"
+        with patch("services.ai_service.ai_text", side_effect=RuntimeError("provider down")):
+            assert chatbot_service._phrase("q", {"resultats": 1}, "template") == "template"
+
+    def test_numbers_are_grounded_helper(self):
+        from services.chatbot_service import _numbers_are_grounded
+        assert _numbers_are_grounded("il y en a 12", '{"n": 12}')
+        assert not _numbers_are_grounded("il y en a 13", '{"n": 12}')
+        assert _numbers_are_grounded("aucun resultat", '{"n": 0}')
+
+    # -- end to end through answer_question ---------------------------------
+    def test_complex_question_is_answered_via_the_planner(self):
+        from services import chatbot_service
+        plan = {"filters": [
+            {"field": "nationality", "op": "is", "value": "Belgique"},
+            {"field": "has_transfer", "op": "is", "value": False},
+        ], "logic": "and", "output": "list"}
+        with patch("services.ai_service.ai_json", return_value=plan), \
+             patch("services.ai_service.ai_text", return_value=None):
+            r = chatbot_service.answer_question(
+                "les belges qui n'ont pas de transfert", self.EVENT_ID, self._supabase(),
+                user_role="admin")
+        assert r["answered"] is True
+        assert r["intent"] == "query_plan"
+        assert [row["nom"] for row in r["rows"]] == ["Ana Kaya"]
+        assert r["references"]
+
+    def test_unsupported_question_still_refuses(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json",
+                   return_value={"filters": [], "output": "unsupported"}):
+            r = chatbot_service.answer_question(
+                "quelle est la capitale du Japon ?", self.EVENT_ID, self._supabase())
+        assert r["answered"] is False
+        assert r["rows"] == []
+
+    def test_planner_hallucinating_a_field_ends_in_a_refusal_not_a_crash(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json",
+                   return_value={"filters": [{"field": "salaire", "op": "is", "value": 1}]}):
+            r = chatbot_service.answer_question(
+                "qui gagne le plus ?", self.EVENT_ID, self._supabase())
+        assert r["answered"] is False
+
+    def test_no_ai_provider_degrades_to_refusal_not_error(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json", return_value=None):
+            r = chatbot_service.answer_question(
+                "une question libre inhabituelle", self.EVENT_ID, self._supabase())
+        assert r["answered"] is False
+        assert "Je réponds sur" in r["answer"]
+
+    def test_canonical_questions_still_bypass_the_planner(self):
+        """Tier 1 must keep answering offline — the planner is a fallback, not
+        a replacement, so the common questions stay instant."""
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json", side_effect=AssertionError("no AI expected")), \
+             patch("services.ai_service.ai_text", side_effect=AssertionError("no AI expected")):
+            r = chatbot_service.answer_question(
+                "Quels participants n'ont pas de vol ?", self.EVENT_ID, self._supabase())
+        assert r["answered"] is True
+        assert r["intent"] == "participants_without_flight"
+
+
+class TestCompoundQuestionsNeverSilentlyLoseCriteria:
+    """The worst failure mode this assistant can have is not a refusal — it is
+    answering a narrower question than the one asked, confidently. "Les belges
+    qui n'ont pas de transfert" contains the canonical phrase "pas de
+    transfert", and tier-1 keyword routing used to seize it and reply with the
+    full no-transfert list, silently dropping "belges". These pin the guard
+    that sends such questions to the planner instead."""
+
+    def test_extra_criteria_defeat_keyword_routing(self):
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("les belges qui n'ont pas de transfert") is None
+        assert _keyword_route("participants de chez ACME sans hotel") is None
+        assert _keyword_route("qui n'a pas de vol chez Zenith ?") is None
+
+    def test_plain_canonical_questions_still_route_offline(self):
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("Quels participants n'ont pas de vol ?") == "participants_without_flight"
+        assert _keyword_route("participants sans hebergement") == "participants_without_hotel"
+        assert _keyword_route("qui n'a pas encore de transfert ?") == "participants_without_transfer"
+
+    def test_every_suggested_question_still_routes_offline(self):
+        from services import chatbot_service
+        for q in chatbot_service.SUGGESTED_QUESTIONS:
+            assert chatbot_service._keyword_route(q) is not None, q
+
+    def test_named_participant_questions_keep_their_extra_words(self):
+        """A person's name IS extra text, and is the point — these intents
+        must not be diverted by the compound check."""
+        from services.chatbot_service import _keyword_route
+        assert _keyword_route("Pourquoi Ana Kaya est-elle signalee en exception ?") == "participant_exceptions"
+        assert _keyword_route("Quelles informations manquent pour Chloe Nilsson ?") == "participant_missing_info"

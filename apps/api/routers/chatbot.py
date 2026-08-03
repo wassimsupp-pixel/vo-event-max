@@ -62,6 +62,7 @@ async def ask(
         event_id=event_id,
         supabase=supabase,
         user_role=current_user.get("role", "viewer"),
+        history=[t.model_dump() for t in body.history],
     )
     logger.info(
         "Chat event=%s user=%s intent=%s answered=%s",

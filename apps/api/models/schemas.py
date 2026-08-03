@@ -107,9 +107,17 @@ class EventResponse(ORMBase):
     updated_at: datetime
 
 
+class ChatTurn(BaseModel):
+    """One earlier exchange, sent back so follow-ups resolve ("et parmi eux…").
+    Used only as context for choosing what to look up — never as a source of
+    facts, which always come from a fresh query."""
+    question: str = Field(..., max_length=500)
+
+
 class ChatQuestion(BaseModel):
     """A free-form question about the event in the path."""
     question: str = Field(..., min_length=1, max_length=500)
+    history: list[ChatTurn] = Field(default_factory=list, max_length=20)
 
 
 class ChatAnswer(BaseModel):

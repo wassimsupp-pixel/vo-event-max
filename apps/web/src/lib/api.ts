@@ -670,10 +670,13 @@ export const api = {
   // assistant declined — show `answer` as-is, never retry with a looser
   // prompt: refusing to guess is the feature, not a failure.
   chat: {
-    async ask(eventId: string, question: string): Promise<ChatAnswer> {
+    /** `history` lets follow-ups resolve ("et parmi eux, combien sont
+     *  français ?"). It only steers which query is composed — the figures in
+     *  the answer always come from a fresh read. */
+    async ask(eventId: string, question: string, history: { question: string }[] = []): Promise<ChatAnswer> {
       return request<ChatAnswer>(`/api/events/${eventId}/chat`, {
         method: 'POST',
-        body: JSON.stringify({ question }),
+        body: JSON.stringify({ question, history }),
       })
     },
     async suggestions(eventId: string): Promise<{ questions: string[]; capabilities: string[] }> {
