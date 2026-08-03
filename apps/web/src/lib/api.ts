@@ -346,6 +346,18 @@ function mapException(exc: any): Exception {
 
 // ─── HTTP helpers ──────────────────────────────────────────────────────────────
 
+/** An HTTP error from the API, carrying the backend's own message and status.
+ *  `status` lets callers tell an expected conflict (409) apart from a real
+ *  failure without string-matching the message. */
+export class ApiError extends Error {
+  readonly status: number
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {}
@@ -378,8 +390,24 @@ async function request<T>(
   }
 
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: res.statusText }))
-    throw new Error(error.message ?? `HTTP ${res.status}`)
+    // FastAPI reports errors as {"detail": ...} and NEVER as {"message": ...}
+    // (HTTPException, the global handler in main.py, and 422 validation all
+    // use `detail`). Reading `message` meant every backend error message was
+    // dropped on the floor and rethrown as a bare "HTTP 409" — which callers
+    // then replaced with a generic "check your API connection", sending users
+    // hunting a network problem while the API had explained itself perfectly
+    // ("une consolidation est déjà en cours", "aucun fichier mappé"...).
+    const body = await res.json().catch(() => null)
+    const detail = body?.detail
+    let text: string | undefined
+    if (typeof detail === 'string') {
+      text = detail
+    } else if (Array.isArray(detail)) {
+      text = detail[0]?.msg              // 422: Pydantic validation errors
+    } else if (typeof body?.message === 'string') {
+      text = body.message               // non-FastAPI producers (proxies, etc.)
+    }
+    throw new ApiError(text || res.statusText || `HTTP ${res.status}`, res.status)
   }
 
   return res.json()

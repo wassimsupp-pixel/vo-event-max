@@ -71,8 +71,8 @@ async def trigger_consolidation(
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
-                "No mapped files found for this event. "
-                "Please upload files and confirm their column mapping before consolidating."
+                "Aucun fichier prêt pour cet événement. Importez vos fichiers et "
+                "validez leur mapping de colonnes avant de lancer la consolidation."
             ),
         )
 
@@ -84,7 +84,11 @@ async def trigger_consolidation(
     if is_consolidation_running(supabase, event_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="A consolidation is already running for this event. Please wait for it to finish.",
+            detail=(
+                "Une consolidation est déjà en cours pour cet événement "
+                "(valider un mapping en lance une automatiquement). "
+                "Patientez, elle se termine — le tableau de bord se mettra à jour."
+            ),
         )
 
     # Create the run record

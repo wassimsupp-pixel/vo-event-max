@@ -135,7 +135,13 @@ export default function DashboardPage() {
       await poll()
     } catch (err) {
       console.error('Consolidation failed:', err)
-      setConsolidationMsg({ type: 'error', text: t('errorApi') })
+      // Show the API's own explanation rather than a blanket connection
+      // error: the commonest case here is a 409 because a consolidation is
+      // ALREADY running (validating a mapping auto-starts one), and telling
+      // the user to "check the API connection" sent them chasing a network
+      // problem that never existed while the run was succeeding behind them.
+      const text = err instanceof Error && err.message ? err.message : t('errorApi')
+      setConsolidationMsg({ type: 'error', text })
     } finally {
       setConsolidating(false)
     }

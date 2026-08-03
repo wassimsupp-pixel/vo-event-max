@@ -571,6 +571,39 @@ class TestConsolidationConcurrencyGuard:
         assert response.status_code == 409
 
     @patch("routers.consolidation.verify_event_access")
+    def test_conflict_detail_is_actionable_french(self, mock_verify):
+        """2026-08-03: the user hit this 409 (validating a mapping
+        auto-starts a run) and the UI showed 'Vérifiez la connexion API' --
+        the API's explanation never reached them. The frontend now surfaces
+        `detail` verbatim, so this string IS the user-facing message: it must
+        be French and say what to do, not just what went wrong."""
+        from datetime import datetime, timezone
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = self._mocked_client(
+            uploaded_files_data=[{"id": "f1"}],
+            runs_select_data=[{"id": "run1", "started_at": datetime.now(timezone.utc).isoformat()}],
+        )
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        detail = client.post(f"/api/events/{self.EVENT_ID}/consolidate").json()["detail"]
+        assert "déjà en cours" in detail
+        assert "Patientez" in detail
+
+    @patch("routers.consolidation.verify_event_access")
+    def test_no_mapped_files_detail_is_actionable_french(self, mock_verify):
+        mock_verify.return_value = None
+        client = _admin_client()
+        mock_supabase = self._mocked_client(uploaded_files_data=[], runs_select_data=[])
+        client.app.dependency_overrides[get_supabase_client] = lambda: mock_supabase
+
+        response = client.post(f"/api/events/{self.EVENT_ID}/consolidate")
+        assert response.status_code == 422
+        detail = response.json()["detail"]
+        assert "Aucun fichier" in detail
+        assert "mapping" in detail
+
+    @patch("routers.consolidation.verify_event_access")
     def test_allows_when_no_run_in_progress(self, mock_verify):
         from datetime import datetime, timezone
         mock_verify.return_value = None
