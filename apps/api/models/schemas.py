@@ -107,6 +107,31 @@ class EventResponse(ORMBase):
     updated_at: datetime
 
 
+class ChatQuestion(BaseModel):
+    """A free-form question about the event in the path."""
+    question: str = Field(..., min_length=1, max_length=500)
+
+
+class ChatAnswer(BaseModel):
+    """An answer built from real event data.
+
+    ``answered=False`` means the assistant declined (question outside its data,
+    or a read failure) — the client shows `answer` as-is rather than retrying,
+    because guessing is exactly what this feature must never do.
+    """
+    answer: str
+    rows: list[dict[str, Any]] = []
+    references: list[str] = []
+    intent: Optional[str] = None
+    answered: bool
+    generated_on: Optional[str] = None
+
+
+class ChatSuggestions(BaseModel):
+    questions: list[str]
+    capabilities: list[str]
+
+
 class RegistrationOpenUpdate(BaseModel):
     """Request body to open/close an event's public registration form."""
     is_open: bool

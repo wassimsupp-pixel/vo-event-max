@@ -3239,3 +3239,210 @@ class TestGlobalExceptionHandlerCors:
         from main import _cors_headers_for
         assert _cors_headers_for(self._request_with_origin("https://x.vercel.app.evil.com")) == {}
 
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped conversational assistant (Feedback V1 §7)
+# ---------------------------------------------------------------------------
+
+class TestChatbotAssistant:
+    """The client's hard constraint for §7 is that the assistant answers ONLY
+    from project data and says so when something is unavailable -- it must
+    never invent. These tests pin that down: figures come from the database,
+    the LLM is confined to routing (it never sees data and never phrases an
+    answer), unknown questions are refused outright, and an ambiguous name is
+    never silently resolved to the closest stranger."""
+
+    EVENT_ID = "00000000-0000-0000-0000-0000000000e1"
+
+    def _people(self):
+        def p(pid, first, last, flight, hotel, transfer, activity, **kw):
+            return {
+                "id": pid, "first_name": first, "last_name": last,
+                "email": kw.get("email", f"{first.lower()}@x.com"),
+                "company": kw.get("company", "ACME"), "phone": kw.get("phone", "+32 1"),
+                "nationality": kw.get("nationality", "BE"),
+                "dietary_requirements": kw.get("dietary", "halal"),
+                "completeness_status": "complete",
+                "has_flight": flight, "has_hotel": hotel,
+                "has_transfer": transfer, "has_activities": activity,
+            }
+        return [
+            p("p1", "Ana", "Kaya", True, True, False, True),      # vol sans transfert
+            p("p2", "Bruno", "Costa", True, False, True, True),   # sans hebergement
+            p("p3", "Chloe", "Nilsson", False, True, True, False, phone=""),
+        ]
+
+    def _supabase(self, *, exceptions=None, communications=None, candidates=None,
+                  communications_raises=False):
+        mock = MagicMock()
+        people = self._people()
+
+        participants_mock = MagicMock()
+        participants_mock.select.return_value.eq.return_value.order.return_value.order.return_value.range.return_value.execute.return_value.data = people
+
+        exceptions_mock = MagicMock()
+        exc = exceptions if exceptions is not None else []
+        # per-participant chain: select -> eq -> eq -> eq -> order -> execute
+        exceptions_mock.select.return_value.eq.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value.data = exc
+        # conflicts chain: select -> eq -> eq -> eq -> execute
+        exceptions_mock.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value.data = exc
+        # today-actions chain: select -> eq -> eq -> execute
+        exceptions_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = exc
+
+        comms_mock = MagicMock()
+        if communications_raises:
+            comms_mock.select.return_value.eq.return_value.neq.return_value.execute.side_effect = RuntimeError("no table")
+        else:
+            comms_mock.select.return_value.eq.return_value.neq.return_value.execute.return_value.data = communications or []
+
+        cand_mock = MagicMock()
+        cand_mock.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = candidates or []
+
+        tables = {
+            "participants": participants_mock, "exceptions": exceptions_mock,
+            "communications": comms_mock, "match_candidates": cand_mock,
+        }
+        mock.table.side_effect = lambda name: tables.get(name, MagicMock())
+        return mock
+
+    def _ask(self, question, role="admin", **kw):
+        from services import chatbot_service
+        return chatbot_service.answer_question(
+            question, self.EVENT_ID, self._supabase(**kw), user_role=role
+        )
+
+    # -- figures come from the data, not from a model ----------------------
+    def test_without_flight_counts_real_rows(self):
+        r = self._ask("Quels participants n'ont pas de vol ?")
+        assert r["answered"] is True
+        assert r["intent"] == "participants_without_flight"
+        assert "1 participant" in r["answer"]
+        assert [row["nom"] for row in r["rows"]] == ["Chloe Nilsson"]
+
+    def test_without_hotel_counts_real_rows(self):
+        r = self._ask("Quels participants n'ont pas encore d'hotel ?")
+        assert r["intent"] == "participants_without_hotel"
+        assert [row["nom"] for row in r["rows"]] == ["Bruno Costa"]
+
+    def test_flight_but_no_transfer_is_a_real_cross_check(self):
+        r = self._ask("Quels participants ont un vol mais aucun transfert ?")
+        assert r["intent"] == "participants_with_flight_no_transfer"
+        assert [row["nom"] for row in r["rows"]] == ["Ana Kaya"]
+
+    def test_without_activity_counts_real_rows(self):
+        r = self._ask("Quels participants n'ont pas d'activite ?")
+        assert r["intent"] == "participants_without_activity"
+        assert [row["nom"] for row in r["rows"]] == ["Chloe Nilsson"]
+
+    # -- the refusal path is the whole point -------------------------------
+    def test_out_of_scope_question_is_refused_not_guessed(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json", return_value=None):
+            r = chatbot_service.answer_question(
+                "Quelle est la capitale du Japon ?", self.EVENT_ID, self._supabase()
+            )
+        assert r["answered"] is False
+        assert r["intent"] is None
+        assert r["rows"] == []
+        assert "ne peux pas" in r["answer"]
+
+    def test_llm_may_not_invent_an_intent_outside_the_registry(self):
+        """A routing model that hallucinates an intent name must be ignored,
+        not trusted into a KeyError or an arbitrary query."""
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json",
+                   return_value={"intent": "delete_everything", "participant_name": ""}):
+            r = chatbot_service.answer_question(
+                "fais un truc bizarre", self.EVENT_ID, self._supabase()
+            )
+        assert r["answered"] is False
+        assert r["intent"] is None
+
+    def test_unknown_participant_is_reported_not_approximated(self):
+        r = self._ask("Quelles informations manquent pour Zbigniew Nowak ?")
+        assert r["answered"] is True
+        assert "ne trouve aucun participant" in r["answer"]
+        assert r["rows"] == []
+
+    def test_missing_data_source_is_admitted_not_filled_in(self):
+        """Communications table absent (migration not applied) -> say so."""
+        r = self._ask("Quels clients doivent encore recevoir un e-mail ?",
+                      communications_raises=True)
+        assert "pas acc" in r["answer"]      # "n'ai pas acces"
+        assert r["rows"] == []
+
+    # -- per-participant answers -------------------------------------------
+    def test_missing_info_for_a_named_participant(self):
+        r = self._ask("Quelles informations manquent pour Chloe Nilsson ?")
+        assert r["intent"] == "participant_missing_info"
+        assert "Chloe Nilsson" in r["answer"]
+        assert "phone" in r["answer"] or "l" in r["answer"]  # telephone listed
+        assert "vol" in r["answer"]
+
+    def test_participant_exceptions_reads_the_exceptions_table(self):
+        excs = [{"exception_type": "DATA_CONFLICT", "severity": "warning",
+                 "message": "Nom divergent entre deux sources", "created_at": "2026-08-01"}]
+        r = self._ask("Pourquoi Ana Kaya est-elle signalee en exception ?", exceptions=excs)
+        assert r["intent"] == "participant_exceptions"
+        assert "1 exception" in r["answer"]
+        assert r["rows"][0]["message"] == "Nom divergent entre deux sources"
+
+    # -- RGPD: the assistant must not become a side channel ----------------
+    def test_dietary_is_hidden_from_non_staff_roles(self):
+        r = self._ask("Donne-moi la fiche de Ana Kaya", role="client")
+        assert r["intent"] == "participant_detail"
+        assert all("dietary_requirements" not in row for row in r["rows"])
+
+    def test_dietary_is_visible_to_staff(self):
+        r = self._ask("Donne-moi la fiche de Ana Kaya", role="pm")
+        assert r["rows"][0]["dietary_requirements"] == "halal"
+
+    # -- routing behaviour --------------------------------------------------
+    def test_canonical_questions_route_without_any_ai_call(self):
+        """Every suggestion chip must resolve offline: no provider dependency,
+        no latency, and no model in the path for the common cases."""
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json",
+                   side_effect=AssertionError("LLM must not be called")):
+            for q in chatbot_service.SUGGESTED_QUESTIONS:
+                r = chatbot_service.answer_question(q, self.EVENT_ID, self._supabase())
+                assert r["answered"] is True, q
+                assert r["intent"] is not None, q
+
+    def test_llm_routing_is_used_for_free_form_phrasings(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json",
+                   return_value={"intent": "event_overview", "participant_name": ""}) as mock_ai:
+            r = chatbot_service.answer_question(
+                "dis moi ou on en est globalement", self.EVENT_ID, self._supabase()
+            )
+        mock_ai.assert_called_once()
+        assert r["intent"] == "event_overview"
+        assert r["rows"][0]["participants"] == 3
+
+    def test_every_answer_cites_its_sources(self):
+        from services import chatbot_service
+        for q in chatbot_service.SUGGESTED_QUESTIONS:
+            r = chatbot_service.answer_question(q, self.EVENT_ID, self._supabase())
+            assert r["references"], q
+
+    def test_today_actions_rolls_up_real_counts(self):
+        r = self._ask("Quelles actions doivent etre realisees aujourd'hui ?",
+                      candidates=[{"id": "c1"}])
+        assert r["intent"] == "today_actions"
+        actions = {row["action"]: row["nombre"] for row in r["rows"]}
+        assert any("sans vol" in a for a in actions)
+        assert any("sans h" in a for a in actions)            # sans hébergement
+        assert any("fusions" in a for a in actions)           # pending match candidate
+        assert all(isinstance(n, int) and n > 0 for n in actions.values())
+
+    def test_a_failing_query_never_produces_a_confident_answer(self):
+        from services import chatbot_service
+        broken = MagicMock()
+        broken.table.side_effect = RuntimeError("db down")
+        r = chatbot_service.answer_question(
+            "Quels participants n'ont pas de vol ?", self.EVENT_ID, broken
+        )
+        assert r["answered"] is False
+        assert r["rows"] == []

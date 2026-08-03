@@ -1,6 +1,7 @@
 {
   "nav": {
     "dashboard": "Dashboard",
+    "assistant": "Assistant",
     "masterList": "Master List",
     "sources": "Data Sources",
     "participants": "Participants",

@@ -17,6 +17,7 @@ import {
   AlertTriangle,
   GitMerge,
   BarChart3,
+  MessageSquare,
   Settings,
   LogOut,
 } from 'lucide-react'
@@ -36,6 +37,7 @@ function getNavItems(eventId: string, locale: string, userRole: string, exceptio
   const base = `/${locale}/events/${eventId}`
   const items = [
     { key: 'dashboard', href: `${base}/dashboard`, icon: LayoutDashboard },
+    { key: 'assistant', href: `${base}/assistant`, icon: MessageSquare },
     { key: 'masterList', href: `${base}/master-list`, icon: ListChecks },
     { key: 'sources', href: `${base}/sources`, icon: Database },
     { key: 'participants', href: `${base}/participants`, icon: Users },

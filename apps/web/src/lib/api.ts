@@ -216,6 +216,17 @@ export interface Exception {
   context_data?: Record<string, unknown>
 }
 
+export interface ChatAnswer {
+  answer: string
+  rows: Record<string, unknown>[]
+  references: string[]
+  intent: string | null
+  /** False when the assistant declined (out of scope, unknown participant, or
+   *  a data source it could not read). The UI shows `answer` verbatim. */
+  answered: boolean
+  generated_on?: string
+}
+
 export interface EmailProposal {
   id: string
   event_id: string
@@ -640,6 +651,23 @@ export const api = {
     async getDownloadUrl(exportId: string): Promise<{ signed_url: string; expires_at: string; filename: string }> {
       return request<{ signed_url: string; expires_at: string; filename: string }>(
         `/api/exports/${exportId}/download`
+      )
+    },
+  },
+
+  // Project-scoped assistant (Feedback V1 §7). `answered: false` means the
+  // assistant declined — show `answer` as-is, never retry with a looser
+  // prompt: refusing to guess is the feature, not a failure.
+  chat: {
+    async ask(eventId: string, question: string): Promise<ChatAnswer> {
+      return request<ChatAnswer>(`/api/events/${eventId}/chat`, {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+      })
+    },
+    async suggestions(eventId: string): Promise<{ questions: string[]; capabilities: string[] }> {
+      return request<{ questions: string[]; capabilities: string[] }>(
+        `/api/events/${eventId}/chat/suggestions`
       )
     },
   },
