@@ -863,12 +863,41 @@ def _execute_plan(plan: dict, people: list[dict], user_role: str) -> dict[str, A
     return {"kind": plan["output"], "total": len(hits), "rows": rows}
 
 
+# Text fields whose real values are shown to the planner. Without them a
+# question like "combien viennent d'Europe" is unanswerable: the model would
+# have to guess how countries are spelled in this particular dataset. With
+# them it maps the concept onto values that actually exist — and it cannot
+# propose one that doesn't.
+_CATALOGUED_FIELDS = ("nationality", "company", "completeness_status")
+_MAX_CATALOGUE_VALUES = 60
+
+
+def _value_catalogue(people: list[dict], user_role: str) -> dict[str, list[str]]:
+    allowed = _plannable_for(user_role)
+    catalogue: dict[str, list[str]] = {}
+    for field in _CATALOGUED_FIELDS:
+        if field not in allowed:
+            continue
+        counts: dict[str, int] = {}
+        for p in people:
+            v = str(p.get(field) or "").strip()
+            if v:
+                counts[v] = counts.get(v, 0) + 1
+        if counts:
+            ordered = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            catalogue[field] = [v for v, _ in ordered[:_MAX_CATALOGUE_VALUES]]
+    return catalogue
+
+
 _PLAN_PROMPT = """Tu traduis une question en REQUÊTE STRUCTURÉE sur une liste de
 participants d'un événement. Tu ne réponds jamais à la question et tu n'inventes
 aucune donnée : tu décris seulement quoi chercher.
 
 Champs disponibles (n'en invente aucun autre) :
 {fields}
+
+Valeurs réellement présentes dans ces données (n'utilise aucune autre valeur) :
+{catalogue}
 
 Opérateurs : is, is_not, contains, not_contains, is_empty, is_not_empty, in
 Sorties : "count" (combien), "list" (lesquels), "group" (répartition par champ)
@@ -885,12 +914,22 @@ Règles :
 - has_flight / has_hotel / has_transfer / has_activities valent true ou false.
 - "sans X" => {{"field":"has_X","op":"is","value":false}}.
 - Pour une répartition, mets output="group" et group_by=<champ>, filters peut être vide.
+- Pour un CONCEPT (Europe, Asie, pays nordiques, francophones…), traduis-le en
+  op="in" avec la liste des valeurs ci-dessus qui correspondent au concept.
 - Si la question ne porte pas sur les participants de cet événement, renvoie
   exactement {{"filters":[],"output":"unsupported"}}."""
 
 
-def _plan_query(question: str, user_role: str, history: list[dict] | None) -> Optional[dict]:
+def _plan_query(
+    question: str, user_role: str, history: list[dict] | None,
+    catalogue: dict[str, list[str]],
+) -> tuple[Optional[dict], str]:
+    """Return (plan, reason). ``reason`` separates "no AI provider answered"
+    from "the model understood and this is out of scope" — the caller must
+    tell the user which, because blaming the question for a provider outage
+    is a lie the user cannot check."""
     fields = "\n".join(f"- {name} ({kind})" for name, kind in _plannable_for(user_role).items())
+    cat = "\n".join(f"- {f} : {', '.join(v)}" for f, v in catalogue.items()) or "- (aucune)"
     hist = ""
     if history:
         recent = [h for h in history if h.get("question")][-3:]
@@ -898,15 +937,24 @@ def _plan_query(question: str, user_role: str, history: list[dict] | None) -> Op
             hist = "Questions précédentes (contexte pour les sous-entendus) :\n" + "\n".join(
                 f"- {h['question']}" for h in recent
             ) + "\n\n"
-    prompt = _PLAN_PROMPT.format(fields=fields, history=hist, question=question.replace('"', "'"))
+    prompt = _PLAN_PROMPT.format(
+        fields=fields, catalogue=cat, history=hist, question=question.replace('"', "'"),
+    )
     try:
-        raw = ai_service.ai_json(prompt, timeout_s=25.0)
+        raw_text = ai_service.ai_text(prompt, timeout_s=25.0)
     except Exception as exc:
-        logger.warning("Chatbot planner call failed: %s", exc)
-        return None
-    if isinstance(raw, dict) and raw.get("output") == "unsupported":
-        return None
-    return _validate_plan(raw, user_role)
+        logger.warning("Chatbot planner call raised: %s", exc)
+        return None, "ai_unavailable"
+    if raw_text is None:
+        # ai_text returns None only when EVERY provider failed.
+        logger.warning("Chatbot planner: no AI provider answered")
+        return None, "ai_unavailable"
+
+    parsed = ai_service.strip_json(raw_text)
+    if isinstance(parsed, dict) and parsed.get("output") == "unsupported":
+        return None, "unsupported"
+    plan = _validate_plan(parsed, user_role)
+    return (plan, "ok") if plan else (None, "unsupported")
 
 
 # ---------------------------------------------------------------------------
@@ -952,13 +1000,18 @@ def _phrase(question: str, facts: dict, fallback: str) -> str:
 def _answer_by_plan(
     question: str, event_id: str, supabase: Client, user_role: str,
     history: list[dict] | None,
-) -> Optional[dict]:
-    """Tier 2: plan a query, run it, phrase the result. None when the question
-    cannot be expressed as a query over the participant list."""
-    plan = _plan_query(question, user_role, history)
-    if not plan:
-        return None
+) -> tuple[Optional[dict], str]:
+    """Tier 2: plan a query, run it, phrase the result.
+
+    Participants are read BEFORE planning so the model can be shown the values
+    that actually occur in this event — that is what turns "combien viennent
+    d'Europe" into a real ``nationality in [...]`` filter instead of a guess.
+    """
     people = _fetch_participants(supabase, event_id)
+    catalogue = _value_catalogue(people, user_role)
+    plan, reason = _plan_query(question, user_role, history, catalogue)
+    if not plan:
+        return None, reason
     result = _execute_plan(plan, people, user_role)
     total, shown = result["total"], len(result["rows"])
 
@@ -982,7 +1035,7 @@ def _answer_by_plan(
         "references": ["Master list — requête composée sur les données de l'événement"],
         "intent": "query_plan",
         "plan": plan,
-    }
+    }, "ok"
 
 
 def answer_question(
@@ -1016,10 +1069,10 @@ def answer_question(
         # Tier 2: compose a query for anything the fixed intents don't cover.
         # This is what answers combinations nobody hard-coded.
         try:
-            planned = _answer_by_plan(question, event_id, supabase, user_role, history)
+            planned, reason = _answer_by_plan(question, event_id, supabase, user_role, history)
         except Exception as exc:
             logger.error("Chatbot planner failed for event %s: %s", event_id, exc, exc_info=True)
-            planned = None
+            planned, reason = None, "error"
         if planned:
             planned.setdefault("rows", [])
             planned.setdefault("references", [])
@@ -1027,7 +1080,20 @@ def answer_question(
             planned["generated_on"] = date.today().isoformat()
             return planned
 
-        # Tier 3: refuse, and say what IS answerable.
+        # Tier 3. Two very different failures, and saying the wrong one is a
+        # lie the user cannot check: a provider outage is temporary and has
+        # nothing to do with their question, whereas an out-of-scope question
+        # will never work no matter how many times they retry.
+        if reason in ("ai_unavailable", "error"):
+            return {
+                "answer": (
+                    "Le service d'analyse ne répond pas pour l'instant, donc je ne peux pas "
+                    "traiter cette question précise — ce n'est pas elle qui pose problème. "
+                    "Réessayez dans un instant ; les questions suggérées, elles, fonctionnent "
+                    "sans ce service."
+                ),
+                "rows": [], "references": [], "intent": None, "answered": False,
+            }
         return {
             "answer": (
                 "Je ne peux pas répondre à cette question à partir des données de l'événement. "

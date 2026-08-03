@@ -3648,12 +3648,13 @@ class TestChatbotQueryPlanner:
     # -- end to end through answer_question ---------------------------------
     def test_complex_question_is_answered_via_the_planner(self):
         from services import chatbot_service
-        plan = {"filters": [
-            {"field": "nationality", "op": "is", "value": "Belgique"},
-            {"field": "has_transfer", "op": "is", "value": False},
-        ], "logic": "and", "output": "list"}
-        with patch("services.ai_service.ai_json", return_value=plan), \
-             patch("services.ai_service.ai_text", return_value=None):
+        plan_json = ('{"filters":[{"field":"nationality","op":"is","value":"Belgique"},'
+                     '{"field":"has_transfer","op":"is","value":false}],'
+                     '"logic":"and","output":"list"}')
+        # First ai_text call is the planner; the second is the phrasing, which
+        # we let fail so the deterministic template is used.
+        with patch("services.ai_service.ai_json", return_value=None), \
+             patch("services.ai_service.ai_text", side_effect=[plan_json, None]):
             r = chatbot_service.answer_question(
                 "les belges qui n'ont pas de transfert", self.EVENT_ID, self._supabase(),
                 user_role="admin")
@@ -3661,6 +3662,32 @@ class TestChatbotQueryPlanner:
         assert r["intent"] == "query_plan"
         assert [row["nom"] for row in r["rows"]] == ["Ana Kaya"]
         assert r["references"]
+
+    def test_concept_question_becomes_an_in_filter_over_real_values(self):
+        """"Combien viennent d'Europe" only works if the model is shown the
+        country names this dataset actually uses — otherwise it has to guess
+        spellings. The catalogue is what makes concept questions answerable."""
+        from services import chatbot_service
+        plan_json = ('{"filters":[{"field":"nationality","op":"in",'
+                     '"value":["Belgique","France"]}],"output":"count"}')
+        with patch("services.ai_service.ai_json", return_value=None), \
+             patch("services.ai_service.ai_text", side_effect=[plan_json, None]) as mock_text:
+            r = chatbot_service.answer_question(
+                "combien viennent d'europe", self.EVENT_ID, self._supabase(), user_role="admin")
+        prompt = mock_text.call_args_list[0][0][0]
+        assert "Belgique" in prompt and "France" in prompt   # catalogue was supplied
+        assert r["answered"] is True
+        assert r["rows"] and len(r["rows"]) == 4
+
+    def test_value_catalogue_lists_real_values_only(self):
+        from services.chatbot_service import _value_catalogue
+        cat = _value_catalogue(self._people(), "admin")
+        assert set(cat["nationality"]) == {"Belgique", "France"}
+        assert set(cat["company"]) == {"ACME", "Zenith"}
+
+    def test_value_catalogue_hides_dietary_from_non_staff(self):
+        from services.chatbot_service import _value_catalogue
+        assert "dietary_requirements" not in _value_catalogue(self._people(), "client")
 
     def test_unsupported_question_still_refuses(self):
         from services import chatbot_service
@@ -3679,13 +3706,34 @@ class TestChatbotQueryPlanner:
                 "qui gagne le plus ?", self.EVENT_ID, self._supabase())
         assert r["answered"] is False
 
-    def test_no_ai_provider_degrades_to_refusal_not_error(self):
+    def test_provider_outage_says_so_instead_of_blaming_the_question(self):
+        """2026-08-03: NVIDIA timed out and Gemini was out of credit, and the
+        assistant answered "je ne peux pas répondre à cette question" — telling
+        the user their perfectly valid question was out of scope. A provider
+        outage is temporary and unrelated to what was asked; conflating the two
+        sends people rewriting a question that was never the problem."""
         from services import chatbot_service
-        with patch("services.ai_service.ai_json", return_value=None):
+        with patch("services.ai_service.ai_json", return_value=None), \
+             patch("services.ai_service.ai_text", return_value=None):
             r = chatbot_service.answer_question(
-                "une question libre inhabituelle", self.EVENT_ID, self._supabase())
+                "combien viennent d'europe", self.EVENT_ID, self._supabase())
+        assert r["answered"] is False
+        assert "service d'analyse" in r["answer"]
+        assert "Réessayez" in r["answer"]
+        assert "ce n'est pas elle qui pose problème" in r["answer"]
+
+    def test_out_of_scope_question_still_lists_capabilities(self):
+        """The other branch: the model understood and said it is unsupported.
+        Retrying will never help, so say what IS answerable instead."""
+        from services import chatbot_service
+        with patch("services.ai_service.ai_json", return_value=None), \
+             patch("services.ai_service.ai_text",
+                   return_value='{"filters":[],"output":"unsupported"}'):
+            r = chatbot_service.answer_question(
+                "quelle est la capitale du Japon ?", self.EVENT_ID, self._supabase())
         assert r["answered"] is False
         assert "Je réponds sur" in r["answer"]
+        assert "service d'analyse" not in r["answer"]
 
     def test_canonical_questions_still_bypass_the_planner(self):
         """Tier 1 must keep answering offline — the planner is a fallback, not
