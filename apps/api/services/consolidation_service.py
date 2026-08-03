@@ -1634,7 +1634,23 @@ async def run_consolidation(
             logger.warning("Ambiguous-duplicate arbitration failed: %s", exc)
 
         # ---------------------------------------------------------------
-        # 7. Full exception detection
+        # 7. Extract flights, hotels, transfers, and activities from source
+        #    records. MUST run before exception detection: this is the step
+        #    that sets participants' has_flight/has_hotel/has_transfer/
+        #    has_activities, and the coverage detectors read exactly those
+        #    flags. Detecting first meant every first consolidation reported
+        #    "300 participants sans hôtel" from flags that were about to be
+        #    filled in one step later — and once those gaps escalated to a
+        #    "suspected mapping anomaly" warning (2026-08-01), the stale read
+        #    turned into a loud false alarm telling the organizer to go check
+        #    a mapping that was perfectly fine (observed on Sales Convention
+        #    2027, 2026-08-03: hotel + transfer flagged at 300/300 while the
+        #    database had all 300 correctly covered).
+        # ---------------------------------------------------------------
+        extract_domain_data_from_sources(event_id, supabase)
+
+        # ---------------------------------------------------------------
+        # 8. Full exception detection — now reading the final state.
         # ---------------------------------------------------------------
         exc_count = exception_service.detect_all(
             event_id=event_id,
@@ -1646,12 +1662,9 @@ async def run_consolidation(
         stats["exceptions_count"] += exc_count
 
         # ---------------------------------------------------------------
-        # 8. Extract flights, hotels, transfers, and activities from source records
-        # ---------------------------------------------------------------
-        extract_domain_data_from_sources(event_id, supabase)
-
-        # ---------------------------------------------------------------
-        # 9. Update completeness_status on all participants
+        # 9. Update completeness_status on all participants. Stays AFTER
+        #    detection: it marks a participant 'conflict' based on the
+        #    DATA_CONFLICT exceptions step 8 just wrote.
         # ---------------------------------------------------------------
         _update_completeness_statuses(event_id, supabase)
 

@@ -3453,3 +3453,44 @@ class TestChatbotAssistant:
         )
         assert r["answered"] is False
         assert r["rows"] == []
+
+
+class TestConsolidationStepOrdering:
+    """2026-08-03, Sales Convention 2027: a first consolidation reported
+    "300 participants sans hebergement" and "300 sans transfert" as suspected
+    mapping anomalies, while the database had all 300 correctly covered.
+
+    Cause: exception detection ran BEFORE extract_domain_data_from_sources,
+    which is the step that sets has_flight/has_hotel/has_transfer/
+    has_activities -- so the coverage detectors read flags that were still
+    all-false and about to be filled one step later. Harmless-looking noise
+    until those gaps started escalating to warnings that tell the organizer
+    to go re-check a mapping that was fine; a false alarm of that kind is
+    worse than no alarm, because it teaches people to ignore the real ones.
+
+    Extraction now runs first. _update_completeness_statuses still runs last,
+    since it depends on the DATA_CONFLICT exceptions detection writes."""
+
+    def _source_order(self):
+        import inspect
+        from services import consolidation_service
+        src = inspect.getsource(consolidation_service.run_consolidation)
+        return (
+            src.index("extract_domain_data_from_sources(event_id, supabase)"),
+            src.index("exception_service.detect_all("),
+            src.index("_update_completeness_statuses(event_id, supabase)"),
+        )
+
+    def test_domain_extraction_runs_before_exception_detection(self):
+        extract_at, detect_at, _ = self._source_order()
+        assert extract_at < detect_at, (
+            "extract_domain_data_from_sources must run before detect_all, "
+            "otherwise the coverage detectors read stale has_* flags"
+        )
+
+    def test_completeness_update_runs_after_exception_detection(self):
+        _, detect_at, completeness_at = self._source_order()
+        assert detect_at < completeness_at, (
+            "_update_completeness_statuses reads the DATA_CONFLICT exceptions "
+            "that detect_all writes, so it must stay after it"
+        )
