@@ -3945,3 +3945,61 @@ class TestAirportColumnAutoMapping:
         assert _looks_like_airport_label("SAO PAULO GRU")
         assert not _looks_like_airport_label("Paris")
         assert not _looks_like_airport_label("x" * 60 + " CDG")
+
+
+class TestPlannerFastModelWithFallback:
+    """The planner tries a small fast model first and re-runs the flagship when
+    the fast answer fails validation. Speed must never be traded against
+    correctness: a bad fast plan is rejected and retried, not served."""
+
+    def test_fast_model_is_tried_first(self):
+        from services import chatbot_service, ai_service
+        good = '{"filters":[{"field":"has_flight","op":"is","value":false}],"output":"count"}'
+        with patch("services.ai_service.ai_text", return_value=good) as mock:
+            plan, reason = chatbot_service._plan_query("qui n a pas de vol", "admin", None, {})
+        assert reason == "ok" and plan is not None
+        assert mock.call_args_list[0].kwargs["model_override"] == ai_service.NVIDIA_FAST_MODEL
+
+    def test_invalid_fast_answer_falls_back_to_the_flagship(self):
+        from services import chatbot_service
+        bad = '{"filters":[{"field":"salaire","op":"is","value":1}]}'
+        good = '{"filters":[{"field":"has_hotel","op":"is","value":false}],"output":"count"}'
+        with patch("services.ai_service.ai_text", side_effect=[bad, good]) as mock:
+            plan, reason = chatbot_service._plan_query("q", "admin", None, {})
+        assert reason == "ok"
+        assert plan["filters"][0]["field"] == "has_hotel"
+        assert len(mock.call_args_list) == 2
+        assert mock.call_args_list[1].kwargs["model_override"] is None   # flagship
+
+    def test_both_models_failing_reports_unsupported_not_outage(self):
+        from services import chatbot_service
+        bad = '{"filters":[{"field":"inexistant","op":"is","value":1}]}'
+        with patch("services.ai_service.ai_text", side_effect=[bad, bad]):
+            plan, reason = chatbot_service._plan_query("q", "admin", None, {})
+        assert plan is None and reason == "unsupported"
+
+    def test_no_provider_at_all_reports_an_outage(self):
+        from services import chatbot_service
+        with patch("services.ai_service.ai_text", return_value=None):
+            plan, reason = chatbot_service._plan_query("q", "admin", None, {})
+        assert plan is None and reason == "ai_unavailable"
+
+
+class TestPlannerPhrasingIgnoresDisplayCap:
+    """Asked "les informations sont-elles completes ?", the assistant replied
+    "non, seuls 50 resultats sur 300 sont presentes" — a remark about the table
+    below, not an answer to the question. The row cap is no longer handed to
+    the phrasing model."""
+
+    def test_display_cap_is_not_in_the_phrasing_facts(self):
+        import inspect
+        from services import chatbot_service
+        src = inspect.getsource(chatbot_service._answer_by_plan)
+        body = src.split('facts = {"resultats"')[1].split("}")[0]
+        assert "affiches" not in body, "the display cap must stay out of the facts"
+
+    def test_template_still_mentions_the_cap_to_the_user(self):
+        import inspect
+        from services import chatbot_service
+        src = inspect.getsource(chatbot_service._answer_by_plan)
+        assert "premiers sont listes ci-dessous" in src.replace("é", "e")

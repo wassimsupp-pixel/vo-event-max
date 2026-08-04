@@ -6,13 +6,8 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Link2, Copy, Check, Loader2, ExternalLink, Users, Info, AlertTriangle } from 'lucide-react'
+import { Link2, Copy, Check, Loader2, ExternalLink, Users, Info, AlertTriangle, RefreshCw } from 'lucide-react'
 import { api, errorMessage } from '@/lib/api'
-
-// Virtual uploaded_files row the API creates for public submissions
-// (routers/public_registration.py). Its row count is how many people have
-// filled the form, so the page can report intake without a new endpoint.
-const FORM_FILENAME = "Formulaire d'inscription en ligne"
 
 export default function RegistrationFormPage() {
   const params = useParams()
@@ -26,6 +21,7 @@ export default function RegistrationFormPage() {
   const [copied, setCopied] = useState(false)
   const [submissions, setSubmissions] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
 
   const loadLink = useCallback(async () => {
     try {
@@ -34,6 +30,7 @@ export default function RegistrationFormPage() {
       // so the shared link matches the domain in use and opens in their
       // language (the API's own url hardcodes /fr/).
       setLink({ url: `${window.location.origin}/${locale}/register/${info.token}`, is_open: info.is_open })
+      setSubmissions(info.submissions)
       setUnavailable(null)
     } catch (err) {
       setUnavailable(errorMessage(err, "Le lien d'inscription n'est pas disponible pour cet événement."))
@@ -43,20 +40,9 @@ export default function RegistrationFormPage() {
     }
   }, [eventId, locale])
 
-  const loadSubmissions = useCallback(async () => {
-    try {
-      const files = await api.files.list(eventId)
-      const form = files.find((f) => f.filename === FORM_FILENAME)
-      setSubmissions(form ? form.row_count : 0)
-    } catch {
-      setSubmissions(null)   // best-effort — never block the link on this
-    }
-  }, [eventId])
-
   useEffect(() => {
     loadLink()
-    loadSubmissions()
-  }, [loadLink, loadSubmissions])
+  }, [loadLink])
 
   const handleCopy = async () => {
     if (!link) return
@@ -190,18 +176,33 @@ export default function RegistrationFormPage() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <Card className="p-5">
-                <div className="flex items-center gap-3">
-                  <Users className="h-5 w-5 text-[var(--color-accent)]" />
-                  <div>
-                    <p className="text-2xl font-bold text-[var(--color-text-primary)]">
-                      {submissions === null ? '—' : submissions}
-                    </p>
-                    <p className="text-xs text-[var(--color-text-secondary)]">
-                      {submissions === null
-                        ? 'Nombre de réponses indisponible'
-                        : 'réponse(s) reçue(s) via ce lien'}
-                    </p>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <Users className="h-5 w-5 text-[var(--color-accent)]" />
+                    <div>
+                      <p className="text-2xl font-bold text-[var(--color-text-primary)]">
+                        {submissions === null ? '—' : submissions}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-secondary)]">
+                        {submissions === null
+                          ? 'Nombre de réponses indisponible'
+                          : submissions === 0
+                          ? 'aucune réponse pour l’instant'
+                          : submissions === 1
+                          ? 'réponse reçue via ce lien'
+                          : 'réponses reçues via ce lien'}
+                      </p>
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => { setRefreshing(true); loadLink().finally(() => setRefreshing(false)) }}
+                    disabled={refreshing}
+                    title="Actualiser le compteur"
+                    className="rounded-lg p-2 text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-subtle)] disabled:opacity-50"
+                  >
+                    <RefreshCw className={'h-4 w-4' + (refreshing ? ' animate-spin' : '')} />
+                  </button>
                 </div>
               </Card>
 

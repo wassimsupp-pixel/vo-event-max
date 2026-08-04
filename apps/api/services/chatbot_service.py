@@ -1000,21 +1000,43 @@ def _plan_query(
     prompt = _PLAN_PROMPT.format(
         fields=fields, catalogue=cat, history=hist, question=question.replace('"', "'"),
     )
-    try:
-        raw_text = ai_service.ai_text(prompt, timeout_s=25.0)
-    except Exception as exc:
-        logger.warning("Chatbot planner call raised: %s", exc)
-        return None, "ai_unavailable"
-    if raw_text is None:
-        # ai_text returns None only when EVERY provider failed.
+
+    # Fast model first, flagship second. Planning is a short, tightly-bounded
+    # task, so a small model usually nails it in a fraction of the time; when
+    # it doesn't, the output fails _validate_plan and the flagship re-runs the
+    # same prompt. Speed is therefore never traded against correctness — a
+    # wrong plan is caught by validation, not served.
+    attempts = [
+        (ai_service.NVIDIA_FAST_MODEL, 20.0),
+        (None, 30.0),                       # None = the configured flagship
+    ]
+    any_provider_answered = False
+    unsupported_seen = False
+
+    for model_override, timeout in attempts:
+        try:
+            raw_text = ai_service.ai_text(prompt, timeout_s=timeout, model_override=model_override)
+        except Exception as exc:
+            logger.warning("Chatbot planner call raised (%s): %s", model_override or "default", exc)
+            continue
+        if raw_text is None:
+            continue                        # every provider failed for this attempt
+        any_provider_answered = True
+
+        parsed = ai_service.strip_json(raw_text)
+        if isinstance(parsed, dict) and parsed.get("output") == "unsupported":
+            unsupported_seen = True
+            continue                        # let the stronger model have a go
+        plan = _validate_plan(parsed, user_role)
+        if plan:
+            return plan, "ok"
+        logger.info("Planner output rejected (%s) — retrying with the stronger model",
+                    model_override or "default")
+
+    if not any_provider_answered:
         logger.warning("Chatbot planner: no AI provider answered")
         return None, "ai_unavailable"
-
-    parsed = ai_service.strip_json(raw_text)
-    if isinstance(parsed, dict) and parsed.get("output") == "unsupported":
-        return None, "unsupported"
-    plan = _validate_plan(parsed, user_role)
-    return (plan, "ok") if plan else (None, "unsupported")
+    return None, "unsupported" if unsupported_seen else "unsupported"
 
 
 # ---------------------------------------------------------------------------
@@ -1111,7 +1133,13 @@ def _answer_by_plan(
         template = f"{total} participant(s) correspondent à cette recherche."
         if total > shown:
             template += f" Les {shown} premiers sont listés ci-dessous."
-        facts = {"resultats": total, "affiches": shown,
+        # The display cap is deliberately NOT given to the phrasing model. It
+        # is a property of the table below, not an answer to anything, and
+        # handing it over invited replies like "les informations ne sont pas
+        # complètes car seuls 50 résultats sur 300 sont présentés" — true about
+        # the table, useless as an answer to the question actually asked
+        # (2026-08-03).
+        facts = {"resultats": total,
                  "exemples": [r.get("nom") for r in result["rows"][:8]]}
 
     return {

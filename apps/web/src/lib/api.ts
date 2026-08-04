@@ -627,8 +627,13 @@ export const api = {
     async delete(eventId: string): Promise<void> {
       await request(`/api/events/${eventId}`, { method: 'DELETE' })
     },
-    async getRegistrationLink(eventId: string): Promise<{ token: string; url: string; is_open: boolean }> {
-      return request<{ token: string; url: string; is_open: boolean }>(`/api/events/${eventId}/registration-link`)
+    /** `submissions` counts source_records under the event's public-form file —
+     *  the only place that knows how many people actually filled it in.
+     *  null when the count could not be read (never blocks the link itself). */
+    async getRegistrationLink(eventId: string): Promise<{ token: string; url: string; is_open: boolean; submissions: number | null }> {
+      return request<{ token: string; url: string; is_open: boolean; submissions: number | null }>(
+        `/api/events/${eventId}/registration-link`
+      )
     },
     async setRegistrationOpen(eventId: string, isOpen: boolean): Promise<{ is_open: boolean }> {
       return request<{ is_open: boolean }>(`/api/events/${eventId}/registration-open`, {

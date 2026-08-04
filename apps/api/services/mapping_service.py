@@ -358,8 +358,14 @@ SYNONYMS: dict[str, list[str]] = {
     "transfer_type": ["transfertype", "shuttletype", "typenavette"],
     # NB: bare "depart"/"arrivee" removed — too greedy, they collided with the
     # flight Depart*/Arrival* columns. Keep only pickup/transfer-specific tokens.
-    "pickup_location": ["pickuplocation", "lieupriseencharge", "priseencharge", "pickup", "lieudedepart"],
-    "dropoff_location": ["dropofflocation", "destination", "dropoff", "lieudarrivee"],
+    "pickup_location": ["pickuplocation", "lieupriseencharge", "priseencharge", "pickup", "lieudedepart",
+                        "pointderencontre", "meetingpoint", "pointdepriseencharge", "pointdedepart",
+                        "adressedepriseencharge", "lieuderamassage", "ramassage", "lieudepart",
+                        "pointdepart", "origine", "departurepoint", "pickuppoint"],
+    "dropoff_location": ["dropofflocation", "destination", "dropoff", "lieudarrivee",
+                         "pointdarrivee", "lieudedestination", "adressededestination",
+                         "lieudedepose", "pointdedepose", "depose", "dropoffpoint",
+                         "lieuarrivee", "pointarrivee"],
     "pickup_time": ["pickuptime", "heurepriseencharge", "heurepickup", "heurenavette", "shuttletime"],
     "vehicle_type": ["vehicletype", "vehicle", "vehicule", "car", "bus", "voiture", "typevehicule"],
     

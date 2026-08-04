@@ -42,6 +42,12 @@ _NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "nvidia/nemotron-3-ultra-550b-a55b")
 # Vision model for event photo/PDF analysis (Pixtral is not available on the
 # integrate endpoint; Llama 3.2 90B Vision is and is confirmed working).
 _NVIDIA_VISION_MODEL = os.getenv("NVIDIA_VISION_MODEL", "meta/llama-3.2-90b-vision-instruct")
+# Fast model for short, tightly-constrained tasks (the assistant's query
+# planner). Benchmarked on the real planning prompt, 2026-08-03: the 30B nano
+# answered in ~11s against ~17s for the 550B flagship with the same JSON
+# validity, and the caller re-runs the flagship whenever a fast answer fails
+# validation — so speed never costs correctness. Override with NVIDIA_FAST_MODEL.
+NVIDIA_FAST_MODEL = os.getenv("NVIDIA_FAST_MODEL", "nvidia/nemotron-3-nano-30b-a3b")
 _nvidia_disabled = False
 
 _OPENAI_URL = "https://api.openai.com/v1/chat/completions"
@@ -83,7 +89,7 @@ def ai_available() -> bool:
     return bool(_nvidia_key()) or bool(_openai_key()) or GEMINI_AVAILABLE
 
 
-def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None) -> Optional[str]:
+def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optional[str], timeout_s: Optional[float] = None, model_override: Optional[str] = None) -> Optional[str]:
     """
     NVIDIA NIM chat completion (OpenAI-compatible). Text uses the Mistral text
     model; an image uses the vision model with a longer timeout. Returns None on
@@ -104,7 +110,11 @@ def _nvidia_complete(prompt: str, image_bytes: Optional[bytes], mime_type: Optio
         timeout = timeout_s or 120.0
     else:
         content = prompt
-        model = _NVIDIA_MODEL
+        # A caller may name a cheaper/faster model for a task that does not
+        # need the flagship's reasoning (the assistant's query planner tries a
+        # fast one first and only falls back to the default when the result
+        # fails validation).
+        model = model_override or _NVIDIA_MODEL
         # Reasoning model: allow headroom for chain-of-thought on large mappings.
         # Interactive paths still pass their own short timeout_s to stay snappy.
         timeout = timeout_s or 90.0
@@ -192,6 +202,7 @@ def ai_text(
     image_bytes: Optional[bytes] = None,
     mime_type: Optional[str] = None,
     timeout_s: Optional[float] = None,
+    model_override: Optional[str] = None,
 ) -> Optional[str]:
     """
     Run the prompt (optionally with an image) through the best available
@@ -200,7 +211,7 @@ def ai_text(
     paths so a slow model never blocks the UI.
     """
     return (
-        _nvidia_complete(prompt, image_bytes, mime_type, timeout_s)
+        _nvidia_complete(prompt, image_bytes, mime_type, timeout_s, model_override)
         or _openai_complete(prompt, image_bytes, mime_type, timeout_s)
         or _gemini_complete(prompt, image_bytes, mime_type, timeout_s)
     )

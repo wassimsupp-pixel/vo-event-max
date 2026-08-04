@@ -10,7 +10,7 @@ Routes:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from supabase import Client
@@ -268,10 +268,40 @@ async def get_registration_link(
         ) from exc
 
     token = resp.data["registration_token"]
+
+    # How many people actually filled the form. Counted from source_records,
+    # which is the only place that knows: uploaded_files.row_count is written
+    # once at import time for real uploads and is never touched by a form
+    # submission, so reading it here always reported nothing (2026-08-03).
+    submissions: Optional[int] = None
+    try:
+        files = (
+            supabase.table("uploaded_files")
+            .select("id")
+            .eq("event_id", event_id)
+            .eq("storage_path", f"public-form/{event_id}")
+            .execute()
+        )
+        submissions = 0
+        for f in files.data or []:
+            counted = (
+                supabase.table("source_records")
+                .select("id", count="exact")
+                .eq("file_id", f["id"])
+                .limit(1)
+                .execute()
+            )
+            submissions += counted.count or 0
+    except Exception as exc:
+        # Never let the counter break the link itself.
+        logger.warning("Could not count registrations for event %s: %s", event_id, exc)
+        submissions = None
+
     return {
         "token": token,
         "url": f"{config.WEB_APP_URL}/fr/register/{token}",
         "is_open": resp.data["registration_open"],
+        "submissions": submissions,
     }
 
 
