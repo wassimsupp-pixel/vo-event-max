@@ -416,6 +416,54 @@ _FLIGHT_NO_RE = re.compile(r"^[A-Z0-9]{2,3}\s*[0-9]{1,4}[A-Z]?$", re.IGNORECASE)
 _PHONE_RE = re.compile(r"^[+(]?\d[\d\s().\-]{6,}$")
 _PNR_RE = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{5,7}$")
 _IATA_RE = re.compile(r"^[A-Z]{3}$")
+# A 3-letter uppercase token sitting inside a longer label: "Paris CDG",
+# "SAO PAULO GRU". Real broker exports rarely ship the bare code, and treating
+# only the bare form as an airport left such columns unmapped entirely — the
+# data was in the file and simply never arrived (observed on a transfers file
+# whose whole "Aeroport" column was dropped, 2026-08-03).
+_AIRPORT_LABEL_RE = re.compile(r"(?:^|\s)[A-Z]{3}(?:$|\s)")
+
+# Which way a transfer goes, used to decide whether an undirected airport
+# column means arrival or departure.
+_ARRIVAL_DIR_VALUES = {"arrivee", "arrival", "arrivees", "arrivals",
+                       "arrivee groupe", "inbound", "inbound transfer"}
+_DEPARTURE_DIR_VALUES = {"depart", "departure", "departs", "departures",
+                         "retour", "return", "retours", "returns",
+                         "aller", "outbound", "outbound transfer"}
+
+
+def _looks_like_airport_label(v: str) -> bool:
+    """True for 'CDG' and for 'Paris CDG' / 'SAO PAULO GRU'. Kept short so a
+    free-text sentence containing an acronym doesn't qualify."""
+    if _IATA_RE.match(v):
+        return True
+    return len(v) <= 40 and bool(_AIRPORT_LABEL_RE.search(v))
+
+
+def _transfer_direction_hint(columns: list[str], sample_rows: list[dict]) -> Optional[str]:
+    """'arrival', 'departure' or None — read from whichever column of THIS file
+    holds transfer directions (a "Type" column of Arrivée/Départ values).
+
+    Lets an undirected "Aeroport" column land on the right side instead of
+    always defaulting to departure, which was a coin flip.
+    """
+    arrivals = departures = 0
+    for col in columns:
+        vals = [str(row.get(col)).strip() for row in sample_rows
+                if row.get(col) is not None and str(row.get(col)).strip()]
+        if not vals:
+            continue
+        normalised = [_strip_accents_lower(v) for v in vals]
+        recognised = sum(1 for v in normalised if v in _TRANSFER_DIR_VALUES)
+        if recognised / len(normalised) <= 0.5:
+            continue                     # not this file's direction column
+        arrivals += sum(1 for v in normalised if v in _ARRIVAL_DIR_VALUES)
+        departures += sum(1 for v in normalised if v in _DEPARTURE_DIR_VALUES)
+    if not arrivals and not departures:
+        return None
+    # A tie is fine either way: the transfer extractor re-orients each row from
+    # its own transfer_type. Resolving it deterministically keeps runs stable.
+    return "arrival" if arrivals >= departures else "departure"
 _TIME_RE = re.compile(r"^\d{1,2}[:hH]\d{2}")
 _PASSPORT_RE = re.compile(r"^(?=.*[A-Z])(?=.*\d)[A-Z0-9]{7,10}$")
 # Generic/placeholder header names that carry no meaning → rely on content only.
@@ -460,6 +508,10 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
       }
     }
     """
+    # Read once for the whole file: an undirected airport column is resolved
+    # against the direction this file's own rows describe.
+    direction_hint = _transfer_direction_hint(columns, sample_rows)
+
     col_candidates: dict[str, list[tuple[str, float]]] = {}
     for col in columns:
         norm_col = _normalize_column_name(col)
@@ -480,7 +532,7 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         # Content match indicators
         is_email = is_date = is_flight = False
         is_phone = is_pnr = is_iata = is_time = is_passport = is_boolean = False
-        is_transfer_dir = False
+        is_transfer_dir = is_airport_label = False
 
         if vals:
             n = len(vals)
@@ -493,6 +545,7 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
             is_pnr = (sum(1 for v in vals if _PNR_RE.match(v)) / n) > 0.5
             is_passport = (sum(1 for v in vals if _PASSPORT_RE.match(v)) / n) > 0.5
             is_iata = (sum(1 for v in vals if v.isupper() and _IATA_RE.match(v)) / n) > 0.5
+            is_airport_label = (sum(1 for v in vals if _looks_like_airport_label(v)) / n) > 0.5
             is_time = (sum(1 for v in vals if _TIME_RE.match(v)) / n) > 0.5
             is_transfer_dir = (sum(1 for v in vals if _strip_accents_lower(v) in _TRANSFER_DIR_VALUES) / n) > 0.5
 
@@ -568,9 +621,22 @@ def suggest_mapping(columns: list[str], sample_rows: list[dict]) -> dict[str, di
         # field when the header has NO other meaning (blank/unnamed) or actually
         # hints at a location — otherwise a Notes/Comment column would pollute
         # the flight data.
-        if is_iata and (header_absent or re.search(r"airport|aeroport|dep|arr|from|to|city|ville|origin|destination|vol|flight", norm_col)):
-            field_scores["departure_airport"] = max(field_scores.get("departure_airport", 0.0), 0.55)
-            field_scores["arrival_airport"] = max(field_scores.get("arrival_airport", 0.0), 0.5)
+        #
+        # The looser "Paris CDG" form requires a location-ish header and is NOT
+        # accepted on an unnamed column: a bare code is distinctive enough to
+        # stand on its own, a code embedded in text is not ("VIP GUEST" would
+        # otherwise qualify).
+        airport_header = bool(re.search(
+            r"airport|aeroport|dep|arr|from|to|city|ville|origin|destination|vol|flight", norm_col))
+        if (is_iata and (header_absent or airport_header)) or (is_airport_label and airport_header):
+            # Undirected column ("Aeroport"): follow the direction this file's
+            # own rows describe rather than always assuming departure.
+            if direction_hint == "arrival":
+                primary, secondary = "arrival_airport", "departure_airport"
+            else:
+                primary, secondary = "departure_airport", "arrival_airport"
+            field_scores[primary] = max(field_scores.get(primary, 0.0), 0.55)
+            field_scores[secondary] = max(field_scores.get(secondary, 0.0), 0.5)
         if is_time and not is_date:
             for f in ("departure_time", "arrival_time", "pickup_time"):
                 field_scores[f] = max(field_scores.get(f, 0.0), 0.5)

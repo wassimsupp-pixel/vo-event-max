@@ -3867,3 +3867,81 @@ class TestCoverageCombinationsAnsweredWithoutAI:
         assert r["intent"] == "coverage_combination"
         assert len(r["rows"]) == 1 and r["rows"][0]["nom"] == "A X"   # only p1 lacks both
         assert "ni vol ni" in r["answer"]
+
+
+class TestAirportColumnAutoMapping:
+    """An "Aeroport" column with no direction in its header used to be a coin
+    flip: values like "Paris CDG" were not recognised as airports at all (the
+    detector only accepted a bare 3-letter code), so the column was dropped
+    entirely; and when it WAS recognised, it always went to departure_airport
+    regardless of what the file described. Two transfer files with the same
+    column got two different fates in production (2026-08-03)."""
+
+    def _map(self, columns, rows):
+        from services.mapping_service import suggest_mapping
+        return {c: v["suggested_field"] for c, v in suggest_mapping(columns, rows).items()}
+
+    # -- fix 1: recognise "City CODE", not just "CODE" ---------------------
+    def test_city_plus_code_is_recognised_as_an_airport(self):
+        m = self._map(["Aeroport", "Type"],
+                      [{"Aeroport": "Paris CDG", "Type": "Arrivee"}] * 4)
+        assert m["Aeroport"] in ("arrival_airport", "departure_airport")
+
+    def test_multiword_city_plus_code(self):
+        m = self._map(["Aeroport", "Type"],
+                      [{"Aeroport": "SAO PAULO GRU", "Type": "Arrivee"}] * 4)
+        assert m["Aeroport"] == "arrival_airport"
+
+    def test_bare_code_still_recognised(self):
+        m = self._map(["Aeroport", "Vol"], [{"Aeroport": "CDG", "Vol": "AF123"}] * 4)
+        assert m["Aeroport"] in ("arrival_airport", "departure_airport")
+
+    # -- fix 2: direction comes from the file's own rows -------------------
+    def test_arrival_file_maps_to_arrival_airport(self):
+        m = self._map(["Aeroport", "Type"],
+                      [{"Aeroport": "Paris CDG", "Type": "Arrivee"}] * 4)
+        assert m["Aeroport"] == "arrival_airport"
+
+    def test_departure_file_maps_to_departure_airport(self):
+        m = self._map(["Aeroport", "Type"],
+                      [{"Aeroport": "Paris CDG", "Type": "Depart"}] * 4)
+        assert m["Aeroport"] == "departure_airport"
+
+    def test_direction_hint_reads_the_dominant_value(self):
+        from services.mapping_service import _transfer_direction_hint
+        rows = [{"Type": "Arrivee"}] * 3 + [{"Type": "Depart"}]
+        assert _transfer_direction_hint(["Type"], rows) == "arrival"
+        rows = [{"Type": "Depart"}] * 3 + [{"Type": "Arrivee"}]
+        assert _transfer_direction_hint(["Type"], rows) == "departure"
+
+    def test_no_direction_column_yields_no_hint(self):
+        from services.mapping_service import _transfer_direction_hint
+        assert _transfer_direction_hint(["Vol"], [{"Vol": "AF123"}] * 3) is None
+
+    # -- nothing else may change -------------------------------------------
+    def test_explicit_headers_are_untouched_and_still_win(self):
+        m = self._map(["Aeroport Arrivee", "Aeroport Depart"],
+                      [{"Aeroport Arrivee": "CDG", "Aeroport Depart": "JFK"}] * 4)
+        assert m["Aeroport Arrivee"] == "arrival_airport"
+        assert m["Aeroport Depart"] == "departure_airport"
+
+    def test_free_text_column_with_an_acronym_is_not_an_airport(self):
+        """The guard that keeps a Notes column out of the flight data: the
+        loose form requires a location-ish header."""
+        m = self._map(["Remarques", "Nom"],
+                      [{"Remarques": "VIP GUEST", "Nom": "Ana Kaya"}] * 4)
+        assert m["Remarques"] is None
+
+    def test_unnamed_column_does_not_accept_the_loose_form(self):
+        """A bare code is distinctive enough to stand alone on an unnamed
+        column; a code embedded in text is not."""
+        m = self._map(["", "Nom"], [{"": "Paris CDG", "Nom": "Ana"}] * 4)
+        assert m[""] is None
+
+    def test_looks_like_airport_label_helper(self):
+        from services.mapping_service import _looks_like_airport_label
+        assert _looks_like_airport_label("CDG")
+        assert _looks_like_airport_label("Paris CDG")
+        assert _looks_like_airport_label("SAO PAULO GRU")
+        assert not _looks_like_airport_label("Paris")
+        assert not _looks_like_airport_label("x" * 60 + " CDG")
